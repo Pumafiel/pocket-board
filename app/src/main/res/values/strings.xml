@@ -23,11 +23,11 @@
     <string name="ime_sympad_app_not_found">App not found</string>
     <string name="ime_sympad_short_press_of">Short press of</string>
     <string name="ime_sympad_long_press_of">Long press of</string>
-    <string name="ime_sympad_action_off">OFF</string>
+    <string name="ime_sympad_action_off">✕ OFF</string>
     <string name="ime_sympad_action_off_title">Disabled</string>
-    <string name="ime_sympad_action_keys">KEYS</string>
-    <string name="ime_sympad_action_text">TEXT</string>
-    <string name="ime_sympad_action_app">APP</string>
+    <string name="ime_sympad_action_keys">⌨ KEYS</string>
+    <string name="ime_sympad_action_text">𝐓 TEXT</string>
+    <string name="ime_sympad_action_app">★ APP</string>
     <string name="ime_sympad_key_hint">Select Key...</string>
     <string name="ime_sympad_add_key">Add</string>
     <string name="ime_sympad_text_hint">Type your text</string>

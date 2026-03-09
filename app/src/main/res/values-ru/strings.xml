@@ -17,11 +17,11 @@
     <string name="ime_sympad_long_press">Долгое нажатие</string>
     <string name="ime_sympad_short_press_of">Короткое нажатие</string>
     <string name="ime_sympad_long_press_of">Долгое нажатие</string>
-    <string name="ime_sympad_action_off">ВЫКЛ.</string>
+    <string name="ime_sympad_action_off">✕ ВЫКЛ.</string>
     <string name="ime_sympad_action_off_title">Отключено</string>
-    <string name="ime_sympad_action_keys">КЛАВ.</string>
-    <string name="ime_sympad_action_text">ТЕКСТ</string>
-    <string name="ime_sympad_action_app">ПРИЛ.</string>
+    <string name="ime_sympad_action_keys">⌨ КЛАВ.</string>
+    <string name="ime_sympad_action_text">𝐓 ТЕКСТ</string>
+    <string name="ime_sympad_action_app">★ ПРИЛ.</string>
     <string name="ime_sympad_key_hint">Выберите код...</string>
     <string name="ime_sympad_app_not_found">Приложение не найдено</string>
     <string name="ime_sympad_text_hint">Введите ваш текст</string>

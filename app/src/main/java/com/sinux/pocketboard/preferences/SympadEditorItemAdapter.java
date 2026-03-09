@@ -239,7 +239,7 @@ public class SympadEditorItemAdapter extends RecyclerView.Adapter<SympadEditorIt
 
         // Keys
         if (keyMappingValue.action() == SymPadKeyAction.KEYS && keyMappingValue.keyCodes() != null) {
-            holder.action.setText("K");
+            holder.action.setText("⌨");
             holder.actionWrapper.setVisibility(View.VISIBLE);
 
             String joinedKeyNames = keyMappingValue.keyCodes().stream()
@@ -251,7 +251,7 @@ public class SympadEditorItemAdapter extends RecyclerView.Adapter<SympadEditorIt
 
         // Text
         if (keyMappingValue.action() == SymPadKeyAction.TEXT && keyMappingValue.text() != null) {
-            holder.action.setText("T");
+            holder.action.setText("\uD835\uDC13");
             holder.actionWrapper.setVisibility(View.VISIBLE);
             holder.value.setText(keyMappingValue.text());
             return;
@@ -280,7 +280,7 @@ public class SympadEditorItemAdapter extends RecyclerView.Adapter<SympadEditorIt
                 holder.value.setText(appName);
 
             } catch (PackageManager.NameNotFoundException ignored) {
-                holder.action.setText("?");
+                holder.action.setText("★");
                 holder.actionWrapper.setVisibility(View.VISIBLE);
                 holder.value.setText(context.getString(R.string.ime_sympad_app_not_found));
             }
