@@ -4,6 +4,31 @@
     <string name="ime_settings">Настройки PocketBoard</string>
     <string name="ime_subtypes">Способы ввода</string>
     <string name="ime_subtypes_select">Выберите способы ввода</string>
+
+    <string name="ime_sympad_prefs">Настройки SymPad</string>
+    <string name="ime_lock_sympad">Разрешить блокировку SymPad</string>
+    <string name="ime_lock_sympad_summary">Удерживайте SYM для блокировки клавиатуры в режиме SymPad</string>
+    <string name="ime_sympad_json_import">Загрузить из json</string>
+    <string name="ime_sympad_json_export">Сохранить в json</string>
+    <string name="ime_sympad_defaults">Восстановить настройки по умолчанию</string>
+    <string name="ime_sympad_defaults_message">Вы уверены, что хотите восстановить настройки по умолчанию?</string>
+    <string name="ime_sympad_mapping_editor">Редактор раскладки SymPad</string>
+    <string name="ime_sympad_short_press">Короткое нажатие</string>
+    <string name="ime_sympad_long_press">Долгое нажатие</string>
+    <string name="ime_sympad_short_press_of">Короткое нажатие</string>
+    <string name="ime_sympad_long_press_of">Долгое нажатие</string>
+    <string name="ime_sympad_action_off">ВЫКЛ.</string>
+    <string name="ime_sympad_action_off_title">Отключено</string>
+    <string name="ime_sympad_action_keys">КЛАВ.</string>
+    <string name="ime_sympad_action_text">ТЕКСТ</string>
+    <string name="ime_sympad_action_app">ПРИЛ.</string>
+    <string name="ime_sympad_key_hint">Выберите код...</string>
+    <string name="ime_sympad_app_not_found">Приложение не найдено</string>
+    <string name="ime_sympad_text_hint">Введите ваш текст</string>
+    <string name="ime_sympad_app_hint">Выберите приложение...</string>
+    <string name="ime_sympad_app_permission_required_msg">Требуется разрешение на показ поверх других приложений для корректной работы. Нажмите здесь для перехода в настройки, найдите PocketBoard в списке приложений и предоставьте разрешение \"Показывать поверх других приложений\"</string>
+
+    <string name="ime_input_cat">Настройки ввода</string>
     <string name="ime_auto_correction">Автокоррекция</string>
     <string name="ime_auto_correction_summary">Автоматическое исправление опечаток при вводе пробела</string>
     <string name="ime_dict_shortcuts">Сокращения из словаря</string>
@@ -18,8 +43,6 @@
     <string name="ime_voice_input_shortcut_summary">Нажмите CTRL+ALT для активации голосового ввода</string>
     <string name="ime_layout_change_shortcut">Ярлык смены раскладки</string>
     <string name="ime_layout_change_shortcut_summary">Удерживайте пробел для смены раскладки</string>
-    <string name="ime_lock_sympad">Разрешить блокировку SymPad</string>
-    <string name="ime_lock_sympad_summary">Удерживайте SYM для блокировки клавиатуры в режиме SymPad</string>
     <string name="ime_show_inline_suggestions">Подсказки автозаполнения</string>
     <string name="ime_manual_recent_emoji_management">Ручное управление недавними Emoji</string>
 
@@ -41,6 +64,10 @@
 
     <string name="voice_ime_not_configured">Голосовой ввод не настроен</string>
     <string name="keyboard_mapping_load_failed">Не удалось загрузить раскладку</string>
+    <string name="sympad_mapping_load_failed">Не удалось загрузить раскладку SymPad</string>
+    <string name="sympad_mapping_save_failed">Не удалось сохранить раскладку SymPad</string>
+    <string name="sympad_overlay_permission_required">Требуется разрешение на показ поверх других приложений</string>
+    <string name="sympad_app_not_found">Приложение не найдено</string>
     <string name="pocketboard_disabled">PockedBoard отключена</string>
 
     <string name="hide_inline_suggestions_button_description">Скрыть подсказки автозаполнения</string>

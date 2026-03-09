@@ -9,6 +9,32 @@
     <string name="ime_settings">PocketBoard Settings</string>
     <string name="ime_subtypes">Input types</string>
     <string name="ime_subtypes_select">Select input types</string>
+
+    <string name="ime_sympad_prefs">SymPad Settings</string>
+    <string name="ime_lock_sympad">Allow SymPad lock</string>
+    <string name="ime_lock_sympad_summary">Long press SYM to lock keyboard in SymPad mode</string>
+    <string name="ime_sympad_json_import">Import from json</string>
+    <string name="ime_sympad_json_export">Export to json</string>
+    <string name="ime_sympad_defaults">Restore defaults</string>
+    <string name="ime_sympad_defaults_message">Are you sure you want to restore default settings?</string>
+    <string name="ime_sympad_mapping_editor">SymPad Layout Editor</string>
+    <string name="ime_sympad_short_press">Short Press</string>
+    <string name="ime_sympad_long_press">Long Press</string>
+    <string name="ime_sympad_app_not_found">App not found</string>
+    <string name="ime_sympad_short_press_of">Short press of</string>
+    <string name="ime_sympad_long_press_of">Long press of</string>
+    <string name="ime_sympad_action_off">OFF</string>
+    <string name="ime_sympad_action_off_title">Disabled</string>
+    <string name="ime_sympad_action_keys">KEYS</string>
+    <string name="ime_sympad_action_text">TEXT</string>
+    <string name="ime_sympad_action_app">APP</string>
+    <string name="ime_sympad_key_hint">Select Key...</string>
+    <string name="ime_sympad_add_key">Add</string>
+    <string name="ime_sympad_text_hint">Type your text</string>
+    <string name="ime_sympad_app_hint">Select App...</string>
+    <string name="ime_sympad_app_permission_required_msg">Display over other apps permission is required for proper functionality. Tap here to open Settings, find PocketBoard in the app list, and grant the \"Allow display over other apps\" permission</string>
+
+    <string name="ime_input_cat">Input Settings</string>
     <string name="ime_auto_correction">Auto-correction</string>
     <string name="ime_auto_correction_summary">Spacebar automatically corrects mistyped words</string>
     <string name="ime_dict_shortcuts">Dictionary shortcuts</string>
@@ -23,12 +49,10 @@
     <string name="ime_voice_input_shortcut_summary">Press CTRL+ALT to activate voice input</string>
     <string name="ime_layout_change_shortcut">Layout change shortcut</string>
     <string name="ime_layout_change_shortcut_summary">Long press spacebar to switch current layout</string>
-    <string name="ime_lock_sympad">Allow SymPad lock</string>
-    <string name="ime_lock_sympad_summary">Long press SYM to lock keyboard in SymPad mode</string>
     <string name="ime_show_inline_suggestions">Autofill suggestions</string>
     <string name="ime_manual_recent_emoji_management">Manual Recent Emoji management</string>
 
-    <string name="ime_panel_cat">Onscreen panel</string>
+    <string name="ime_panel_cat">Onscreen Panel</string>
     <string name="ime_show_panel">Display onscreen panel</string>
     <string name="ime_show_emoji">Emoji key</string>
     <string name="ime_show_suggestions">Suggestions</string>
@@ -52,6 +76,10 @@
 
     <string name="voice_ime_not_configured">Voice input not configured</string>
     <string name="keyboard_mapping_load_failed">Couldn\'t load keyboard mapping</string>
+    <string name="sympad_mapping_load_failed">Couldn\'t load SymPad mapping</string>
+    <string name="sympad_mapping_save_failed">Couldn\'t save SymPad mapping</string>
+    <string name="sympad_overlay_permission_required">Display over other apps permission required</string>
+    <string name="sympad_app_not_found">Application not found</string>
     <string name="pocketboard_disabled">PockedBoard disabled</string>
 
     <string name="hide_inline_suggestions_button_description">Hide inline suggestions</string>
@@ -93,7 +121,7 @@
         <item>X</item>
         <item>C</item>
         <item>V</item>
-        <item>_</item>
+        <item>⎵</item>
         <item>B</item>
         <item>N</item>
     </string-array>
@@ -103,8 +131,11 @@
     <string name="app_version" translatable="false">v1.1.6, Ⓒ SinuX 2025, GPLv3</string>
 
     <string name="ime_subtypes_prefs_key" translatable="false">ime_prefs_subtypes</string>
-    <string name="ime_extra_delete_prefs_key" translatable="false">ime_prefs_extra_delete</string>
-    <string name="ime_gestures_suggestion_prefs_key" translatable="false">ime_prefs_gestures_suggestion</string>
+    <string name="ime_lock_sympad_prefs_key" translatable="false">ime_lock_sympad</string>
+    <string name="ime_sympad_json_import_key" translatable="false">ime_sympad_json_import</string>
+    <string name="ime_sympad_json_export_key" translatable="false">ime_sympad_json_export</string>
+    <string name="ime_sympad_defaults_key" translatable="false">ime_sympad_defaults</string>
+
     <string name="ime_auto_correction_prefs_key" translatable="false">ime_prefs_auto_correction</string>
     <string name="ime_dict_shortcuts_prefs_key" translatable="false">ime_prefs_dict_shortcuts</string>
     <string name="ime_auto_capitalization_prefs_key" translatable="false">ime_prefs_auto_capitalization</string>
@@ -112,7 +143,7 @@
     <string name="ime_show_layout_toast_prefs_key" translatable="false">ime_prefs_show_layout_toast</string>
     <string name="ime_voice_input_shortcut_prefs_key" translatable="false">ime_voice_input_shortcut</string>
     <string name="ime_layout_change_shortcut_prefs_key" translatable="false">ime_layout_change_shortcut</string>
-    <string name="ime_lock_sympad_prefs_key" translatable="false">ime_lock_sympad</string>
+    <string name="ime_sympad_prefs_key" translatable="false">ime_sympad_prefs</string>
     <string name="ime_show_inline_suggestions_prefs_key" translatable="false">ime_prefs_show_inline_suggestions</string>
     <string name="ime_manual_recent_emoji_management_prefs_key" translatable="false">ime_manual_recent_emoji_management</string>
 

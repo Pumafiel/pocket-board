@@ -17,4 +17,7 @@
     <dimen name="suggestions_font_size_max">24sp</dimen>
     <dimen name="suggestions_divider_height">24dp</dimen>
     <dimen name="inline_suggestions_height">32dp</dimen>
+    <dimen name="sympad_editor_item_text_size">16sp</dimen>
+    <dimen name="sympad_editor_item_margin">2dp</dimen>
+    <dimen name="sympad_editor_item_padding">4dp</dimen>
 </resources>

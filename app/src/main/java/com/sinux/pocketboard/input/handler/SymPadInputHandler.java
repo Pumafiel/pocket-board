@@ -1,95 +1,197 @@
 package com.sinux.pocketboard.input.handler;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.Intent;
 import android.media.AudioManager;
+import android.net.Uri;
+import android.provider.Settings;
+import android.util.SparseArray;
 import android.view.KeyEvent;
 import android.view.inputmethod.InputConnection;
 
 import com.sinux.pocketboard.PocketBoardIME;
+import com.sinux.pocketboard.R;
+import com.sinux.pocketboard.input.mapping.SymPadKeyAction;
+import com.sinux.pocketboard.input.mapping.SymPadKeyMapping;
+import com.sinux.pocketboard.input.mapping.SymPadKeyMappingValue;
+import com.sinux.pocketboard.input.mapping.SymPadMappingManager;
 import com.sinux.pocketboard.utils.InputUtils;
+import com.sinux.pocketboard.utils.ToastMessageUtils;
 
-public class SymPadInputHandler extends ProxyInputHandler {
+import java.util.List;
+
+public class SymPadInputHandler {
 
     private final PocketBoardIME pocketBoardIME;
+    private final SymPadMappingManager mappingManager;
+    private final SparseArray<Boolean> pressedOriginalKeyCodes;
 
     private AudioManager audioManager;
     private boolean isShiftPressed;
     private boolean isAltPressed;
 
+    @SuppressLint("UseSparseArrays")
     public SymPadInputHandler(PocketBoardIME pocketBoardIME) {
-        super(pocketBoardIME);
         this.pocketBoardIME = pocketBoardIME;
+        mappingManager = SymPadMappingManager.getInstance(pocketBoardIME);
+        pressedOriginalKeyCodes = new SparseArray<>(30);
     }
 
-    @Override
-    protected int translateShortPressKeyCode(int keyCode) {
-        return switch (keyCode) {
-            // R, U - Home, F, J - End (text navigation)
-            case KeyEvent.KEYCODE_R, KeyEvent.KEYCODE_U -> KeyEvent.KEYCODE_MOVE_HOME;
-            case KeyEvent.KEYCODE_F, KeyEvent.KEYCODE_J -> KeyEvent.KEYCODE_MOVE_END;
-            // Q, W, E, A, S, D, Z, X, C or I, O, P, K, L, DEL, N, M, ENTER - 9-positional D-pad
-            case KeyEvent.KEYCODE_Q, KeyEvent.KEYCODE_I -> KeyEvent.KEYCODE_DPAD_UP_LEFT;
-            case KeyEvent.KEYCODE_W, KeyEvent.KEYCODE_O -> KeyEvent.KEYCODE_DPAD_UP;
-            case KeyEvent.KEYCODE_E, KeyEvent.KEYCODE_P -> KeyEvent.KEYCODE_DPAD_UP_RIGHT;
-            case KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_K -> KeyEvent.KEYCODE_DPAD_LEFT;
-            case KeyEvent.KEYCODE_S, KeyEvent.KEYCODE_L -> KeyEvent.KEYCODE_DPAD_CENTER;
-            case KeyEvent.KEYCODE_D, KeyEvent.KEYCODE_DEL -> KeyEvent.KEYCODE_DPAD_RIGHT;
-            case KeyEvent.KEYCODE_Z, KeyEvent.KEYCODE_N -> KeyEvent.KEYCODE_DPAD_DOWN_LEFT;
-            case KeyEvent.KEYCODE_X, KeyEvent.KEYCODE_M -> KeyEvent.KEYCODE_DPAD_DOWN;
-            case KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_ENTER -> KeyEvent.KEYCODE_DPAD_DOWN_RIGHT;
-            // V - Prev, Space - Play/Pause, B - Next (media navigation)
-            case KeyEvent.KEYCODE_V -> KeyEvent.KEYCODE_MEDIA_PREVIOUS;
-            case KeyEvent.KEYCODE_SPACE -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE;
-            case KeyEvent.KEYCODE_B -> KeyEvent.KEYCODE_MEDIA_NEXT;
-            // T - Esc, Y - Enter
-            case KeyEvent.KEYCODE_T -> KeyEvent.KEYCODE_ESCAPE;
-            case KeyEvent.KEYCODE_Y -> KeyEvent.KEYCODE_ENTER;
-            // G - Backspace, H - Forward delete
-            case KeyEvent.KEYCODE_G -> KeyEvent.KEYCODE_DEL;
-            case KeyEvent.KEYCODE_H -> KeyEvent.KEYCODE_FORWARD_DEL;
-            default -> 0;
-        };
+    public boolean hasPressedKey(int originalKeyCode) {
+        return pressedOriginalKeyCodes.get(originalKeyCode) != null;
     }
 
-    @Override
-    protected int translateLongPressKeyCode(int keyCode) {
-        return switch (keyCode) {
-            // V - Rewind, B - Fast forward (media navigation)
-            case KeyEvent.KEYCODE_V -> KeyEvent.KEYCODE_MEDIA_REWIND;
-            case KeyEvent.KEYCODE_B -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD;
-            default -> 0;
-        };
+    public boolean handleKeyDown(int keyCode, KeyEvent event, InputConnection inputConnection) {
+        if (pressedOriginalKeyCodes.get(event.getKeyCode()) == null)
+            pressedOriginalKeyCodes.put(event.getKeyCode(), false);
+
+        SymPadKeyMapping keyMapping = mappingManager.getCurrentMapping().getKeyMapping(keyCode);
+        if (keyMapping == null)
+            return true;
+
+        if (keyMapping.longPress() != null) {
+            var longPressAction = keyMapping.longPress().action();
+            if (event.getRepeatCount() == 1 && longPressAction != SymPadKeyAction.KEYS) {
+                // Long press (first for app or text action)
+                pressedOriginalKeyCodes.put(event.getKeyCode(), true);
+                if (longPressAction == SymPadKeyAction.APP) {
+                    launchApp(keyMapping.longPress());
+                } else if (longPressAction == SymPadKeyAction.TEXT) {
+                    insertText(keyMapping.longPress(), inputConnection);
+                }
+            } else if (event.getRepeatCount() >= 1 && longPressAction == SymPadKeyAction.KEYS) {
+                // Long press (first and repeat for keys action)
+                pressedOriginalKeyCodes.put(event.getKeyCode(), true);
+                handleKeyDownInternal(keyMapping.longPress(), event, inputConnection);
+            }
+        } else {
+            var shortPressAction = keyMapping.shortPress().action();
+            if (event.getRepeatCount() == 0 && shortPressAction != SymPadKeyAction.KEYS) {
+                // Short press (first for app or text action)
+                if (shortPressAction == SymPadKeyAction.APP) {
+                    launchApp(keyMapping.shortPress());
+                } else if (shortPressAction == SymPadKeyAction.TEXT) {
+                    insertText(keyMapping.shortPress(), inputConnection);
+                }
+            } else if (keyMapping.shortPress().action() == SymPadKeyAction.KEYS) {
+                // Short press (first and repeat for keys action)
+                handleKeyDownInternal(keyMapping.shortPress(), event, inputConnection);
+            }
+        }
+
+        return true;
     }
 
-    @Override
-    protected void handleKeyDownInternal(int translatedKeyCode, KeyEvent originalEvent, InputConnection inputConnection) {
-        if (isPlaybackKey(translatedKeyCode)) {
-            dispatchMediaKeyEvent(translatedKeyCode, originalEvent, KeyEvent.ACTION_DOWN);
+    public boolean handleKeyUp(int keyCode, KeyEvent event, InputConnection inputConnection) {
+        Boolean isLongPressed = pressedOriginalKeyCodes.get(event.getKeyCode());
+        if (isLongPressed == null) {
+            return false;
+        } else {
+            pressedOriginalKeyCodes.delete(event.getKeyCode());
+        }
+
+        SymPadKeyMapping keyMapping = mappingManager.getCurrentMapping().getKeyMapping(keyCode);
+        if (keyMapping == null)
+            return true;
+
+        if (keyMapping.longPress() != null) {
+            var longPressAction = keyMapping.longPress().action();
+            if (isLongPressed && longPressAction == SymPadKeyAction.KEYS) {
+                // Long press up for keys action
+                handleKeyUpInternal(keyMapping.longPress(), event, inputConnection);
+            } else if (!isLongPressed && keyMapping.shortPress() != null) {
+                var shortPressAction = keyMapping.shortPress().action();
+                if (shortPressAction != SymPadKeyAction.KEYS) {
+                    // Launch app/insert text after short press of key if long press not fired
+                    if (shortPressAction == SymPadKeyAction.APP) {
+                        launchApp(keyMapping.shortPress());
+                    } else if (shortPressAction == SymPadKeyAction.TEXT) {
+                        insertText(keyMapping.shortPress(), inputConnection);
+                    }
+                } else {
+                    // Short press down and up of key if long press not fired
+                    handleKeyDownInternal(keyMapping.shortPress(), event, inputConnection);
+                    handleKeyUpInternal(keyMapping.shortPress(), event, inputConnection);
+                }
+            }
+        } else {
+            // Short press up
+            if (keyMapping.shortPress().action() == SymPadKeyAction.KEYS)
+                handleKeyUpInternal(keyMapping.shortPress(), event, inputConnection);
+        }
+
+        return true;
+    }
+
+    private void launchApp(SymPadKeyMappingValue keyMappingValue) {
+        // Request overlay permission if not granted
+        if (!Settings.canDrawOverlays(pocketBoardIME)) {
+            ToastMessageUtils.showMessage(pocketBoardIME, R.string.sympad_overlay_permission_required);
+            Intent permissionIntent = new Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + pocketBoardIME.getPackageName())
+            );
+            permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            pocketBoardIME.startActivity(permissionIntent);
+        }
+
+        Intent intent = pocketBoardIME.getPackageManager().getLaunchIntentForPackage(keyMappingValue.appPackage());
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            pocketBoardIME.startActivity(intent);
+        } else {
+            ToastMessageUtils.showMessage(pocketBoardIME, R.string.sympad_app_not_found);
+        }
+    }
+
+    private void insertText(SymPadKeyMappingValue keyMappingValue, InputConnection inputConnection) {
+        if (inputConnection != null)
+            inputConnection.commitText(keyMappingValue.text(), 1);
+    }
+
+    protected void handleKeyDownInternal(SymPadKeyMappingValue keyMappingValue, KeyEvent originalEvent, InputConnection inputConnection) {
+        if (hasMediaKeys(keyMappingValue.keyCodes())) {
+            dispatchMediaKeyEvent(keyMappingValue.keyCodes(), originalEvent, KeyEvent.ACTION_DOWN);
         } else {
             int metaState = originalEvent.getMetaState() & (KeyEvent.META_SHIFT_ON | KeyEvent.META_ALT_ON | KeyEvent.META_CTRL_ON);
+
             if (originalEvent.isShiftPressed() && !isShiftPressed) {
                 isShiftPressed = true;
                 inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.ACTION_DOWN, metaState));
             }
+
             if (originalEvent.isAltPressed() && !isAltPressed) {
                 isAltPressed = true;
                 inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.ACTION_DOWN, metaState));
             }
-            inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, translatedKeyCode, KeyEvent.ACTION_DOWN, metaState));
+
+            for (var keyCode : keyMappingValue.keyCodes()) {
+                switch (keyCode) {
+                    case KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> metaState |= KeyEvent.META_SHIFT_ON;
+                    case KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT -> metaState |= KeyEvent.META_ALT_ON;
+                    case KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> metaState |= KeyEvent.META_CTRL_ON;
+                }
+                inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, keyCode, KeyEvent.ACTION_DOWN, metaState));
+            }
         }
     }
 
-    @Override
-    protected void handleKeyUpInternal(int translatedKeyCode, KeyEvent originalEvent, InputConnection inputConnection) {
-        if (isPlaybackKey(translatedKeyCode)) {
-            dispatchMediaKeyEvent(translatedKeyCode, originalEvent, KeyEvent.ACTION_UP);
+    protected void handleKeyUpInternal(SymPadKeyMappingValue keyMappingValue, KeyEvent originalEvent, InputConnection inputConnection) {
+        if (hasMediaKeys(keyMappingValue.keyCodes())) {
+            dispatchMediaKeyEvent(keyMappingValue.keyCodes(), originalEvent, KeyEvent.ACTION_UP);
         } else {
             int metaState = originalEvent.getMetaState() & (KeyEvent.META_SHIFT_ON | KeyEvent.META_ALT_ON | KeyEvent.META_CTRL_ON);
-            inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, translatedKeyCode, KeyEvent.ACTION_UP, metaState));
+
+            for (var keyCode : keyMappingValue.keyCodes()) {
+                inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, keyCode, KeyEvent.ACTION_UP, metaState));
+            }
+
             if (isShiftPressed) {
                 isShiftPressed = false;
                 inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.ACTION_UP, metaState));
             }
+
             if (isAltPressed) {
                 isAltPressed = false;
                 inputConnection.sendKeyEvent(InputUtils.translateKeyEvent(originalEvent, KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.ACTION_UP, metaState));
@@ -97,17 +199,12 @@ public class SymPadInputHandler extends ProxyInputHandler {
         }
     }
 
-    @Override
-    protected void handleKeyLongPressInternal(int translatedKeyCode, KeyEvent originalEvent, InputConnection inputConnection) {
-        if (isPlaybackKey(translatedKeyCode)) {
-            dispatchMediaKeyEvent(translatedKeyCode, originalEvent, KeyEvent.ACTION_DOWN);
-        }
-    }
-
-    private void dispatchMediaKeyEvent(int translatedKeyCode, KeyEvent originalEvent, int action) {
+    private void dispatchMediaKeyEvent(List<Integer> keyCodes, KeyEvent originalEvent, int action) {
         AudioManager audioManager = getAudioManager();
         if (audioManager != null) {
-            audioManager.dispatchMediaKeyEvent(InputUtils.translateKeyEvent(originalEvent, translatedKeyCode, action, 0));
+            for (var keyCode : keyCodes) {
+                audioManager.dispatchMediaKeyEvent(InputUtils.translateKeyEvent(originalEvent, keyCode, action, 0));
+            }
         }
     }
 
@@ -118,12 +215,17 @@ public class SymPadInputHandler extends ProxyInputHandler {
         return audioManager;
     }
 
-    private static boolean isPlaybackKey(int keyCode) {
+    private static boolean hasMediaKeys(List<Integer> keyCodes) {
+        return keyCodes.stream().anyMatch(SymPadInputHandler::isMediaKey);
+    }
+
+    private static boolean isMediaKey(int keyCode) {
         return switch (keyCode) {
-            // There are many media keys, but we only need these
-            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PREVIOUS,
-                 KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_REWIND,
-                 KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> true;
+            case KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
+                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK,
+                 KeyEvent.KEYCODE_MEDIA_STOP, KeyEvent.KEYCODE_MEDIA_NEXT,
+                 KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_REWIND,
+                 KeyEvent.KEYCODE_MEDIA_RECORD, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> true;
             default -> false;
         };
     }

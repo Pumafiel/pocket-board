@@ -23,6 +23,8 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     private final Context deviceProtectedStorageContext;
     private final SharedPreferences sharedPreferences;
 
+    private final String lockSymPadKey;
+
     private final String autoCorrectionKey;
     private final String dictShortcutsKey;
     private final String autoCapitalizationKey;
@@ -33,7 +35,6 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     private final String virtualTouchpadSpeedKey;
     private final String virtualTouchpadAnimationShownKey;
     private final String layoutChangeShortcutKey;
-    private final String lockSymPadKey;
     private final String inlineSuggestionsKey;
     private final String manualRecentEmojiKey;
     private final String showPanelKey;
@@ -50,8 +51,11 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     public PreferencesHolder(Context context) {
         deviceProtectedStorageContext = context.createDeviceProtectedStorageContext();
         PreferenceManager.setDefaultValues(deviceProtectedStorageContext, R.xml.preferences, false);
+        PreferenceManager.setDefaultValues(deviceProtectedStorageContext, R.xml.sympad_preferences, false);
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(deviceProtectedStorageContext);
         sharedPreferences.registerOnSharedPreferenceChangeListener(this);
+
+        lockSymPadKey = context.getString(R.string.ime_lock_sympad_prefs_key);
 
         autoCorrectionKey = context.getString(R.string.ime_auto_correction_prefs_key);
         dictShortcutsKey = context.getString(R.string.ime_dict_shortcuts_prefs_key);
@@ -63,7 +67,6 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
         virtualTouchpadSpeedKey = context.getString(R.string.ime_virtual_touchpad_speed_prefs_key);
         virtualTouchpadAnimationShownKey = context.getString(R.string.ime_virtual_touchpad_animation_shown_prefs_key);
         layoutChangeShortcutKey = context.getString(R.string.ime_layout_change_shortcut_prefs_key);
-        lockSymPadKey = context.getString(R.string.ime_lock_sympad_prefs_key);
         inlineSuggestionsKey = context.getString(R.string.ime_show_inline_suggestions_prefs_key);
         manualRecentEmojiKey = context.getString(R.string.ime_manual_recent_emoji_management_prefs_key);
         showPanelKey = context.getString(R.string.ime_show_panel_prefs_key);
@@ -90,6 +93,10 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
                 prefsChangeListeners.get(key).forEach(consumer -> consumer.accept(value));
             }
         }
+    }
+
+    public boolean isLockSymPadEnabled() {
+        return (boolean) prefValues.computeIfAbsent(lockSymPadKey, key -> getValue(key, Boolean.class, true));
     }
 
     public boolean isAutoCorrectionEnabled() {
@@ -136,10 +143,6 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
 
     public boolean isLayoutChangeShortcutEnabled() {
         return (boolean) prefValues.computeIfAbsent(layoutChangeShortcutKey, key -> getValue(key, Boolean.class, true));
-    }
-
-    public boolean isLockSymPadEnabled() {
-        return (boolean) prefValues.computeIfAbsent(lockSymPadKey, key -> getValue(key, Boolean.class, true));
     }
 
     public boolean isInlineSuggestionsEnabled() {

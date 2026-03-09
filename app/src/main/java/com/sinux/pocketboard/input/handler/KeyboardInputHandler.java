@@ -19,7 +19,7 @@ import com.sinux.pocketboard.utils.CharacterUtils;
 import java.util.Arrays;
 import java.util.List;
 
-public class KeyboardInputHandler implements InputHandler {
+public class KeyboardInputHandler {
 
     private final PocketBoardIME pocketBoardIME;
     private final InputMethodManager inputMethodManager;
@@ -143,7 +143,6 @@ public class KeyboardInputHandler implements InputHandler {
         }
     }
 
-    @Override
     public boolean handleKeyDown(int keyCode, KeyEvent event, InputConnection inputConnection,
                                  boolean shiftEnabled, boolean altEnabled) {
         long eventTime = event.getEventTime();
@@ -192,9 +191,7 @@ public class KeyboardInputHandler implements InputHandler {
         return false;
     }
 
-    @Override
-    public boolean handleKeyUp(int keyCode, KeyEvent event, InputConnection inputConnection,
-                               boolean shiftEnabled, boolean altEnabled) {
+    public boolean handleKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_SPACE) {
             return true;
         }

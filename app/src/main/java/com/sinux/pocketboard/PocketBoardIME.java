@@ -199,8 +199,7 @@ public class PocketBoardIME extends InputMethodService {
         // Emulate D-pad and some media keys
         if (metaKeyManager.isSymFixed()) {
             keyboardInputHandler.resetComposing(inputConnection);
-            if (symPadInputHandler.handleKeyDown(keyCode, event, inputConnection,
-                    metaKeyManager.isShiftEnabled(), metaKeyManager.isAltEnabled())) {
+            if (symPadInputHandler.handleKeyDown(keyCode, event, inputConnection)) {
                 symPadJustUsed = true;
                 return true;
             }
@@ -273,8 +272,7 @@ public class PocketBoardIME extends InputMethodService {
 
         // Emulate D-pad and some media keys
         if (metaKeyManager.isSymFixed() || symPadInputHandler.hasPressedKey(keyCode)) {
-            if (symPadInputHandler.handleKeyUp(keyCode, event, inputConnection,
-                    metaKeyManager.isShiftEnabled(), metaKeyManager.isAltEnabled())) {
+            if (symPadInputHandler.handleKeyUp(keyCode, event, inputConnection)) {
                 return true;
             }
         }
@@ -287,8 +285,7 @@ public class PocketBoardIME extends InputMethodService {
         }
 
         return editorInfo != null && (editorInfo.inputType != InputType.TYPE_NULL || keyboardInputHandler.isInRawInputMode()) &&
-                keyboardInputHandler.handleKeyUp(keyCode, event, inputConnection,
-                        metaKeyManager.isShiftEnabled(), metaKeyManager.isAltEnabled());
+                keyboardInputHandler.handleKeyUp(keyCode, event);
     }
 
     @Override

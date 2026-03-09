@@ -67,7 +67,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:contentDescription="@string/emoji_remove_area_description"
-                    android:src="@drawable/emoji_remove"
+                    android:src="@drawable/remove"
                     android:paddingVertical="8dp"
                     android:tint="?colorButtonNormal"
                     android:background="?colorOnPrimary"

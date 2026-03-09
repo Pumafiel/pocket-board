@@ -149,6 +149,14 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
     }
 
     @Override
+    public void onStart() {
+        super.onStart();
+        if (getActivity() != null) {
+            getActivity().setTitle(getPreferenceScreen().getTitle());
+        }
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         updateInputSubtypesPrefSummary();

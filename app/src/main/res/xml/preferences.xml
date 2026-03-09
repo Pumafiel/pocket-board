@@ -10,59 +10,69 @@
         android:key="@string/ime_subtypes_prefs_key"
         android:title="@string/ime_subtypes"/>
 
-    <SwitchPreference
-        android:key="@string/ime_auto_correction_prefs_key"
-        android:defaultValue="true"
-        android:title="@string/ime_auto_correction"
-        android:summary="@string/ime_auto_correction_summary" />
+    <Preference
+        app:key="@string/ime_sympad_prefs_key"
+        app:title="@string/ime_sympad_prefs"
+        app:fragment="com.sinux.pocketboard.preferences.SympadPreferencesFragment" />
 
-    <SwitchPreference
-        android:key="@string/ime_dict_shortcuts_prefs_key"
-        android:defaultValue="true"
-        android:title="@string/ime_dict_shortcuts"
-        android:summary="@string/ime_dict_shortcuts_summary" />
+    <PreferenceCategory
+        android:title="@string/ime_input_cat">
 
-    <SwitchPreference
-        android:key="@string/ime_auto_capitalization_prefs_key"
-        android:defaultValue="true"
-        android:title="@string/ime_auto_capitalization"
-        android:summary="@string/ime_auto_capitalization_summary" />
+        <SwitchPreference
+            android:key="@string/ime_auto_correction_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_auto_correction"
+            android:summary="@string/ime_auto_correction_summary" />
 
-    <SwitchPreference
-        android:key="@string/ime_double_space_period_prefs_key"
-        android:defaultValue="true"
-        android:title="@string/ime_double_space_period"
-        android:summary="@string/ime_double_space_period_summary" />
+        <SwitchPreference
+            android:key="@string/ime_dict_shortcuts_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_dict_shortcuts"
+            android:summary="@string/ime_dict_shortcuts_summary" />
 
-    <SwitchPreference
-        android:key="@string/ime_show_layout_toast_prefs_key"
-        android:defaultValue="@bool/layout_toast_messages_enabled"
-        android:title="@string/ime_show_layout_toast"
-        android:summary="@string/ime_show_layout_toast_summary" />
+        <SwitchPreference
+            android:key="@string/ime_auto_capitalization_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_auto_capitalization"
+            android:summary="@string/ime_auto_capitalization_summary" />
 
-    <SwitchPreference
-        android:key="@string/ime_voice_input_shortcut_prefs_key"
-        android:defaultValue="true"
-        android:title="@string/ime_voice_input_shortcut"
-        android:summary="@string/ime_voice_input_shortcut_summary" />
+        <SwitchPreference
+            android:key="@string/ime_double_space_period_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_double_space_period"
+            android:summary="@string/ime_double_space_period_summary" />
 
-    <SwitchPreference
-        android:key="@string/ime_layout_change_shortcut_prefs_key"
-        android:defaultValue="true"
-        android:title="@string/ime_layout_change_shortcut"
-        android:summary="@string/ime_layout_change_shortcut_summary" />
+        <SwitchPreference
+            android:key="@string/ime_show_layout_toast_prefs_key"
+            android:defaultValue="@bool/layout_toast_messages_enabled"
+            android:title="@string/ime_show_layout_toast"
+            android:summary="@string/ime_show_layout_toast_summary" />
 
-    <SwitchPreference
-        android:key="@string/ime_show_inline_suggestions_prefs_key"
-        android:defaultValue="@bool/inline_autofill_support"
-        android:enabled="@bool/inline_autofill_support"
-        app:isPreferenceVisible="@bool/inline_autofill_support"
-        android:title="@string/ime_show_inline_suggestions" />
+        <SwitchPreference
+            android:key="@string/ime_voice_input_shortcut_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_voice_input_shortcut"
+            android:summary="@string/ime_voice_input_shortcut_summary" />
 
-    <SwitchPreference
-        android:key="@string/ime_manual_recent_emoji_management_prefs_key"
-        android:defaultValue="false"
-        android:title="@string/ime_manual_recent_emoji_management" />
+        <SwitchPreference
+            android:key="@string/ime_layout_change_shortcut_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_layout_change_shortcut"
+            android:summary="@string/ime_layout_change_shortcut_summary" />
+
+        <SwitchPreference
+            android:key="@string/ime_show_inline_suggestions_prefs_key"
+            android:defaultValue="@bool/inline_autofill_support"
+            android:enabled="@bool/inline_autofill_support"
+            app:isPreferenceVisible="@bool/inline_autofill_support"
+            android:title="@string/ime_show_inline_suggestions" />
+
+        <SwitchPreference
+            android:key="@string/ime_manual_recent_emoji_management_prefs_key"
+            android:defaultValue="false"
+            android:title="@string/ime_manual_recent_emoji_management" />
+
+    </PreferenceCategory>
 
     <PreferenceCategory
         android:title="@string/ime_panel_cat">
@@ -117,12 +127,6 @@
 
     <PreferenceCategory
         android:title="@string/ime_extra_cat">
-
-        <SwitchPreference
-            android:key="@string/ime_lock_sympad_prefs_key"
-            android:defaultValue="true"
-            android:title="@string/ime_lock_sympad"
-            android:summary="@string/ime_lock_sympad_summary" />
 
         <SwitchPreference
             android:key="@string/ime_extra_phone_control_prefs_key"

@@ -215,7 +215,9 @@ public class MetaKeyManager {
         setSymPressed(false);
 
         if (sym != MetaKeyState.FIXED) {
-            pocketBoardIME.hideStatusIcon();
+            if (sym == MetaKeyState.ENABLED) {
+                pocketBoardIME.hideStatusIcon();
+            }
             sym = MetaKeyState.DISABLED;
         }
     }
