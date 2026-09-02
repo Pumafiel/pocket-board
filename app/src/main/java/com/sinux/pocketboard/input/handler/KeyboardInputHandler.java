@@ -299,59 +299,158 @@ public class KeyboardInputHandler {
     }
 
     private boolean handleCharacter(int keyCode, KeyEvent event, InputConnection inputConnection,
-                                    boolean shiftEnabled, boolean altEnabled, long eventTime) {
-        // Handle first key press
-        if (event.getRepeatCount() == 0) {
-            // Get current key mapping
-            KeyMapping keyMapping = keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
+                                boolean shiftEnabled, boolean altEnabled, long eventTime) {
+    // Handle first key press
+    if (event.getRepeatCount() == 0) {
+        // Get current key mapping
+        KeyMapping keyMapping = keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
 
-            // Skip unknown keys
+        // Skip unknown keys
+        if (keyMapping == null) {
+            return false;
+        }
+
+        // Check if user has entered into additional key values iteration mode by fast clicking on same key
+        boolean isNewKey = lastKeyCode != keyCode;
+        boolean isShortPress = eventTime - lastKeyDownTime <= keyLongPressDuration;
+        boolean keyIterationModeEnabled;
+
+        if (keyMapping.hasAdditionalValues(lastAltEnabled) && !isNewKey && isShortPress) {
+            keyIterationModeEnabled = true;
+
+            /*
+             * Spanish double-tap accents:
+             * a -> á
+             * e -> é
+             * i -> í
+             * o -> ó
+             * u -> ú
+             * n -> ñ
+             *
+             * This is handled separately from Alt values so that
+             * long-press Alt characters remain unchanged.
+             */
+            if (!lastAltEnabled && isSpanishAccentKey(keyCode) && keyIterationCounter == 0) {
+                keyIterationCounter = 1;
+            } else {
+                keyIterationCounter++;
+            }
+        } else {
+            keyIterationModeEnabled = false;
+            keyIterationCounter = 0;
+            lastShiftEnabled = shiftEnabled;
+            lastAltEnabled = altEnabled;
+        }
+
+        /*
+         * Spanish double-tap:
+         * Replace the first character directly with its accented version.
+         *
+         * We do this only for the second quick press and only when Alt
+         * is not active. Long press handling below remains untouched.
+         */
+        if (keyIterationModeEnabled &&
+                !lastAltEnabled &&
+                isSpanishAccentKey(keyCode) &&
+                keyIterationCounter == 1) {
+
+            replaceLastCharacter(
+                    inputConnection,
+                    getSpanishAccentCharacter(keyCode, lastShiftEnabled)
+            );
+        } else {
+            // Normal character / existing additional-value behaviour
+            if (!keyIterationModeEnabled || numericInputMode) {
+                printNextCharacter(
+                        inputConnection,
+                        keyMapping.getValue(
+                                lastShiftEnabled,
+                                lastAltEnabled,
+                                keyIterationCounter
+                        )
+                );
+            } else {
+                // Replace last character in additional key values iteration mode
+                replaceLastCharacter(
+                        inputConnection,
+                        keyMapping.getValue(
+                                lastShiftEnabled,
+                                lastAltEnabled,
+                                keyIterationCounter
+                        )
+                );
+            }
+        }
+
+        return true;
+    } else {
+        // Handle long key press - replace current char with first alt value
+        if (!numericInputMode &&
+                !lastAltEnabled &&
+                (eventTime - lastKeyDownTime > keyLongPressDuration)) {
+
+            lastAltEnabled = true;
+            keyIterationCounter = 0;
+
+            KeyMapping keyMapping =
+                    keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
+
             if (keyMapping == null) {
                 return false;
             }
 
-            // Check if user has entered into additional key values iteration mode by fast clicking on same key
-            boolean isNewKey = lastKeyCode != keyCode;
-            boolean isShortPress = eventTime - lastKeyDownTime <= keyLongPressDuration;
-            boolean keyIterationModeEnabled;
-            if (keyMapping.hasAdditionalValues(lastAltEnabled) && !isNewKey && isShortPress) {
-                keyIterationModeEnabled = true;
-                keyIterationCounter++;
-            } else {
-                keyIterationModeEnabled = false;
-                keyIterationCounter = 0;
-                lastShiftEnabled = shiftEnabled;
-                lastAltEnabled = altEnabled;
-            }
+            replaceLastCharacter(
+                    inputConnection,
+                    keyMapping.getValue(
+                            lastShiftEnabled,
+                            lastAltEnabled,
+                            keyIterationCounter
+                    )
+            );
 
-            // Print next character
-            if (!keyIterationModeEnabled || numericInputMode) {
-                printNextCharacter(inputConnection, keyMapping.getValue(lastShiftEnabled, lastAltEnabled, keyIterationCounter));
-            } else {
-                // Or replace last (in additional key values iteration mode)
-                replaceLastCharacter(inputConnection, keyMapping.getValue(lastShiftEnabled, lastAltEnabled, keyIterationCounter));
-            }
+            lastKeyDownTime = eventTime;
 
             return true;
-        } else {
-            // Handle long key press - replace current char with first alt value
-            if (!numericInputMode && !lastAltEnabled && (eventTime - lastKeyDownTime > keyLongPressDuration)) {
-                lastAltEnabled = true;
-                keyIterationCounter = 0;
-
-                KeyMapping keyMapping = keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
-                if (keyMapping == null) {
-                    return false;
-                }
-                replaceLastCharacter(inputConnection, keyMapping.getValue(lastShiftEnabled, lastAltEnabled, keyIterationCounter));
-                lastKeyDownTime = eventTime;
-
-                return true;
-            }
         }
-
-        return false;
     }
+
+    return false;
+}
+
+private boolean isSpanishAccentKey(int keyCode) {
+    return keyCode == KeyEvent.KEYCODE_A
+            || keyCode == KeyEvent.KEYCODE_E
+            || keyCode == KeyEvent.KEYCODE_I
+            || keyCode == KeyEvent.KEYCODE_O
+            || keyCode == KeyEvent.KEYCODE_U
+            || keyCode == KeyEvent.KEYCODE_N;
+}
+
+private int getSpanishAccentCharacter(int keyCode, boolean shiftEnabled) {
+    switch (keyCode) {
+        case KeyEvent.KEYCODE_A:
+            return shiftEnabled ? 'Á' : 'á';
+
+        case KeyEvent.KEYCODE_E:
+            return shiftEnabled ? 'É' : 'é';
+
+        case KeyEvent.KEYCODE_I:
+            return shiftEnabled ? 'Í' : 'í';
+
+        case KeyEvent.KEYCODE_O:
+            return shiftEnabled ? 'Ó' : 'ó';
+
+        case KeyEvent.KEYCODE_U:
+            return shiftEnabled ? 'Ú' : 'ú';
+
+        case KeyEvent.KEYCODE_N:
+            return shiftEnabled ? 'Ñ' : 'ñ';
+
+        default:
+            return 0;
+    }
+}
+
 
     private void printNextCharacter(InputConnection inputConnection, int keyCharacterCodePoint) {
         if (rawInputMode) {
