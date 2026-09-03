@@ -40,6 +40,7 @@
             android:label="@string/ime_sympad_mapping_editor"
             android:exported="true" />
 
+        <!-- PocketBoard keyboard -->
         <service
             android:name=".PocketBoardIME"
             android:label="@string/ime_name"
@@ -49,7 +50,25 @@
             <intent-filter>
                 <action android:name="android.view.InputMethod" />
             </intent-filter>
-            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
+        <!-- PocketBoard spell checker -->
+        <service
+            android:name=".spellchecker.PocketBoardSpellCheckerService"
+            android:exported="true"
+            android:label="@string/ime_name"
+            android:permission="android.permission.BIND_TEXT_SERVICE">
+
+            <intent-filter>
+                <action android:name="android.service.textservice.SpellCheckerService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.view.textservice.sps"
+                android:resource="@xml/spellchecker" />
         </service>
 
     </application>
