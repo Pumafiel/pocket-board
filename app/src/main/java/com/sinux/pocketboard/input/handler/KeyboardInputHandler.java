@@ -1025,4 +1025,39 @@ public class KeyboardInputHandler {
                 1
         );
     }
+
+        public void commitEmoji(CharSequence emoji) {
+        InputConnection inputConnection =
+                pocketBoardIME.getCurrentInputConnection();
+
+        if (inputConnection == null) {
+            return;
+        }
+
+        if (composingEnabled) {
+            commitComposingText(inputConnection);
+        }
+
+        inputConnection.commitText(emoji, 1);
+    }
+
+    public void resetComposing(InputConnection inputConnection) {
+        if (inputConnection == null) {
+            return;
+        }
+
+        textComposer.setLength(0);
+        inputConnection.finishComposingText();
+        multipressController.reset();
+
+        keyIterationCounter = 0;
+        lastKeyDownTime = 0;
+        lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+        lastAltEnabled = false;
+    }
+
+    public boolean isInRawInputMode() {
+        return rawInputMode;
+    }
+
 }
