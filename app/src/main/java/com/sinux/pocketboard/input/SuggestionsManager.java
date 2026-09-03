@@ -2,11 +2,6 @@ package com.sinux.pocketboard.input;
 
 import android.content.Context;
 import android.os.Build;
-import android.os.Bundle;
-import android.provider.UserDictionary;
-import android.database.Cursor;
-import android.content.ContentResolver;
-import android.net.Uri;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.inputmethod.CompletionInfo;
@@ -25,6 +20,7 @@ import com.sinux.pocketboard.PocketBoardIME;
 import com.sinux.pocketboard.R;
 import com.sinux.pocketboard.input.handler.KeyboardInputHandler;
 import com.sinux.pocketboard.preferences.PreferencesHolder;
+import com.sinux.pocketboard.spellchecker.DictionaryManager;
 import com.sinux.pocketboard.ui.InputView;
 import com.sinux.pocketboard.ui.SuggestionView;
 import com.sinux.pocketboard.utils.CharacterUtils;
@@ -33,14 +29,8 @@ import com.sinux.pocketboard.utils.InputUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-
-import androidx.autofill.inline.UiVersions;
-import android.util.Size;
-import android.widget.inline.InlinePresentationSpec;
-import android.view.inputmethod.InlineSuggestionsRequest;
-import android.view.inputmethod.InlineSuggestionsResponse;
-
-import androidx.annotation.NonNull;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class SuggestionsManager implements SuggestionView.OnClickListener,
         SpellCheckerSession.SpellCheckerSessionListener {
@@ -55,6 +45,8 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     private final PreferencesHolder preferencesHolder;
     private final KeyboardInputHandler keyboardInputHandler;
 
+    private final DictionaryManager dictionaryManager;
+
     private final int suggestionsCount;
 
     private final List<CharSequence> dictionarySuggestions;
@@ -65,23 +57,34 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
     private boolean dictionarySuggestionsAllowed;
     private boolean spellcheckerSuggestionsAllowed;
+
     private boolean aospSpellchecker;
 
     private boolean hasRecommendedSpellcheckerSuggestion;
+
     private CharSequence lastRecommendedSuggestion;
 
     private boolean isPaused;
+
+    private String currentLanguageTag = "en";
 
     public SuggestionsManager(
             PocketBoardIME pocketBoardIME,
             KeyboardInputHandler keyboardInputHandler) {
 
         this.pocketBoardIME = pocketBoardIME;
-        this.preferencesHolder = pocketBoardIME.getPreferencesHolder();
-        this.keyboardInputHandler = keyboardInputHandler;
+        this.preferencesHolder =
+                pocketBoardIME.getPreferencesHolder();
+
+        this.keyboardInputHandler =
+                keyboardInputHandler;
+
+        dictionaryManager =
+                new DictionaryManager(pocketBoardIME);
 
         suggestionsCount =
-                pocketBoardIME.getResources()
+                pocketBoardIME
+                        .getResources()
                         .getInteger(R.integer.suggestions_count);
 
         dictionarySuggestions =
@@ -101,19 +104,14 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         disallowSuggestions();
 
-        boolean suggestionAllowedEditor =
+        var suggestionAllowedEditor =
                 InputUtils.isSuggestionAllowedEditor(attribute)
                         && !InputUtils.isNumericEditor(attribute);
 
-        boolean suggestionsPanelVisible =
+        var suggestionsPanelVisible =
                 pocketBoardIME.isShouldShowIme()
                         && preferencesHolder.isShowSuggestionsEnabled();
 
-        /*
-         * User Dictionary is OPTIONAL.
-         *
-         * SpellChecker is the main source of suggestions.
-         */
         dictionarySuggestionsAllowed =
                 suggestionAllowedEditor
                         && (suggestionsPanelVisible
@@ -123,16 +121,24 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                 suggestionAllowedEditor
                         && (suggestionsPanelVisible
                         || preferencesHolder.isAutoCorrectionEnabled())
-                        && startSpellCheckerSession(currentInputMethodSubtype);
+                        && startSpellCheckerSession(
+                        currentInputMethodSubtype
+                );
+
+        updateCurrentLanguage(currentInputMethodSubtype);
     }
 
     public void onStartInputView(
             InputMethodSubtype currentInputMethodSubtype) {
 
+        updateCurrentLanguage(currentInputMethodSubtype);
+
         if (spellcheckerSuggestionsAllowed
                 && spellCheckerSession == null) {
 
-            startSpellCheckerSession(currentInputMethodSubtype);
+            startSpellCheckerSession(
+                    currentInputMethodSubtype
+            );
         }
     }
 
@@ -141,7 +147,9 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     }
 
     public void disallowSuggestions() {
+
         clear();
+
         closeSpellCheckerSession();
 
         dictionarySuggestionsAllowed = false;
@@ -149,8 +157,8 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     }
 
     public boolean isSuggestionsAllowed() {
-        return dictionarySuggestionsAllowed
-                || spellcheckerSuggestionsAllowed;
+        return spellcheckerSuggestionsAllowed
+                || dictionarySuggestionsAllowed;
     }
 
     public void clear() {
@@ -170,59 +178,73 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return;
         }
 
-        CharSequence composingText =
-                keyboardInputHandler.getCurrentComposingText();
+        CharSequence composing =
+                keyboardInputHandler
+                        .getCurrentComposingText();
 
-        if (TextUtils.isEmpty(composingText)) {
+        if (TextUtils.isEmpty(composing)) {
             clear();
             return;
         }
 
+        String composingText =
+                composing.toString();
+
         /*
-         * User Dictionary is only an additional source.
+         * =========================================================
+         * POCKETBOARD INTERNAL DICTIONARY
+         *
+         * This works even when Android has no system spellchecker
+         * selected.
+         * =========================================================
          */
         if (dictionarySuggestionsAllowed) {
-            updateDictionarySuggestions(composingText);
-        } else {
-            dictionarySuggestions.clear();
-        }
 
-        /*
-         * SpellChecker is the main suggestion provider.
-         */
-        if (spellcheckerSuggestionsAllowed
-                && spellCheckerSession != null
-                && !spellCheckerSession.isSessionDisconnected()) {
-
-            String text = composingText.toString();
-
-            /*
-             * AOSP SpellChecker often gives better word suggestions
-             * when the composing word is terminated with '#'.
-             */
-            if (aospSpellchecker) {
-                text += "#";
-            }
-
-            TextInfo[] textInfos = {
-                    new TextInfo(
-                            text,
-                            0,
-                            text.length(),
-                            0,
-                            0
-                    )
-            };
-
-            spellCheckerSession.getSentenceSuggestions(
-                    textInfos,
-                    suggestionsCount
+            updateDictionarySuggestions(
+                    composingText
             );
         }
 
         /*
-         * Show whatever is already available.
+         * =========================================================
+         * SYSTEM SPELLCHECKER
+         *
+         * Optional. If Android provides one, we use it as an
+         * additional source of suggestions.
+         * =========================================================
          */
+        if (spellcheckerSuggestionsAllowed) {
+
+            if (spellCheckerSession != null
+                    && !spellCheckerSession.isSessionDisconnected()) {
+
+                String spellText = composingText;
+
+                /*
+                 * Magic trick for AOSP/OpenBoard spellchecker.
+                 */
+                if (aospSpellchecker) {
+                    spellText += "#";
+                }
+
+                TextInfo[] textInfos = {
+                        new TextInfo(
+                                spellText,
+                                0,
+                                spellText.length(),
+                                0,
+                                0
+                        )
+                };
+
+                spellCheckerSession
+                        .getSentenceSuggestions(
+                                textInfos,
+                                suggestionsCount
+                        );
+            }
+        }
+
         showSuggestions();
     }
 
@@ -232,29 +254,33 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return;
         }
 
-        if (completions == null || completions.length == 0) {
-            return;
-        }
+        /*
+         * Completions supplied by the current editor are optional.
+         */
+        if (completions != null) {
 
-        spellcheckerSuggestions.clear();
-        hasRecommendedSpellcheckerSuggestion = false;
+            spellcheckerSuggestions.clear();
 
-        if (spellCheckerSession != null) {
-            spellCheckerSession.cancel();
-        }
+            hasRecommendedSpellcheckerSuggestion =
+                    false;
 
-        for (int i = 0;
-             i < completions.length && i < suggestionsCount;
-             i++) {
+            for (
+                    int i = 0;
+                    i < completions.length
+                            && i < suggestionsCount;
+                    i++
+            ) {
 
-            CompletionInfo completion = completions[i];
+                if (!TextUtils.isEmpty(
+                        completions[i].getText()
+                )) {
 
-            if (completion != null
-                    && !TextUtils.isEmpty(completion.getText())) {
-
-                spellcheckerSuggestions.add(
-                        completion.getText()
-                );
+                    spellcheckerSuggestions.add(
+                            completions[i]
+                                    .getText()
+                                    .toString()
+                    );
+                }
             }
         }
 
@@ -262,7 +288,7 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     }
 
     private void updateDictionarySuggestions(
-            CharSequence composingText) {
+            String composingText) {
 
         dictionarySuggestions.clear();
 
@@ -270,101 +296,21 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return;
         }
 
-        ContentResolver resolver =
-                pocketBoardIME.getContentResolver();
+        List<String> suggestions =
+                dictionaryManager.getSuggestions(
+                        composingText,
+                        currentLanguageTag,
+                        suggestionsCount
+                );
 
-        Uri contentUri =
-                UserDictionary.Words.CONTENT_URI;
+        if (suggestions != null) {
 
-        String[] projection = {
-                UserDictionary.Words.WORD
-        };
-
-        /*
-         * IMPORTANT:
-         *
-         * Do not use SHORTCUT here.
-         *
-         * We want words that START with the currently typed
-         * text, not words whose shortcut equals it.
-         */
-        String selection =
-                UserDictionary.Words.WORD + " LIKE ?";
-
-        String[] selectionArgs = {
-                composingText.toString() + "%"
-        };
-
-        String sortOrder =
-                UserDictionary.Words.FREQUENCY + " DESC";
-
-        try (Cursor cursor = resolver.query(
-                contentUri,
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-        )) {
-
-            if (cursor == null) {
-                return;
-            }
-
-            int wordIndex =
-                    cursor.getColumnIndex(
-                            UserDictionary.Words.WORD
-                    );
-
-            if (wordIndex < 0) {
-                return;
-            }
-
-            var capitalizationType =
-                    CharacterUtils.getCapitalizationType(
-                            composingText
-                    );
-
-            while (cursor.moveToNext()
-                    && dictionarySuggestions.size()
-                    < suggestionsCount) {
-
-                String word =
-                        cursor.getString(wordIndex);
-
-                if (TextUtils.isEmpty(word)) {
-                    continue;
-                }
-
-                switch (capitalizationType) {
-
-                    case ALL_UPPER:
-                        dictionarySuggestions.add(
-                                word.toUpperCase()
-                        );
-                        break;
-
-                    case FIRST_UPPER:
-                        dictionarySuggestions.add(
-                                CharacterUtils
-                                        .capitalizeFirstLetter(word)
-                        );
-                        break;
-
-                    case NONE:
-                    default:
-                        dictionarySuggestions.add(word);
-                        break;
-                }
-            }
-
-        } catch (Exception ignored) {
-            /*
-             * User Dictionary is optional.
-             *
-             * If it is unavailable, suggestions from the
-             * SpellChecker must continue working normally.
-             */
+            dictionarySuggestions.addAll(
+                    suggestions
+            );
         }
+
+        showSuggestions();
     }
 
     public CharSequence getCurrentDictSuggestion() {
@@ -395,35 +341,46 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         closeSpellCheckerSession();
 
+        updateCurrentLanguage(
+                inputMethodSubtype
+        );
+
         if (spellcheckerSuggestionsAllowed) {
+
             spellcheckerSuggestionsAllowed =
                     startSpellCheckerSession(
                             inputMethodSubtype
                     );
         }
+
+        update();
     }
 
     @Override
     public void onClick(View v) {
-        applySuggestion(
-                ((SuggestionView) v).getText()
-        );
+
+        if (v instanceof SuggestionView) {
+
+            applySuggestion(
+                    ((SuggestionView) v).getText()
+            );
+        }
     }
 
     @Override
     public void onGetSuggestions(
             SuggestionsInfo[] results) {
-        /*
-         * We use sentence suggestions instead.
-         */
     }
 
     @Override
     public void onGetSentenceSuggestions(
             SentenceSuggestionsInfo[] results) {
 
-        if (!spellcheckerSuggestionsAllowed
-                || results == null) {
+        if (!spellcheckerSuggestionsAllowed) {
+            return;
+        }
+
+        if (results == null) {
             return;
         }
 
@@ -438,9 +395,11 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                 continue;
             }
 
-            for (int i = 0;
-                 i < ssi.getSuggestionsCount();
-                 i++) {
+            for (
+                    int i = 0;
+                    i < ssi.getSuggestionsCount();
+                    i++
+            ) {
 
                 SuggestionsInfo si =
                         ssi.getSuggestionsInfoAt(i);
@@ -449,79 +408,55 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                     continue;
                 }
 
-                int attributes =
-                        si.getSuggestionsAttributes();
+                hasRecommended |=
+                        (si.getSuggestionsAttributes()
+                                & SuggestionsInfo
+                                .RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS)
+                                != 0;
 
-                if ((attributes
-                        & SuggestionsInfo
-                        .RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS) != 0) {
-
-                    hasRecommended = true;
-                }
-
-                for (int j = 0;
-                     j < si.getSuggestionsCount();
-                     j++) {
+                for (
+                        int j = 0;
+                        j < si.getSuggestionsCount();
+                        j++
+                ) {
 
                     String suggestion =
                             si.getSuggestionAt(j);
 
-                    if (!TextUtils.isEmpty(suggestion)) {
+                    if (!TextUtils.isEmpty(
+                            suggestion
+                    )) {
 
-                        /*
-                         * Avoid duplicates.
-                         */
-                        if (!tempSuggestions.contains(
-                                suggestion)) {
-
-                            tempSuggestions.add(
-                                    suggestion
-                            );
-                        }
-                    }
-
-                    if (tempSuggestions.size()
-                            >= suggestionsCount) {
-                        break;
+                        tempSuggestions.add(
+                                suggestion
+                        );
                     }
                 }
-
-                if (tempSuggestions.size()
-                        >= suggestionsCount) {
-                    break;
-                }
-            }
-
-            if (tempSuggestions.size()
-                    >= suggestionsCount) {
-                break;
             }
         }
 
         if (!tempSuggestions.isEmpty()) {
-
-            /*
-             * Do not replace a valid recommendation with
-             * the exact same recommendation repeatedly.
-             */
-            if (hasRecommended
-                    && lastRecommendedSuggestion != null
-                    && lastRecommendedSuggestion.equals(
-                            tempSuggestions.get(0))) {
-
-                hasRecommendedSpellcheckerSuggestion = false;
-
-            } else {
-
-                hasRecommendedSpellcheckerSuggestion =
-                        hasRecommended;
-            }
 
             spellcheckerSuggestions.clear();
 
             spellcheckerSuggestions.addAll(
                     tempSuggestions
             );
+
+            if (hasRecommended
+                    && lastRecommendedSuggestion != null
+                    && lastRecommendedSuggestion.equals(
+                    tempSuggestions.get(0)
+            )) {
+
+                hasRecommendedSpellcheckerSuggestion =
+                        false;
+
+            } else {
+
+                hasRecommendedSpellcheckerSuggestion =
+                        hasRecommended;
+            }
 
             showSuggestions();
         }
@@ -532,12 +467,15 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             List<InlineSuggestion> inlineSuggestions) {
 
         if (inputView != null) {
+
             return inputView.setInlineSuggestions(
                     inlineSuggestions
             );
-        }
 
-        return false;
+        } else {
+
+            return false;
+        }
     }
 
     public boolean isInlineSuggestionsShown() {
@@ -557,12 +495,16 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     }
 
     public void pause() {
+
         isPaused = true;
+
         clear();
     }
 
     public void resume() {
+
         isPaused = false;
+
         update();
     }
 
@@ -572,41 +514,20 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return;
         }
 
+        /*
+         * Dictionary suggestions come first.
+         *
+         * This means PocketBoard's own dictionary works even
+         * when Android has no spellchecker selected.
+         */
         List<CharSequence> merged =
-                new ArrayList<>(suggestionsCount);
-
-        /*
-         * User Dictionary first.
-         */
-        for (CharSequence suggestion
-                : dictionarySuggestions) {
-
-            if (!merged.contains(suggestion)) {
-                merged.add(suggestion);
-            }
-
-            if (merged.size() >= 3) {
-                break;
-            }
-        }
-
-        /*
-         * SpellChecker after User Dictionary.
-         */
-        if (merged.size() < 3) {
-
-            for (CharSequence suggestion
-                    : spellcheckerSuggestions) {
-
-                if (!merged.contains(suggestion)) {
-                    merged.add(suggestion);
-                }
-
-                if (merged.size() >= 3) {
-                    break;
-                }
-            }
-        }
+                Stream.concat(
+                        dictionarySuggestions.stream(),
+                        spellcheckerSuggestions.stream()
+                )
+                .distinct()
+                .limit(3)
+                .collect(Collectors.toList());
 
         boolean hasRecommended =
                 !dictionarySuggestions.isEmpty()
@@ -618,7 +539,8 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         );
     }
 
-    private void applySuggestion(CharSequence text) {
+    private void applySuggestion(
+            CharSequence text) {
 
         if (isPaused) {
             return;
@@ -628,10 +550,39 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
             keyboardInputHandler.applySuggestion(
                     text,
-                    pocketBoardIME.getCurrentInputConnection(),
+                    pocketBoardIME
+                            .getCurrentInputConnection(),
                     true
             );
         }
+    }
+
+    private void updateCurrentLanguage(
+            InputMethodSubtype subtype) {
+
+        if (subtype == null) {
+            currentLanguageTag = "en";
+            return;
+        }
+
+        String languageTag =
+                subtype.getLanguageTag();
+
+        if (TextUtils.isEmpty(languageTag)) {
+
+            Locale locale =
+                    subtype.getLocale() != null
+                            ? Locale.forLanguageTag(
+                            subtype.getLocale()
+                    )
+                            : Locale.ENGLISH;
+
+            languageTag =
+                    locale.toLanguageTag();
+        }
+
+        currentLanguageTag =
+                languageTag;
     }
 
     private boolean startSpellCheckerSession(
@@ -641,20 +592,10 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return false;
         }
 
-        String languageTag =
-                inputMethodSubtype.getLanguageTag();
-
-        Locale locale;
-
-        if (!TextUtils.isEmpty(languageTag)) {
-            locale = Locale.forLanguageTag(languageTag);
-        } else {
-            locale = inputMethodSubtype.getLocale() != null
-                    ? Locale.forLanguageTag(
-                            inputMethodSubtype.getLocale()
-                    )
-                    : Locale.getDefault();
-        }
+        Locale locale =
+                Locale.forLanguageTag(
+                        inputMethodSubtype.getLanguageTag()
+                );
 
         TextServicesManager tsm =
                 (TextServicesManager)
@@ -666,20 +607,13 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return false;
         }
 
-        try {
-
-            spellCheckerSession =
-                    tsm.newSpellCheckerSession(
-                            null,
-                            locale,
-                            this,
-                            false
-                    );
-
-        } catch (Exception ignored) {
-
-            spellCheckerSession = null;
-        }
+        spellCheckerSession =
+                tsm.newSpellCheckerSession(
+                        null,
+                        locale,
+                        this,
+                        false
+                );
 
         if (spellCheckerSession != null) {
 
@@ -693,11 +627,11 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                                             .getPackageName()
                             )
                                     ||
-                            AOSP_SPELLCHECKER_PACKAGE_OPENBOARD.equals(
-                                    spellCheckerSession
-                                            .getSpellChecker()
-                                            .getPackageName()
-                            )
+                                    AOSP_SPELLCHECKER_PACKAGE_OPENBOARD.equals(
+                                            spellCheckerSession
+                                                    .getSpellChecker()
+                                                    .getPackageName()
+                                    )
                     );
 
             return true;
@@ -710,15 +644,8 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         if (spellCheckerSession != null) {
 
-            try {
-                spellCheckerSession.cancel();
-            } catch (Exception ignored) {
-            }
-
-            try {
-                spellCheckerSession.close();
-            } catch (Exception ignored) {
-            }
+            spellCheckerSession.cancel();
+            spellCheckerSession.close();
 
             spellCheckerSession = null;
         }
