@@ -1,4 +1,4 @@
-bpackage com.sinux.pocketboard.input.handler;
+package com.sinux.pocketboard.input.handler;
 
 import android.os.SystemClock;
 import android.text.TextUtils;
