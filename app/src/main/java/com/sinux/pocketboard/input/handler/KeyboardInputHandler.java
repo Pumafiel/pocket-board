@@ -85,7 +85,9 @@ public class KeyboardInputHandler {
         rawInputEditors =
                 Arrays.asList(
                         pocketBoardIME.getResources()
-                                .getStringArray(R.array.raw_input_editors)
+                                .getStringArray(
+                                        R.array.raw_input_editors
+                                )
                 );
 
         multipressController = new MultipressController();
@@ -107,6 +109,7 @@ public class KeyboardInputHandler {
             keyboardMappingManager.switchToNumericKeyboardMapping();
         } else {
             numericInputMode = false;
+
             keyboardMappingManager.switchToKeyboardMapping(
                     inputMethodManager.getCurrentInputMethodSubtype()
             );
@@ -152,7 +155,6 @@ public class KeyboardInputHandler {
         keyIterationCounter = 0;
         lastKeyDownTime = 0;
         lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
-        lastShiftEnabled = false;
         lastAltEnabled = false;
     }
 
@@ -239,12 +241,61 @@ public class KeyboardInputHandler {
                 commitComposingText(inputConnection);
 
             } else {
-
                 inputConnection.commitText(text, 1);
             }
         }
 
         multipressController.reset();
+    }
+
+    /*
+     * Commit an emoji from the emoji picker.
+     */
+    public void commitEmoji(CharSequence emoji) {
+
+        InputConnection inputConnection =
+                pocketBoardIME.getCurrentInputConnection();
+
+        if (inputConnection == null) {
+            return;
+        }
+
+        if (composingEnabled) {
+            commitComposingText(inputConnection);
+        }
+
+        inputConnection.commitText(emoji, 1);
+
+        multipressController.reset();
+        keyIterationCounter = 0;
+    }
+
+    /*
+     * Reset composing state.
+     */
+    public void resetComposing(InputConnection inputConnection) {
+
+        if (inputConnection == null) {
+            return;
+        }
+
+        if (composingEnabled &&
+                textComposer.length() > 0) {
+
+            textComposer.setLength(0);
+            inputConnection.finishComposingText();
+        }
+
+        multipressController.reset();
+        keyIterationCounter = 0;
+    }
+
+    /*
+     * Used by PocketBoardIME to determine whether the current
+     * editor is in raw input mode.
+     */
+    public boolean isInRawInputMode() {
+        return rawInputMode;
     }
 
     public boolean handleKeyDown(
@@ -393,7 +444,6 @@ public class KeyboardInputHandler {
             }
 
         } else {
-
             deleteLastCharacter(inputConnection);
         }
     }
@@ -570,7 +620,7 @@ public class KeyboardInputHandler {
 
         /*
          * =========================================================
-         * FIRST / SECOND NORMAL KEY PRESS
+         * NORMAL KEY DOWN
          * =========================================================
          */
         if (event.getRepeatCount() == 0) {
@@ -586,8 +636,10 @@ public class KeyboardInputHandler {
             }
 
             /*
-             * Ask the controller whether this is the second
-             * short press of the same physical key.
+             * Detect a real second physical press.
+             *
+             * Long press/repeat events are not considered
+             * multipress.
              */
             boolean isMultipress =
                     multipressController.process(event);
@@ -596,38 +648,35 @@ public class KeyboardInputHandler {
              * =====================================================
              * SPANISH DOUBLE PRESS
              *
-             * Mapping from keyboard_mapping_es_es.xml:
+             * Normal:
              *
-             * N:
-             *     ALT[0] = ,
-             *     ALT[1] = ñ
-             *     ALT[2] = Ñ
+             *     N       -> n
+             *     N N     -> ñ
              *
-             * A:
-             *     ALT[0] = @
-             *     ALT[1] = á
-             *     ALT[2] = Á
+             * Shift:
              *
-             * etc.
+             *     Shift + N N -> Ñ
              *
-             * Desired behavior:
+             * Alt:
              *
-             * N             -> n
-             * N N           -> ñ
-             * Shift + N N   -> Ñ
-             * Alt + N       -> ,
-             * Long press N  -> ,
+             *     Alt + N -> ,
              *
-             * IMPORTANT:
+             * Long press:
              *
-             * Alt is deliberately excluded here.
-             * Alt selects ALT[0], which is the same character
-             * used by long press.
+             *     N held -> ,
+             *
+             * The XML mapping defines:
+             *
+             *     ALT[0] = normal ALT / long press character
+             *     ALT[1] = lowercase accented character
+             *     ALT[2] = uppercase accented character
+             *
+             * Double press uses ALT[1] or ALT[2].
              * =====================================================
              */
             if (!numericInputMode &&
-                    isSpanishAccentKey(keyCode) &&
                     !altEnabled &&
+                    isSpanishAccentKey(keyCode) &&
                     isMultipress) {
 
                 int character;
@@ -635,7 +684,7 @@ public class KeyboardInputHandler {
                 if (shiftEnabled) {
 
                     /*
-                     * ALT[2] = uppercase special character.
+                     * ALT[2]:
                      *
                      * N -> Ñ
                      * A -> Á
@@ -654,7 +703,7 @@ public class KeyboardInputHandler {
                 } else {
 
                     /*
-                     * ALT[1] = lowercase special character.
+                     * ALT[1]:
                      *
                      * N -> ñ
                      * A -> á
@@ -679,26 +728,23 @@ public class KeyboardInputHandler {
                 keyIterationCounter = 0;
 
                 /*
-                 * Do not let the normal additional-value cycling
-                 * process this second press.
+                 * The double press has been consumed.
                  */
-                lastAltEnabled = false;
-
                 return true;
             }
 
             /*
              * =====================================================
-             * NORMAL / ALT FIRST PRESS
+             * NORMAL / ALT MAPPING
              * =====================================================
              *
-             * Normal:
-             *     N -> n
+             * First press:
              *
-             * Alt:
-             *     Alt + N -> ,
+             *     N       -> n
+             *     Alt+N   -> ,
              *
-             * The mapping itself supplies these values.
+             * Long press is handled separately below and also
+             * produces ALT[0].
              */
             boolean isNewKey =
                     lastKeyCode != keyCode;
@@ -710,10 +756,9 @@ public class KeyboardInputHandler {
             boolean keyIterationModeEnabled;
 
             /*
-             * Existing PocketBoard additional-value mechanism.
+             * Existing additional-value cycling.
              *
-             * Spanish double-press was already consumed above.
-             * Other mappings retain their original behavior.
+             * Only enter it after an actual multipress.
              */
             if (keyMapping.hasAdditionalValues(lastAltEnabled) &&
                     !isNewKey &&
@@ -732,6 +777,9 @@ public class KeyboardInputHandler {
                 lastAltEnabled = altEnabled;
             }
 
+            /*
+             * Normal first press or ALT first press.
+             */
             if (!keyIterationModeEnabled ||
                     numericInputMode) {
 
@@ -746,6 +794,9 @@ public class KeyboardInputHandler {
 
             } else {
 
+                /*
+                 * Existing additional-value cycling.
+                 */
                 replaceLastCharacter(
                         inputConnection,
                         keyMapping.getValue(
@@ -764,15 +815,15 @@ public class KeyboardInputHandler {
          * LONG PRESS
          * =========================================================
          *
-         * Long press uses exactly the same ALT[0] value as
-         * pressing ALT + the key.
+         * Completely independent from multipress.
          *
-         * N:
+         * Long press uses exactly ALT[0], which is also the
+         * character produced by ALT + key.
          *
-         *     Alt + N       -> ,
-         *     Long press N  -> ,
+         * Therefore:
          *
-         * This is intentionally independent from double press.
+         *     ALT + N  -> ,
+         *     Long N   -> ,
          * =========================================================
          */
         if (!numericInputMode &&
@@ -780,6 +831,9 @@ public class KeyboardInputHandler {
                 (eventTime - lastKeyDownTime >
                         keyLongPressDuration)) {
 
+            /*
+             * Invalidate pending multipress.
+             */
             multipressController.markLongPress();
 
             lastAltEnabled = true;
@@ -795,13 +849,13 @@ public class KeyboardInputHandler {
             }
 
             /*
-             * ALT[0] is the same value selected by ALT + key.
+             * ALT[0] = ALT character / long press character.
              */
             replaceLastCharacter(
                     inputConnection,
                     keyMapping.getValue(
-                            false,
-                            true,
+                            lastShiftEnabled,
+                            lastAltEnabled,
                             (byte) 0
                     )
             );
@@ -931,18 +985,17 @@ public class KeyboardInputHandler {
 
         if (!composingEnabled ||
                 textComposer.length() == 0) {
+
             return false;
         }
 
         if (dictShortcuts) {
-
             if (handleDictShortcut()) {
                 return true;
             }
         }
 
         if (autocorrection) {
-
             if (handleAutocorrection()) {
                 return true;
             }
@@ -1025,39 +1078,4 @@ public class KeyboardInputHandler {
                 1
         );
     }
-
-        public void commitEmoji(CharSequence emoji) {
-        InputConnection inputConnection =
-                pocketBoardIME.getCurrentInputConnection();
-
-        if (inputConnection == null) {
-            return;
-        }
-
-        if (composingEnabled) {
-            commitComposingText(inputConnection);
-        }
-
-        inputConnection.commitText(emoji, 1);
-    }
-
-    public void resetComposing(InputConnection inputConnection) {
-        if (inputConnection == null) {
-            return;
-        }
-
-        textComposer.setLength(0);
-        inputConnection.finishComposingText();
-        multipressController.reset();
-
-        keyIterationCounter = 0;
-        lastKeyDownTime = 0;
-        lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
-        lastAltEnabled = false;
-    }
-
-    public boolean isInRawInputMode() {
-        return rawInputMode;
-    }
-
 }
