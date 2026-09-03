@@ -1,4 +1,4 @@
-name: Build APK
+name: Build Signed APK
 
 on:
   workflow_dispatch:
@@ -20,11 +20,43 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Generate signing key
+        run: |
+          keytool -genkeypair \
+            -v \
+            -keystore pocketboard-release.jks \
+            -alias pocketboard \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass pocketboard \
+            -keypass pocketboard \
+            -dname "CN=PocketBoard, OU=PocketBoard, O=PocketBoard, L=Unknown, ST=Unknown, C=US"
+
       - name: Build APK
-        run: chmod +x ./gradlew && ./gradlew assembleRelease
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease
+
+      - name: Sign APK
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$BUILD_TOOLS/zipalign" -f 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            app-release-aligned.apk
+
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks pocketboard-release.jks \
+            --ks-key-alias pocketboard \
+            --ks-pass pass:pocketboard \
+            --key-pass pass:pocketboard \
+            --out PocketBoard.apk \
+            app-release-aligned.apk
+
+          "$BUILD_TOOLS/apksigner" verify PocketBoard.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PocketBoard-APK
-          path: app/build/outputs/apk/release/*.apk
+          path: PocketBoard.apk
