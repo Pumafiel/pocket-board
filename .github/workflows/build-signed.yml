@@ -20,6 +20,80 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Download dictionaries
+        run: |
+          set -e
+
+          mkdir -p app/src/main/assets/dictionaries
+
+          echo "Downloading Spanish Argentina dictionary..."
+          curl -fL \
+            "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/es-ar/index.dic" \
+            -o /tmp/es-ar.dic
+
+          echo "Downloading English dictionary..."
+          curl -fL \
+            "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/en/index.dic" \
+            -o /tmp/en.dic
+
+          echo "Downloading German dictionary..."
+          curl -fL \
+            "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/de/index.dic" \
+            -o /tmp/de.dic
+
+          echo "Converting dictionaries..."
+
+          # Hunspell .dic files contain one word/stem per line,
+          # optionally followed by flags. DictionaryManager only
+          # needs the word/stem itself.
+
+          grep -v '^#' /tmp/es-ar.dic \
+            | tail -n +2 \
+            | cut -f1 \
+            | sed 's/[\/].*$//' \
+            | sed '/^$/d' \
+            | sort -u \
+            > app/src/main/assets/dictionaries/es-AR.txt
+
+          grep -v '^#' /tmp/en.dic \
+            | tail -n +2 \
+            | cut -f1 \
+            | sed 's/[\/].*$//' \
+            | sed '/^$/d' \
+            | sort -u \
+            > app/src/main/assets/dictionaries/en.txt
+
+          grep -v '^#' /tmp/de.dic \
+            | tail -n +2 \
+            | cut -f1 \
+            | sed 's/[\/].*$//' \
+            | sed '/^$/d' \
+            | sort -u \
+            > app/src/main/assets/dictionaries/de.txt
+
+          echo ""
+          echo "=== Dictionary sizes ==="
+          wc -l \
+            app/src/main/assets/dictionaries/es-AR.txt \
+            app/src/main/assets/dictionaries/en.txt \
+            app/src/main/assets/dictionaries/de.txt
+
+          echo ""
+          echo "=== Dictionary files ==="
+          ls -lh app/src/main/assets/dictionaries/
+
+          echo ""
+          echo "=== Spanish sample ==="
+          head -n 10 app/src/main/assets/dictionaries/es-AR.txt
+
+          echo ""
+          echo "=== English sample ==="
+          head -n 10 app/src/main/assets/dictionaries/en.txt
+
+          echo ""
+          echo "=== German sample ==="
+          head -n 10 app/src/main/assets/dictionaries/de.txt
+
       - name: Build APK
         run: |
           chmod +x ./gradlew
@@ -56,7 +130,10 @@ jobs:
       - name: Verify APK signature
         run: |
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-          "$BUILD_TOOLS/apksigner" verify --verbose PocketBoard.apk
+
+          "$BUILD_TOOLS/apksigner" verify \
+            --verbose \
+            PocketBoard.apk
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
