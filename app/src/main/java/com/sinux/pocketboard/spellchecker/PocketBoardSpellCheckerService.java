@@ -1,11 +1,9 @@
 package com.sinux.pocketboard.spellchecker;
 
 import android.service.textservice.SpellCheckerService;
-import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SuggestionsInfo;
 import android.view.textservice.TextInfo;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -33,6 +31,10 @@ public class PocketBoardSpellCheckerService
 
         @Override
         public void onCreate() {
+
+            /*
+             * Android 11 returns the session locale as a String.
+             */
             String languageTag = getLocale();
 
             if (languageTag != null &&
@@ -56,14 +58,23 @@ public class PocketBoardSpellCheckerService
                     textInfo.getText() == null ||
                     suggestionsLimit <= 0) {
 
-                return emptySuggestions();
+                return new SuggestionsInfo(
+                        0,
+                        new String[0],
+                        getCookie(textInfo),
+                        getSequence(textInfo)
+                );
             }
 
-            String word = textInfo.getText();
+            String originalWord =
+                    textInfo.getText();
+
+            String word =
+                    originalWord;
 
             /*
-             * Android may append "#" when requesting suggestions
-             * for the current word.
+             * Android may append "#" when asking for suggestions
+             * for the word currently being edited.
              */
             if (word.endsWith("#")) {
                 word = word.substring(
@@ -75,43 +86,63 @@ public class PocketBoardSpellCheckerService
             word = word.trim();
 
             if (word.isEmpty()) {
-                return emptySuggestions();
+
+                return new SuggestionsInfo(
+                        0,
+                        new String[0],
+                        textInfo.getCookie(),
+                        textInfo.getSequence()
+                );
             }
 
+            String languageTag =
+                    locale.toLanguageTag();
+
             /*
-             * Check whether the word already exists in the
-             * PocketBoard dictionary.
+             * Check whether this is an actual dictionary word.
              */
             boolean exactMatch =
                     dictionaryManager.contains(
                             word,
-                            locale.toLanguageTag()
+                            languageTag
                     );
 
             if (exactMatch) {
+
                 return new SuggestionsInfo(
                         SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY,
-                        new String[0]
+                        new String[0],
+                        textInfo.getCookie(),
+                        textInfo.getSequence()
                 );
             }
 
             /*
-             * The word isn't in the dictionary, so ask the
-             * DictionaryManager for possible corrections.
+             * The word is not in the dictionary.
+             *
+             * Ask DictionaryManager for corrections.
              */
             List<String> suggestions =
                     dictionaryManager.getSuggestions(
                             word,
-                            locale.toLanguageTag(),
+                            languageTag,
                             suggestionsLimit
                     );
 
             if (suggestions == null ||
                     suggestions.isEmpty()) {
 
+                /*
+                 * Important:
+                 *
+                 * Even when we have no replacement suggestion,
+                 * tell Android that the word looks like a typo.
+                 */
                 return new SuggestionsInfo(
                         SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO,
-                        new String[0]
+                        new String[0],
+                        textInfo.getCookie(),
+                        textInfo.getSequence()
                 );
             }
 
@@ -123,196 +154,40 @@ public class PocketBoardSpellCheckerService
             return new SuggestionsInfo(
                     SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO
                             | SuggestionsInfo.RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS,
-                    result
+                    result,
+                    textInfo.getCookie(),
+                    textInfo.getSequence()
             );
         }
 
-        @Override
-        public SentenceSuggestionsInfo[] onGetSentenceSuggestionsMultiple(
-                TextInfo[] textInfos,
-                int suggestionsLimit) {
+        /*
+         * We intentionally do NOT override
+         * onGetSentenceSuggestionsMultiple().
+         *
+         * Android's SpellCheckerService provides the default
+         * implementation. It splits sentences into words and
+         * calls onGetSuggestionsMultiple(), preserving the
+         * TextInfo metadata required by the framework.
+         *
+         * This is especially important for Android 11.
+         */
 
-            if (textInfos == null ||
-                    textInfos.length == 0 ||
-                    suggestionsLimit <= 0) {
+        private int getCookie(TextInfo textInfo) {
 
-                return new SentenceSuggestionsInfo[0];
+            if (textInfo == null) {
+                return 0;
             }
 
-            List<SentenceSuggestionsInfo> results =
-                    new ArrayList<>();
-
-            for (TextInfo textInfo : textInfos) {
-
-                if (textInfo == null ||
-                        textInfo.getText() == null) {
-
-                    results.add(
-                            new SentenceSuggestionsInfo(
-                                    new SuggestionsInfo[0],
-                                    new int[0],
-                                    new int[0]
-                            )
-                    );
-
-                    continue;
-                }
-
-                String text = textInfo.getText();
-
-                /*
-                 * Split the sentence into individual words while
-                 * preserving their positions in the original text.
-                 */
-                List<TextToken> tokens =
-                        tokenize(text);
-
-                List<SuggestionsInfo> suggestionsInfos =
-                        new ArrayList<>();
-
-                List<Integer> offsets =
-                        new ArrayList<>();
-
-                List<Integer> lengths =
-                        new ArrayList<>();
-
-                for (TextToken token : tokens) {
-
-                    SuggestionsInfo suggestionsInfo =
-                            onGetSuggestions(
-                                    new TextInfo(token.text),
-                                    suggestionsLimit
-                            );
-
-                    if (suggestionsInfo == null) {
-                        continue;
-                    }
-
-                    int attributes =
-                            suggestionsInfo.getSuggestionsAttributes();
-
-                    boolean isTypo =
-                            (attributes &
-                                    SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO)
-                                    != 0;
-
-                    boolean hasSuggestions =
-                            suggestionsInfo.getSuggestionsCount() > 0;
-
-                    if (isTypo || hasSuggestions) {
-
-                        suggestionsInfos.add(
-                                suggestionsInfo
-                        );
-
-                        offsets.add(token.start);
-                        lengths.add(token.text.length());
-                    }
-                }
-
-                SuggestionsInfo[] infoArray =
-                        suggestionsInfos.toArray(
-                                new SuggestionsInfo[0]
-                        );
-
-                int[] offsetArray =
-                        new int[offsets.size()];
-
-                int[] lengthArray =
-                        new int[lengths.size()];
-
-                for (int i = 0; i < offsets.size(); i++) {
-                    offsetArray[i] = offsets.get(i);
-                    lengthArray[i] = lengths.get(i);
-                }
-
-                results.add(
-                        new SentenceSuggestionsInfo(
-                                infoArray,
-                                offsetArray,
-                                lengthArray
-                        )
-                );
-            }
-
-            return results.toArray(
-                    new SentenceSuggestionsInfo[0]
-            );
+            return textInfo.getCookie();
         }
 
-        private SuggestionsInfo emptySuggestions() {
-            return new SuggestionsInfo(
-                    SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO,
-                    new String[0]
-            );
-        }
+        private int getSequence(TextInfo textInfo) {
 
-        private List<TextToken> tokenize(String text) {
-
-            List<TextToken> tokens =
-                    new ArrayList<>();
-
-            int start = -1;
-
-            for (int i = 0; i < text.length(); i++) {
-
-                char c = text.charAt(i);
-
-                boolean isWordCharacter =
-                        Character.isLetterOrDigit(c)
-                                || c == '\''
-                                || c == '-';
-
-                if (isWordCharacter) {
-
-                    if (start < 0) {
-                        start = i;
-                    }
-
-                } else {
-
-                    if (start >= 0) {
-
-                        tokens.add(
-                                new TextToken(
-                                        text.substring(
-                                                start,
-                                                i
-                                        ),
-                                        start
-                                )
-                        );
-
-                        start = -1;
-                    }
-                }
+            if (textInfo == null) {
+                return 0;
             }
 
-            if (start >= 0) {
-
-                tokens.add(
-                        new TextToken(
-                                text.substring(start),
-                                start
-                        )
-                );
-            }
-
-            return tokens;
-        }
-    }
-
-    private static class TextToken {
-
-        private final String text;
-        private final int start;
-
-        TextToken(
-                String text,
-                int start) {
-
-            this.text = text;
-            this.start = start;
+            return textInfo.getSequence();
         }
     }
 }
