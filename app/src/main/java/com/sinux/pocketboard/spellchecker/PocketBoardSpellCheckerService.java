@@ -33,12 +33,17 @@ public class PocketBoardSpellCheckerService
 
         @Override
         public void onCreate() {
-            Locale sessionLocale = getLocale();
+            String languageTag = getLocale();
 
-            if (sessionLocale != null &&
-                    !sessionLocale.getLanguage().isEmpty()) {
+            if (languageTag != null &&
+                    !languageTag.isEmpty()) {
 
-                locale = sessionLocale;
+                Locale parsedLocale =
+                        Locale.forLanguageTag(languageTag);
+
+                if (!parsedLocale.getLanguage().isEmpty()) {
+                    locale = parsedLocale;
+                }
             }
         }
 
@@ -56,6 +61,10 @@ public class PocketBoardSpellCheckerService
 
             String word = textInfo.getText();
 
+            /*
+             * Android may append "#" when requesting suggestions
+             * for the current word.
+             */
             if (word.endsWith("#")) {
                 word = word.substring(
                         0,
@@ -69,6 +78,10 @@ public class PocketBoardSpellCheckerService
                 return emptySuggestions();
             }
 
+            /*
+             * Check whether the word already exists in the
+             * PocketBoard dictionary.
+             */
             boolean exactMatch =
                     dictionaryManager.contains(
                             word,
@@ -82,6 +95,10 @@ public class PocketBoardSpellCheckerService
                 );
             }
 
+            /*
+             * The word isn't in the dictionary, so ask the
+             * DictionaryManager for possible corrections.
+             */
             List<String> suggestions =
                     dictionaryManager.getSuggestions(
                             word,
@@ -143,6 +160,10 @@ public class PocketBoardSpellCheckerService
 
                 String text = textInfo.getText();
 
+                /*
+                 * Split the sentence into individual words while
+                 * preserving their positions in the original text.
+                 */
                 List<TextToken> tokens =
                         tokenize(text);
 
