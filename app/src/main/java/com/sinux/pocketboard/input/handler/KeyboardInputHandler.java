@@ -10,7 +10,6 @@ import android.view.inputmethod.InputMethodSubtype;
 
 import com.sinux.pocketboard.PocketBoardIME;
 import com.sinux.pocketboard.R;
-import com.sinux.pocketboard.input.SuggestionsManager;
 import com.sinux.pocketboard.input.mapping.KeyMapping;
 import com.sinux.pocketboard.input.mapping.KeyboardMappingManager;
 import com.sinux.pocketboard.preferences.PreferencesHolder;
@@ -56,6 +55,7 @@ public class KeyboardInputHandler {
     public KeyboardInputHandler(PocketBoardIME pocketBoardIME) {
 
         this.pocketBoardIME = pocketBoardIME;
+
         this.inputMethodManager =
                 pocketBoardIME.getInputMethodManager();
 
@@ -114,7 +114,8 @@ public class KeyboardInputHandler {
                 );
 
         composingEnabled =
-                suggestionsAllowed && !rawInputMode;
+                suggestionsAllowed
+                        && !rawInputMode;
 
         if (InputUtils.isNumericEditor(attribute)) {
 
@@ -152,9 +153,8 @@ public class KeyboardInputHandler {
                         && preferencesHolder
                         .isAutoCorrectionEnabled();
 
-        if (composingEnabled) {
-            textComposer.setLength(0);
-        }
+        textComposer.setLength(0);
+        currentSelectedText = "";
 
         multipressController.reset();
 
@@ -169,9 +169,8 @@ public class KeyboardInputHandler {
 
     public void onFinishInput() {
 
-        if (composingEnabled) {
-            textComposer.setLength(0);
-        }
+        textComposer.setLength(0);
+        currentSelectedText = "";
 
         multipressController.reset();
 
@@ -193,8 +192,10 @@ public class KeyboardInputHandler {
             currentSelectedText = "";
 
             if (textComposer.length() > 0
-                    && (newSelStart != candidatesEnd
-                    || newSelEnd != candidatesEnd)) {
+                    && (
+                    newSelStart != candidatesEnd
+                            || newSelEnd != candidatesEnd
+            )) {
 
                 textComposer.setLength(0);
 
@@ -213,7 +214,10 @@ public class KeyboardInputHandler {
         }
 
         lastCursorPosition =
-                Math.min(newSelStart, newSelEnd);
+                Math.min(
+                        newSelStart,
+                        newSelEnd
+                );
     }
 
     public void onInputMethodSubtypeChanged(
@@ -227,12 +231,14 @@ public class KeyboardInputHandler {
                             .getCurrentInputConnection();
 
             if (inputConnection != null) {
-                commitComposingText(inputConnection);
+                commitComposingText(
+                        inputConnection
+                );
             }
         }
 
         composingEnabled =
-                suggestionsAllowed && !rawInputMode;
+                suggestionsAllowed;
 
         multipressController.reset();
 
@@ -244,9 +250,11 @@ public class KeyboardInputHandler {
 
     public CharSequence getCurrentComposingText() {
 
-        return TextUtils.isEmpty(textComposer)
-                ? currentSelectedText
-                : textComposer;
+        if (!TextUtils.isEmpty(textComposer)) {
+            return textComposer;
+        }
+
+        return currentSelectedText;
     }
 
     public boolean isInRawInputMode() {
@@ -267,6 +275,7 @@ public class KeyboardInputHandler {
         if (textComposer.length() > 0) {
 
             textComposer.setLength(0);
+
             inputConnection.finishComposingText();
         }
 
@@ -289,7 +298,9 @@ public class KeyboardInputHandler {
         }
 
         if (composingEnabled) {
-            commitComposingText(inputConnection);
+            commitComposingText(
+                    inputConnection
+            );
         }
 
         inputConnection.commitText(
@@ -316,20 +327,31 @@ public class KeyboardInputHandler {
             textComposer.setLength(0);
             textComposer.append(text);
 
+            inputConnection.setComposingText(
+                    textComposer,
+                    1
+            );
+
             if (appendSpace) {
 
                 textComposer.append(' ');
 
+                inputConnection.commitText(
+                        textComposer,
+                        1
+                );
+
+                textComposer.setLength(0);
+
                 lastKeyDownTime =
                         SystemClock.uptimeMillis();
 
-                lastKeyCode =
-                        KeyEvent.KEYCODE_SPACE;
-            }
+            } else {
 
-            commitComposingText(
-                    inputConnection
-            );
+                commitComposingText(
+                        inputConnection
+                );
+            }
 
         } else {
 
@@ -369,9 +391,7 @@ public class KeyboardInputHandler {
 
             } else {
 
-                if (composingEnabled
-                        && eventTime
-                        - lastKeyDownTime
+                if (eventTime - lastKeyDownTime
                         > keyLongPressDuration) {
 
                     handleBackspace(
@@ -393,10 +413,13 @@ public class KeyboardInputHandler {
                     inputConnection.endBatchEdit();
 
                     if (hadComposingText) {
-                        lastKeyDownTime = eventTime;
+                        lastKeyDownTime =
+                                eventTime;
                     }
                 }
             }
+
+            notifySuggestions();
 
             return true;
         }
@@ -413,6 +436,8 @@ public class KeyboardInputHandler {
 
             lastKeyDownTime = eventTime;
             lastKeyCode = keyCode;
+
+            notifySuggestions();
 
             return true;
         }
@@ -432,6 +457,14 @@ public class KeyboardInputHandler {
             lastKeyDownTime = eventTime;
             lastKeyCode = keyCode;
 
+            /*
+             * This is important.
+             *
+             * Every character typed updates the suggestion
+             * engine immediately.
+             */
+            notifySuggestions();
+
             return true;
         }
 
@@ -444,7 +477,6 @@ public class KeyboardInputHandler {
 
         if (keyCode == KeyEvent.KEYCODE_DEL
                 || keyCode == KeyEvent.KEYCODE_SPACE) {
-
             return true;
         }
 
@@ -458,6 +490,18 @@ public class KeyboardInputHandler {
                         .getKeyMapping(keyCode);
 
         return keyMapping != null;
+    }
+
+    private void notifySuggestions() {
+
+        if (composingEnabled
+                && pocketBoardIME
+                .getSuggestionsManager() != null) {
+
+            pocketBoardIME
+                    .getSuggestionsManager()
+                    .update();
+        }
     }
 
     private void handleBackspace(
@@ -574,10 +618,11 @@ public class KeyboardInputHandler {
         if (!TextUtils.isEmpty(str)) {
 
             int regionStart =
-                    CharacterUtils.getLastWordStartIndex(
-                            str,
-                            nonLetterOrDigitExclusions
-                    );
+                    CharacterUtils
+                            .getLastWordStartIndex(
+                                    str,
+                                    nonLetterOrDigitExclusions
+                            );
 
             int regionEnd =
                     str.length();
@@ -612,15 +657,17 @@ public class KeyboardInputHandler {
 
         if (layoutChangeShortcut) {
 
-            if (eventRepeatCount
-                    == layoutChangeShortcutEventRepeatCount) {
+            if (eventRepeatCount ==
+                    layoutChangeShortcutEventRepeatCount) {
 
                 handleBackspace(
                         inputConnection
                 );
 
                 pocketBoardIME
-                        .switchToNextInputMethod(true);
+                        .switchToNextInputMethod(
+                                true
+                        );
 
                 return;
 
@@ -644,13 +691,16 @@ public class KeyboardInputHandler {
             }
 
             CharSequence lastChars =
-                    inputConnection.getTextBeforeCursor(
-                            3,
-                            0
-                    );
+                    inputConnection
+                            .getTextBeforeCursor(
+                                    3,
+                                    0
+                            );
 
             if (CharacterUtils
-                    .isLetterOrDigitAndSpace(lastChars)) {
+                    .isLetterOrDigitAndSpace(
+                            lastChars
+                    )) {
 
                 inputConnection.beginBatchEdit();
 
@@ -705,26 +755,30 @@ public class KeyboardInputHandler {
             KeyMapping keyMapping =
                     keyboardMappingManager
                             .getCurrentMapping()
-                            .getKeyMapping(keyCode);
+                            .getKeyMapping(
+                                    keyCode
+                            );
 
             if (keyMapping == null) {
 
                 multipressController.reset();
+
                 return false;
             }
 
             boolean isMultipress =
-                    multipressController.process(
-                            event
-                    );
+                    multipressController
+                            .process(event);
 
             /*
+             * =====================================================
              * DOUBLE PRESS ACCENT MODE
              *
              * N -> n
              * N N -> ñ
              *
              * Shift + N N -> Ñ
+             * =====================================================
              */
             if (!numericInputMode
                     && !altEnabled
@@ -772,7 +826,8 @@ public class KeyboardInputHandler {
             boolean keyIterationModeEnabled;
 
             if (keyMapping.hasAdditionalValues(
-                    lastAltEnabled)
+                    lastAltEnabled
+            )
                     && !isNewKey
                     && isShortPress
                     && isMultipress) {
@@ -835,7 +890,9 @@ public class KeyboardInputHandler {
             KeyMapping keyMapping =
                     keyboardMappingManager
                             .getCurrentMapping()
-                            .getKeyMapping(keyCode);
+                            .getKeyMapping(
+                                    keyCode
+                            );
 
             if (keyMapping == null) {
                 return false;
@@ -883,7 +940,9 @@ public class KeyboardInputHandler {
         } else {
 
             inputConnection.commitText(
-                    String.valueOf((char) character),
+                    String.valueOf(
+                            (char) character
+                    ),
                     1
             );
         }
@@ -897,48 +956,30 @@ public class KeyboardInputHandler {
             return;
         }
 
+        /*
+         * Always keep the current word composing when
+         * suggestions/autocorrection are enabled.
+         *
+         * This allows the SpellChecker to see:
+         *
+         *   h
+         *   he
+         *   hel
+         *   hell
+         *   hello
+         */
         if (textComposer.length() == 0) {
 
             textComposer.append(
                     (char) character
             );
 
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-            return;
-        }
-
-        if (dictShortcuts || autocorrection) {
+        } else {
 
             textComposer.append(
                     (char) character
             );
-
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-            /*
-             * Ask SuggestionsManager for updated suggestions.
-             */
-            pocketBoardIME
-                    .getSuggestionsManager()
-                    .update();
-
-            return;
         }
-
-        commitComposingText(
-                inputConnection
-        );
-
-        textComposer.append(
-                (char) character
-        );
 
         inputConnection.setComposingText(
                 textComposer,
@@ -946,6 +987,13 @@ public class KeyboardInputHandler {
         );
     }
 
+    /**
+     * Replaces ONLY the character currently represented
+     * by the keyboard handler.
+     *
+     * N -> n
+     * N N -> ñ
+     */
     private void replaceLastCharacter(
             InputConnection inputConnection,
             int character) {
@@ -996,7 +1044,9 @@ public class KeyboardInputHandler {
             );
 
             inputConnection.commitText(
-                    String.valueOf((char) character),
+                    String.valueOf(
+                            (char) character
+                    ),
                     1
             );
         }
@@ -1017,10 +1067,6 @@ public class KeyboardInputHandler {
             );
 
             textComposer.setLength(0);
-
-            pocketBoardIME
-                    .getSuggestionsManager()
-                    .clear();
         }
     }
 
@@ -1028,126 +1074,28 @@ public class KeyboardInputHandler {
 
         if (!composingEnabled
                 || textComposer.length() == 0) {
-
             return false;
         }
 
-        if (dictShortcuts) {
-
-            if (handleDictShortcut()) {
-                return true;
-            }
+        if (dictShortcuts
+                && handleDictShortcut()) {
+            return true;
         }
 
-        if (autocorrection) {
-
-            if (handleAutocorrection()) {
-                return true;
-            }
+        if (autocorrection
+                && handleAutocorrection()) {
+            return true;
         }
 
         return false;
     }
 
     private boolean handleDictShortcut() {
-
-        SuggestionsManager suggestionsManager =
-                pocketBoardIME
-                        .getSuggestionsManager();
-
-        CharSequence suggestion =
-                suggestionsManager
-                        .getCurrentDictSuggestion();
-
-        if (TextUtils.isEmpty(suggestion)) {
-            return false;
-        }
-
-        /*
-         * Only use a dictionary suggestion when it actually
-         * differs from the typed word.
-         */
-        if (suggestion.toString()
-                .equalsIgnoreCase(
-                        textComposer.toString()
-                )) {
-
-            return false;
-        }
-
-        replaceCurrentComposingWord(
-                suggestion
-        );
-
-        return true;
+        return false;
     }
 
     private boolean handleAutocorrection() {
-
-        SuggestionsManager suggestionsManager =
-                pocketBoardIME
-                        .getSuggestionsManager();
-
-        CharSequence suggestion =
-                suggestionsManager
-                        .getCurrentSpellcheckerRecommendedSuggestion();
-
-        if (TextUtils.isEmpty(suggestion)) {
-            return false;
-        }
-
-        /*
-         * If the spellchecker suggestion is exactly what the user
-         * typed, there is nothing to autocorrect.
-         */
-        if (suggestion.toString()
-                .equalsIgnoreCase(
-                        textComposer.toString()
-                )) {
-
-            return false;
-        }
-
-        replaceCurrentComposingWord(
-                suggestion
-        );
-
-        return true;
-    }
-
-    private void replaceCurrentComposingWord(
-            CharSequence replacement) {
-
-        InputConnection inputConnection =
-                pocketBoardIME
-                        .getCurrentInputConnection();
-
-        if (inputConnection == null
-                || TextUtils.isEmpty(replacement)) {
-
-            return;
-        }
-
-        /*
-         * textComposer is currently the word being edited.
-         *
-         * Replace that composing word with the selected
-         * dictionary/spellchecker suggestion.
-         */
-        textComposer.setLength(0);
-        textComposer.append(replacement);
-
-        inputConnection.setComposingText(
-                textComposer,
-                1
-        );
-
-        /*
-         * Commit the corrected word.
-         */
-        commitComposingText(
-                inputConnection
-        );
+        return false;
     }
 
     private void handleEnter(
@@ -1221,7 +1169,9 @@ public class KeyboardInputHandler {
         }
 
         inputConnection.commitText(
-                String.valueOf((char) character),
+                String.valueOf(
+                        (char) character
+                ),
                 1
         );
     }
