@@ -33,21 +33,12 @@ public class PocketBoardSpellCheckerService
 
         @Override
         public void onCreate() {
-            /*
-             * Session#getLocale() returns a language tag String
-             * on the Android API used by this project.
-             */
-            String languageTag = getLocale();
+            Locale sessionLocale = getLocale();
 
-            if (languageTag != null &&
-                    !languageTag.isEmpty()) {
+            if (sessionLocale != null &&
+                    !sessionLocale.getLanguage().isEmpty()) {
 
-                Locale parsedLocale =
-                        Locale.forLanguageTag(languageTag);
-
-                if (!parsedLocale.getLanguage().isEmpty()) {
-                    locale = parsedLocale;
-                }
+                locale = sessionLocale;
             }
         }
 
@@ -65,11 +56,6 @@ public class PocketBoardSpellCheckerService
 
             String word = textInfo.getText();
 
-            /*
-             * PocketBoardSpellCheckerService may receive the "#"
-             * suffix used by SuggestionsManager when talking to
-             * the AOSP spellchecker.
-             */
             if (word.endsWith("#")) {
                 word = word.substring(
                         0,
@@ -83,14 +69,6 @@ public class PocketBoardSpellCheckerService
                 return emptySuggestions();
             }
 
-            /*
-             * If the word exists in our dictionary, explicitly tell
-             * Android that it is a valid dictionary word.
-             *
-             * This is important: returning suggestions for every
-             * prefix would otherwise make correctly typed words look
-             * like spelling errors.
-             */
             boolean exactMatch =
                     dictionaryManager.contains(
                             word,
@@ -104,11 +82,6 @@ public class PocketBoardSpellCheckerService
                 );
             }
 
-            /*
-             * Word is not in the dictionary.
-             *
-             * Ask DictionaryManager for possible corrections.
-             */
             List<String> suggestions =
                     dictionaryManager.getSuggestions(
                             word,
@@ -119,13 +92,6 @@ public class PocketBoardSpellCheckerService
             if (suggestions == null ||
                     suggestions.isEmpty()) {
 
-                /*
-                 * No correction was found, but the word is not
-                 * present in the dictionary.
-                 *
-                 * RESULT_ATTR_LOOKS_LIKE_TYPO tells Android that
-                 * this is a spelling error.
-                 */
                 return new SuggestionsInfo(
                         SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO,
                         new String[0]
@@ -137,10 +103,6 @@ public class PocketBoardSpellCheckerService
                             new String[0]
                     );
 
-            /*
-             * The first suggestion is considered the recommended
-             * correction.
-             */
             return new SuggestionsInfo(
                     SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO
                             | SuggestionsInfo.RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS,
@@ -164,6 +126,7 @@ public class PocketBoardSpellCheckerService
                     new ArrayList<>();
 
             for (TextInfo textInfo : textInfos) {
+
                 if (textInfo == null ||
                         textInfo.getText() == null) {
 
@@ -180,13 +143,6 @@ public class PocketBoardSpellCheckerService
 
                 String text = textInfo.getText();
 
-                /*
-                 * This service receives either a word or a sentence.
-                 *
-                 * Split the sentence while preserving the positions
-                 * of each word so Android knows which text should be
-                 * underlined.
-                 */
                 List<TextToken> tokens =
                         tokenize(text);
 
@@ -211,10 +167,6 @@ public class PocketBoardSpellCheckerService
                         continue;
                     }
 
-                    /*
-                     * Only add actual spelling problems or words
-                     * for which the spellchecker has suggestions.
-                     */
                     int attributes =
                             suggestionsInfo.getSuggestionsAttributes();
 
@@ -299,6 +251,7 @@ public class PocketBoardSpellCheckerService
                 } else {
 
                     if (start >= 0) {
+
                         tokens.add(
                                 new TextToken(
                                         text.substring(
@@ -336,6 +289,7 @@ public class PocketBoardSpellCheckerService
         TextToken(
                 String text,
                 int start) {
+
             this.text = text;
             this.start = start;
         }
