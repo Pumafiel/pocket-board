@@ -149,7 +149,7 @@ public class PocketBoardSpellCheckerService
         }
 
         @Override
-        public SentenceSuggestionsInfo[] onGetSentenceSuggestions(
+        public SentenceSuggestionsInfo[] onGetSentenceSuggestionsMultiple(
                 TextInfo[] textInfos,
                 int suggestionsLimit) {
 
@@ -164,7 +164,6 @@ public class PocketBoardSpellCheckerService
                     new ArrayList<>();
 
             for (TextInfo textInfo : textInfos) {
-
                 if (textInfo == null ||
                         textInfo.getText() == null) {
 
@@ -300,7 +299,6 @@ public class PocketBoardSpellCheckerService
                 } else {
 
                     if (start >= 0) {
-
                         tokens.add(
                                 new TextToken(
                                         text.substring(
@@ -338,7 +336,6 @@ public class PocketBoardSpellCheckerService
         TextToken(
                 String text,
                 int start) {
-
             this.text = text;
             this.start = start;
         }
