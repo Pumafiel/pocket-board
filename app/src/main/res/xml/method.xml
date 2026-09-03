@@ -15,39 +15,21 @@
         android:imeSubtypeExtraValue="DisplayTag=en,KeyboardMapping=en_us,AsciiCapable,EmojiCapable" />
 
     <subtype
-        android:label="@string/input_subtype_ru_RU_BB_Passport"
+        android:label="@string/input_subtype_es_AR"
         android:subtypeId="0x02"
-        android:imeSubtypeLocale="ru"
-        android:languageTag="ru"
-        android:imeSubtypeMode="keyboard"
-        android:isAsciiCapable="false"
-        android:imeSubtypeExtraValue="DisplayTag=ru,KeyboardMapping=ru_bbp,EmojiCapable" />
-
-    <subtype
-        android:label="@string/input_subtype_ru_RU_Transliterate"
-        android:subtypeId="0x03"
-        android:imeSubtypeLocale="ru"
-        android:languageTag="ru"
-        android:imeSubtypeMode="keyboard"
-        android:isAsciiCapable="false"
-        android:imeSubtypeExtraValue="DisplayTag=ru,KeyboardMapping=ru_t,EmojiCapable" />
-
-    <subtype
-        android:label="@string/input_subtype_ru_RU_Alt"
-        android:subtypeId="0x04"
-        android:imeSubtypeLocale="ru"
-        android:languageTag="ru"
-        android:imeSubtypeMode="keyboard"
-        android:isAsciiCapable="false"
-        android:imeSubtypeExtraValue="DisplayTag=ru,KeyboardMapping=ru_alt,EmojiCapable" />
-  
-    <subtype
-        android:label="@string/input_subtype_es_ES"
-        android:subtypeId="0x05"
-        android:imeSubtypeLocale="es_ES"
-        android:languageTag="es-es"
+        android:imeSubtypeLocale="es_AR"
+        android:languageTag="es-AR"
         android:imeSubtypeMode="keyboard"
         android:isAsciiCapable="true"
-        android:imeSubtypeExtraValue="DisplayTag=es,KeyboardMapping=es_es,AsciiCapable,EmojiCapable" />
+        android:imeSubtypeExtraValue="DisplayTag=es,KeyboardMapping=es_ar,AsciiCapable,EmojiCapable" />
+
+    <subtype
+        android:label="@string/input_subtype_de_DE"
+        android:subtypeId="0x03"
+        android:imeSubtypeLocale="de_DE"
+        android:languageTag="de-DE"
+        android:imeSubtypeMode="keyboard"
+        android:isAsciiCapable="true"
+        android:imeSubtypeExtraValue="DisplayTag=de,KeyboardMapping=de_de,AsciiCapable,EmojiCapable" />
 
 </input-method>
