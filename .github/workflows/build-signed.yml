@@ -17,6 +17,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
@@ -26,53 +31,50 @@ jobs:
 
           mkdir -p app/src/main/assets/dictionaries
 
-          echo "Downloading Spanish Argentina dictionary..."
-          curl -fL \
-            "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/es-ar/index.dic" \
-            -o /tmp/es-ar.dic
+          echo "Installing dictionary packages..."
 
-          echo "Downloading English dictionary..."
-          curl -fL \
-            "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/en/index.dic" \
-            -o /tmp/en.dic
+          npm install --no-save \
+            dictionary-es-ar@2.0.0 \
+            dictionary-en \
+            dictionary-de
 
-          echo "Downloading German dictionary..."
-          curl -fL \
-            "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/de/index.dic" \
-            -o /tmp/de.dic
+          echo ""
+          echo "=== Installed dictionaries ==="
 
+          ls -lh node_modules/dictionary-es-ar/index.dic
+          ls -lh node_modules/dictionary-en/index.dic
+          ls -lh node_modules/dictionary-de/index.dic
+
+          echo ""
           echo "Converting dictionaries..."
 
-          # Hunspell .dic files contain one word/stem per line,
-          # optionally followed by flags. DictionaryManager only
-          # needs the word/stem itself.
+          # The first line of a Hunspell .dic file is the number
+          # of entries. The remaining lines contain words,
+          # optionally followed by Hunspell flags after '/'.
+          #
+          # DictionaryManager only needs the word itself.
 
-          grep -v '^#' /tmp/es-ar.dic \
-            | tail -n +2 \
-            | cut -f1 \
-            | sed 's/[\/].*$//' \
-            | sed '/^$/d' \
+          tail -n +2 node_modules/dictionary-es-ar/index.dic \
+            | cut -d'/' -f1 \
+            | sed '/^[[:space:]]*$/d' \
             | sort -u \
             > app/src/main/assets/dictionaries/es-AR.txt
 
-          grep -v '^#' /tmp/en.dic \
-            | tail -n +2 \
-            | cut -f1 \
-            | sed 's/[\/].*$//' \
-            | sed '/^$/d' \
+          tail -n +2 node_modules/dictionary-en/index.dic \
+            | cut -d'/' -f1 \
+            | sed '/^[[:space:]]*$/d' \
             | sort -u \
             > app/src/main/assets/dictionaries/en.txt
 
-          grep -v '^#' /tmp/de.dic \
-            | tail -n +2 \
-            | cut -f1 \
-            | sed 's/[\/].*$//' \
-            | sed '/^$/d' \
+          tail -n +2 node_modules/dictionary-de/index.dic \
+            | cut -d'/' -f1 \
+            | sed '/^[[:space:]]*$/d' \
             | sort -u \
             > app/src/main/assets/dictionaries/de.txt
 
           echo ""
           echo "=== Dictionary sizes ==="
+
           wc -l \
             app/src/main/assets/dictionaries/es-AR.txt \
             app/src/main/assets/dictionaries/en.txt \
@@ -80,19 +82,26 @@ jobs:
 
           echo ""
           echo "=== Dictionary files ==="
+
           ls -lh app/src/main/assets/dictionaries/
 
           echo ""
-          echo "=== Spanish sample ==="
-          head -n 10 app/src/main/assets/dictionaries/es-AR.txt
+          echo "=== Spanish Argentina sample ==="
+
+          head -n 10 \
+            app/src/main/assets/dictionaries/es-AR.txt
 
           echo ""
           echo "=== English sample ==="
-          head -n 10 app/src/main/assets/dictionaries/en.txt
+
+          head -n 10 \
+            app/src/main/assets/dictionaries/en.txt
 
           echo ""
           echo "=== German sample ==="
-          head -n 10 app/src/main/assets/dictionaries/de.txt
+
+          head -n 10 \
+            app/src/main/assets/dictionaries/de.txt
 
       - name: Build APK
         run: |
