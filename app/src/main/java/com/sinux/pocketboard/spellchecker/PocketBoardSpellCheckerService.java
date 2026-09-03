@@ -28,16 +28,28 @@ public class PocketBoardSpellCheckerService
     private class PocketBoardSpellCheckerSession
             extends SpellCheckerService.Session {
 
-        private Locale locale;
+        private Locale locale = Locale.ENGLISH;
 
         @Override
         public void onCreate() {
-            super.onCreate();
+            /*
+             * Session.onCreate() is abstract in this Android API,
+             * so there is no super.onCreate() call.
+             *
+             * SpellCheckerService.Session#getLocale() returns
+             * a language tag String.
+             */
+            String languageTag = getLocale();
 
-            locale = getLocale();
+            if (languageTag != null &&
+                    !languageTag.isEmpty()) {
 
-            if (locale == null) {
-                locale = Locale.ENGLISH;
+                Locale parsedLocale =
+                        Locale.forLanguageTag(languageTag);
+
+                if (!parsedLocale.getLanguage().isEmpty()) {
+                    locale = parsedLocale;
+                }
             }
         }
 
@@ -58,6 +70,26 @@ public class PocketBoardSpellCheckerService
 
             String word = textInfo.getText();
 
+            /*
+             * The AOSP spellchecker can send an artificial "#"
+             * suffix to improve prefix suggestions.
+             *
+             * Remove it before querying our dictionary.
+             */
+            if (word.endsWith("#")) {
+                word = word.substring(
+                        0,
+                        word.length() - 1
+                );
+            }
+
+            if (word.isEmpty()) {
+                return new SuggestionsInfo(
+                        SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO,
+                        new String[0]
+                );
+            }
+
             List<String> suggestions =
                     dictionaryManager.getSuggestions(
                             word,
@@ -68,7 +100,7 @@ public class PocketBoardSpellCheckerService
             if (suggestions.isEmpty()) {
 
                 return new SuggestionsInfo(
-                        SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY,
+                        SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO,
                         new String[0]
                 );
             }
@@ -87,9 +119,12 @@ public class PocketBoardSpellCheckerService
             int attributes;
 
             if (exactMatch) {
+
                 attributes =
                         SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY;
+
             } else {
+
                 attributes =
                         SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO
                                 | SuggestionsInfo.RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS;
@@ -98,18 +133,6 @@ public class PocketBoardSpellCheckerService
             return new SuggestionsInfo(
                     attributes,
                     result
-            );
-        }
-
-        @Override
-        public SuggestionsInfo onGetSuggestions(
-                TextInfo textInfo,
-                int suggestionsLimit,
-                boolean sequentialWords) {
-
-            return onGetSuggestions(
-                    textInfo,
-                    suggestionsLimit
             );
         }
     }
