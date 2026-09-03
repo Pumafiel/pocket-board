@@ -297,26 +297,22 @@ public class KeyboardInputHandler {
             inputConnection.commitText(" ", 1);
         }
     }
-
-    private boolean handleCharacter(int keyCode, KeyEvent event, InputConnection inputConnection,
+        private boolean handleCharacter(int keyCode, KeyEvent event, InputConnection inputConnection,
                                 boolean shiftEnabled, boolean altEnabled, long eventTime) {
-    // Handle first key press
-    if (event.getRepeatCount() == 0) {
-        // Get current key mapping
-        KeyMapping keyMapping = keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
+        // Handle first key press
+        if (event.getRepeatCount() == 0) {
+            // Get current key mapping
+            KeyMapping keyMapping = keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
 
-        // Skip unknown keys
-        if (keyMapping == null) {
-            return false;
-        }
+            // Skip unknown keys
+            if (keyMapping == null) {
+                return false;
+            }
 
-        // Check if user has entered into additional key values iteration mode by fast clicking on same key
-        boolean isNewKey = lastKeyCode != keyCode;
-        boolean isShortPress = eventTime - lastKeyDownTime <= keyLongPressDuration;
-        boolean keyIterationModeEnabled;
-
-        if (keyMapping.hasAdditionalValues(lastAltEnabled) && !isNewKey && isShortPress) {
-            keyIterationModeEnabled = true;
+            // Check if user has entered into additional key values iteration mode by fast clicking on same key
+            boolean isNewKey = lastKeyCode != keyCode;
+            boolean isShortPress = eventTime - lastKeyDownTime <= keyLongPressDuration;
+            boolean keyIterationModeEnabled;
 
             /*
              * Spanish double-tap accents:
@@ -327,39 +323,42 @@ public class KeyboardInputHandler {
              * u -> ú
              * n -> ñ
              *
-             * This is handled separately from Alt values so that
-             * long-press Alt characters remain unchanged.
+             * This is checked before additional key values so that
+             * Spanish accents do not depend on hasAdditionalValues().
              */
-            if (!lastAltEnabled && isSpanishAccentKey(keyCode) && keyIterationCounter == 0) {
-                keyIterationCounter = 1;
-            } else {
-                keyIterationCounter++;
+            if (!numericInputMode &&
+                    !altEnabled &&
+                    !lastAltEnabled &&
+                    !isNewKey &&
+                    isShortPress &&
+                    isSpanishAccentKey(keyCode)) {
+
+                replaceLastCharacter(
+                        inputConnection,
+                        getSpanishAccentCharacter(keyCode, shiftEnabled)
+                );
+
+                keyIterationCounter = 0;
+
+                return true;
             }
-        } else {
-            keyIterationModeEnabled = false;
-            keyIterationCounter = 0;
-            lastShiftEnabled = shiftEnabled;
-            lastAltEnabled = altEnabled;
-        }
 
-        /*
-         * Spanish double-tap:
-         * Replace the first character directly with its accented version.
-         *
-         * We do this only for the second quick press and only when Alt
-         * is not active. Long press handling below remains untouched.
-         */
-        if (keyIterationModeEnabled &&
-                !lastAltEnabled &&
-                isSpanishAccentKey(keyCode) &&
-                keyIterationCounter == 1) {
+            // Existing additional key values iteration mode
+            if (keyMapping.hasAdditionalValues(lastAltEnabled) &&
+                    !isNewKey &&
+                    isShortPress) {
 
-            replaceLastCharacter(
-                    inputConnection,
-                    getSpanishAccentCharacter(keyCode, lastShiftEnabled)
-            );
-        } else {
-            // Normal character / existing additional-value behaviour
+                keyIterationModeEnabled = true;
+                keyIterationCounter++;
+
+            } else {
+                keyIterationModeEnabled = false;
+                keyIterationCounter = 0;
+                lastShiftEnabled = shiftEnabled;
+                lastAltEnabled = altEnabled;
+            }
+
+            // Handle normal character / additional key value
             if (!keyIterationModeEnabled || numericInputMode) {
                 printNextCharacter(
                         inputConnection,
@@ -380,307 +379,37 @@ public class KeyboardInputHandler {
                         )
                 );
             }
-        }
-
-        return true;
-    } else {
-        // Handle long key press - replace current char with first alt value
-        if (!numericInputMode &&
-                !lastAltEnabled &&
-                (eventTime - lastKeyDownTime > keyLongPressDuration)) {
-
-            lastAltEnabled = true;
-            keyIterationCounter = 0;
-
-            KeyMapping keyMapping =
-                    keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
-
-            if (keyMapping == null) {
-                return false;
-            }
-
-            replaceLastCharacter(
-                    inputConnection,
-                    keyMapping.getValue(
-                            lastShiftEnabled,
-                            lastAltEnabled,
-                            keyIterationCounter
-                    )
-            );
-
-            lastKeyDownTime = eventTime;
 
             return true;
-        }
-    }
-
-    return false;
-}
-
-private boolean isSpanishAccentKey(int keyCode) {
-    return keyCode == KeyEvent.KEYCODE_A
-            || keyCode == KeyEvent.KEYCODE_E
-            || keyCode == KeyEvent.KEYCODE_I
-            || keyCode == KeyEvent.KEYCODE_O
-            || keyCode == KeyEvent.KEYCODE_U
-            || keyCode == KeyEvent.KEYCODE_N;
-}
-
-private boolean handleCharacter(int keyCode, KeyEvent event, InputConnection inputConnection,
-                                boolean shiftEnabled, boolean altEnabled, long eventTime) {
-
-    if (event.getRepeatCount() == 0) {
-
-        KeyMapping keyMapping =
-                keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
-
-        if (keyMapping == null) {
-            return false;
-        }
-
-        boolean isNewKey = lastKeyCode != keyCode;
-        boolean isShortPress =
-                eventTime - lastKeyDownTime <= keyLongPressDuration;
-
-        /*
-         * Segunda pulsación rápida:
-         *
-         * a -> á
-         * e -> é
-         * i -> í
-         * o -> ó
-         * u -> ú
-         * n -> ñ
-         *
-         * No utilizamos los valores Alt del XML para esto.
-         */
-        if (!numericInputMode
-                && !altEnabled
-                && !lastAltEnabled
-                && !isNewKey
-                && isShortPress
-                && isSpanishAccentKey(keyCode)) {
-
-            replaceLastCharacter(
-                    inputConnection,
-                    getSpanishAccentCharacter(keyCode, shiftEnabled)
-            );
-
-            keyIterationCounter = 0;
-
-            return true;
-        }
-
-        /*
-         * Comportamiento original de PocketBoard:
-         * pulsaciones rápidas para recorrer valores adicionales.
-         */
-        boolean keyIterationModeEnabled;
-
-        if (keyMapping.hasAdditionalValues(lastAltEnabled)
-                && !isNewKey
-                && isShortPress) {
-
-            keyIterationModeEnabled = true;
-            keyIterationCounter++;
 
         } else {
 
-            keyIterationModeEnabled = false;
-            keyIterationCounter = 0;
-            lastShiftEnabled = shiftEnabled;
-            lastAltEnabled = altEnabled;
-        }
+            // Handle long key press - replace current char with first alt value
+            if (!numericInputMode &&
+                    !lastAltEnabled &&
+                    (eventTime - lastKeyDownTime > keyLongPressDuration)) {
 
-        if (!keyIterationModeEnabled || numericInputMode) {
+                lastAltEnabled = true;
+                keyIterationCounter = 0;
 
-            printNextCharacter(
-                    inputConnection,
-                    keyMapping.getValue(
-                            lastShiftEnabled,
-                            lastAltEnabled,
-                            keyIterationCounter
-                    )
-            );
+                KeyMapping keyMapping =
+                        keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
 
-        } else {
+                if (keyMapping == null) {
+                    return false;
+                }
 
-            replaceLastCharacter(
-                    inputConnection,
-                    keyMapping.getValue(
-                            lastShiftEnabled,
-                            lastAltEnabled,
-                            keyIterationCounter
-                    )
-            );
-        }
+                replaceLastCharacter(
+                        inputConnection,
+                        keyMapping.getValue(
+                                lastShiftEnabled,
+                                lastAltEnabled,
+                                keyIterationCounter
+                        )
+                );
 
-        return true;
+                lastKeyDownTime = eventTime;
 
-    } else {
-
-        /*
-         * Pulsación larga:
-         * mantiene el comportamiento original de Alt.
-         */
-        if (!numericInputMode
-                && !lastAltEnabled
-                && (eventTime - lastKeyDownTime > keyLongPressDuration)) {
-
-            lastAltEnabled = true;
-            keyIterationCounter = 0;
-
-            KeyMapping keyMapping =
-                    keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
-
-            if (keyMapping == null) {
-                return false;
-            }
-
-            replaceLastCharacter(
-                    inputConnection,
-                    keyMapping.getValue(
-                            lastShiftEnabled,
-                            lastAltEnabled,
-                            keyIterationCounter
-                    )
-            );
-
-            lastKeyDownTime = eventTime;
-
-            return true;
-        }
-    }
-
-    return false;
-}
-
-private boolean isSpanishAccentKey(int keyCode) {
-    return keyCode == KeyEvent.KEYCODE_A
-            || keyCode == KeyEvent.KEYCODE_E
-            || keyCode == KeyEvent.KEYCODE_I
-            || keyCode == KeyEvent.KEYCODE_O
-            || keyCode == KeyEvent.KEYCODE_U
-            || keyCode == KeyEvent.KEYCODE_N;
-}
-
-private int getSpanishAccentCharacter(int keyCode, boolean shiftEnabled) {
-
-    switch (keyCode) {
-
-        case KeyEvent.KEYCODE_A:
-            return shiftEnabled ? 'Á' : 'á';
-
-        case KeyEvent.KEYCODE_E:
-            return shiftEnabled ? 'É' : 'é';
-
-        case KeyEvent.KEYCODE_I:
-            return shiftEnabled ? 'Í' : 'í';
-
-        case KeyEvent.KEYCODE_O:
-            return shiftEnabled ? 'Ó' : 'ó';
-
-        case KeyEvent.KEYCODE_U:
-            return shiftEnabled ? 'Ú' : 'ú';
-
-        case KeyEvent.KEYCODE_N:
-            return shiftEnabled ? 'Ñ' : 'ñ';
-
-        default:
-            return 0;
-    }
-}
-
-
-    private void printNextCharacter(InputConnection inputConnection, int keyCharacterCodePoint) {
-        if (rawInputMode) {
-            inputConnection.commitText(new String(Character.toChars(keyCharacterCodePoint)), 1);
-            return;
-        }
-
-        if (CharacterUtils.isPunctuationCharacter(keyCharacterCodePoint)) {
-            handlePunctuationCharacter(inputConnection, keyCharacterCodePoint, false);
-        } else if (composingEnabled) {
-            composeNewCharacter(inputConnection, keyCharacterCodePoint);
-        } else {
-            inputConnection.commitText(new String(Character.toChars(keyCharacterCodePoint)), 1);
-        }
-    }
-
-    private void replaceLastCharacter(InputConnection inputConnection, int keyCharacterCodePoint) {
-        if (rawInputMode) {
-            handleBackspace(inputConnection);
-            SystemClock.sleep(10); // Stupid but working trick to prevent events race condition
-            printNextCharacter(inputConnection, keyCharacterCodePoint);
-            return;
-        }
-
-        if (CharacterUtils.isPunctuationCharacter(keyCharacterCodePoint)) {
-            handlePunctuationCharacter(inputConnection, keyCharacterCodePoint, true);
-        } else if (composingEnabled) {
-            if (textComposer.length() > 0) {
-                textComposer.setLength(textComposer.length() - CharacterUtils.getLastCharacterLength(textComposer));
-                composeNewCharacter(inputConnection, keyCharacterCodePoint);
-            } else {
-                inputConnection.beginBatchEdit();
-                inputConnection.deleteSurroundingTextInCodePoints(1, 0);
-                inputConnection.commitText(new String(Character.toChars(keyCharacterCodePoint)), 1);
-                findAndComposeLastWord(inputConnection);
-                inputConnection.endBatchEdit();
-            }
-        } else {
-            inputConnection.beginBatchEdit();
-            inputConnection.deleteSurroundingTextInCodePoints(1, 0);
-            printNextCharacter(inputConnection, keyCharacterCodePoint);
-            inputConnection.endBatchEdit();
-        }
-    }
-
-    private void composeNewCharacter(InputConnection inputConnection, int keyCharacterCodePoint) {
-        textComposer.appendCodePoint(keyCharacterCodePoint);
-        inputConnection.setComposingText(textComposer, 1);
-        if (!Character.isLetterOrDigit(keyCharacterCodePoint) &&
-                !nonLetterOrDigitExclusions.contains(new String(Character.toChars(keyCharacterCodePoint)))) {
-            commitComposingText(inputConnection);
-        }
-    }
-
-    private void handlePunctuationCharacter(InputConnection inputConnection, int keyCharacterCodePoint, boolean removeLastCharacter) {
-        inputConnection.beginBatchEdit();
-
-        if (composingEnabled) {
-            commitComposingText(inputConnection);
-        }
-
-        if (removeLastCharacter) {
-            inputConnection.deleteSurroundingTextInCodePoints(1, 0);
-        }
-
-        CharSequence lastChars = inputConnection.getTextBeforeCursor(3, 0);
-        if (CharacterUtils.isLetterOrDigitAndSpace(lastChars)) {
-            inputConnection.deleteSurroundingText(1, 0);
-            inputConnection.commitText(new String(Character.toChars(keyCharacterCodePoint)) + " ", 1);
-        } else {
-            inputConnection.commitText(new String(Character.toChars(keyCharacterCodePoint)), 1);
-        }
-
-        inputConnection.endBatchEdit();
-    }
-
-    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    private boolean handleDictAndAutocorrection() {
-        if (dictShortcuts) {
-            CharSequence dictSuggestion = pocketBoardIME.getSuggestionsManager().getCurrentDictSuggestion();
-            if (dictSuggestion != null) {
-                applySuggestion(dictSuggestion, pocketBoardIME.getCurrentInputConnection(), false);
-                return true;
-            }
-        }
-
-        if (autocorrection) {
-            CharSequence recommendedSuggestion = pocketBoardIME.getSuggestionsManager().getCurrentSpellcheckerRecommendedSuggestion();
-            if (recommendedSuggestion != null) {
-                applySuggestion(recommendedSuggestion, pocketBoardIME.getCurrentInputConnection(), false);
                 return true;
             }
         }
@@ -688,26 +417,156 @@ private int getSpanishAccentCharacter(int keyCode, boolean shiftEnabled) {
         return false;
     }
 
+    private boolean isSpanishAccentKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_A
+                || keyCode == KeyEvent.KEYCODE_E
+                || keyCode == KeyEvent.KEYCODE_I
+                || keyCode == KeyEvent.KEYCODE_O
+                || keyCode == KeyEvent.KEYCODE_U
+                || keyCode == KeyEvent.KEYCODE_N;
+    }
+
+    private int getSpanishAccentCharacter(int keyCode, boolean shiftEnabled) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_A:
+                return shiftEnabled ? 'Á' : 'á';
+
+            case KeyEvent.KEYCODE_E:
+                return shiftEnabled ? 'É' : 'é';
+
+            case KeyEvent.KEYCODE_I:
+                return shiftEnabled ? 'Í' : 'í';
+
+            case KeyEvent.KEYCODE_O:
+                return shiftEnabled ? 'Ó' : 'ó';
+
+            case KeyEvent.KEYCODE_U:
+                return shiftEnabled ? 'Ú' : 'ú';
+
+            case KeyEvent.KEYCODE_N:
+                return shiftEnabled ? 'Ñ' : 'ñ';
+
+            default:
+                return 0;
+        }
+    }
+
+    private void printNextCharacter(InputConnection inputConnection, int character) {
+        if (composingEnabled) {
+            composeNewCharacter(inputConnection, character);
+        } else {
+            inputConnection.commitText(String.valueOf((char) character), 1);
+        }
+    }
+
+    private void composeNewCharacter(InputConnection inputConnection, int character) {
+        if (textComposer.length() == 0) {
+            textComposer.append((char) character);
+            inputConnection.setComposingText(textComposer, 1);
+            return;
+        }
+
+        if (dictShortcuts || autocorrection) {
+            textComposer.append((char) character);
+            inputConnection.setComposingText(textComposer, 1);
+        } else {
+            inputConnection.commitText(String.valueOf((char) character), 1);
+        }
+    }
+
+    private void replaceLastCharacter(InputConnection inputConnection, int character) {
+        if (textComposer.length() > 0) {
+            textComposer.setLength(
+                    textComposer.length()
+                            - CharacterUtils.getLastCharacterLength(textComposer)
+            );
+
+            textComposer.append((char) character);
+            inputConnection.setComposingText(textComposer, 1);
+        } else {
+            inputConnection.deleteSurroundingText(1, 0);
+            inputConnection.commitText(String.valueOf((char) character), 1);
+        }
+    }
+
     private void commitComposingText(InputConnection inputConnection) {
-        if (inputConnection != null && textComposer.length() > 0) {
+        if (textComposer.length() > 0) {
             inputConnection.commitText(textComposer, 1);
             textComposer.setLength(0);
         }
     }
 
-    public void resetComposing(InputConnection inputConnection) {
-        if (composingEnabled) {
-            commitComposingText(inputConnection);
+    private boolean handleDictAndAutocorrection() {
+        if (!composingEnabled || textComposer.length() == 0) {
+            return false;
         }
+
+        if (dictShortcuts) {
+            if (handleDictShortcut()) {
+                return true;
+            }
+        }
+
+        if (autocorrection) {
+            if (handleAutocorrection()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    public void commitEmoji(CharSequence itemValue) {
-        InputConnection inputConnection = pocketBoardIME.getCurrentInputConnection();
-        commitComposingText(inputConnection);
-        applySuggestion(itemValue, pocketBoardIME.getCurrentInputConnection(), false);
+    private boolean handleDictShortcut() {
+        return false;
     }
 
-    public boolean isInRawInputMode() {
-        return rawInputMode;
+    private boolean handleAutocorrection() {
+        return false;
     }
+
+    private void handleEnter(InputConnection inputConnection) {
+        if (composingEnabled) {
+            if (!handleDictAndAutocorrection()) {
+                commitComposingText(inputConnection);
+            }
+        }
+
+        inputConnection.sendKeyEvent(
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)
+        );
+
+        inputConnection.sendKeyEvent(
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)
+        );
+    }
+
+    private void handleTab(InputConnection inputConnection) {
+        if (composingEnabled) {
+            if (!handleDictAndAutocorrection()) {
+                commitComposingText(inputConnection);
+            }
+        }
+
+        inputConnection.sendKeyEvent(
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB)
+        );
+
+        inputConnection.sendKeyEvent(
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_TAB)
+        );
+    }
+
+    private void handlePunctuation(InputConnection inputConnection, int character) {
+        if (composingEnabled) {
+            if (!handleDictAndAutocorrection()) {
+                commitComposingText(inputConnection);
+            }
+        }
+
+        inputConnection.commitText(
+                String.valueOf((char) character),
+                1
+        );
+    }
+
 }
