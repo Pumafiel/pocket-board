@@ -1078,4 +1078,53 @@ public class KeyboardInputHandler {
                 1
         );
     }
+public void resetComposing(InputConnection inputConnection) {
+    if (inputConnection != null) {
+        if (composingEnabled && textComposer.length() > 0) {
+            inputConnection.finishComposingText();
+        }
+    }
+
+    textComposer.setLength(0);
+    currentSelectedText = "";
+
+    multipressController.reset();
+
+    keyIterationCounter = 0;
+    lastKeyDownTime = 0;
+    lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+    lastShiftEnabled = false;
+    lastAltEnabled = false;
+}
+
+public boolean isInRawInputMode() {
+    return rawInputMode;
+}
+
+public void commitEmoji(CharSequence emoji) {
+    if (emoji == null || emoji.length() == 0) {
+        return;
+    }
+
+    InputConnection inputConnection =
+            pocketBoardIME.getCurrentInputConnection();
+
+    if (inputConnection == null) {
+        return;
+    }
+
+    if (composingEnabled) {
+        textComposer.setLength(0);
+        inputConnection.finishComposingText();
+    }
+
+    inputConnection.commitText(emoji, 1);
+
+    multipressController.reset();
+
+    keyIterationCounter = 0;
+    lastKeyDownTime = SystemClock.uptimeMillis();
+    lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+}
+
 }
