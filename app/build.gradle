@@ -123,9 +123,9 @@ def downloadDictionaryFile = {
     URL dictionaryUrl =
             new URL(url)
 
-    HttpURLConnection connection =
-            (HttpURLConnection)
-                    dictionaryUrl.openConnection()
+   URL dictionaryUrl = new URL(url)
+
+def connection = dictionaryUrl.openConnection()
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
