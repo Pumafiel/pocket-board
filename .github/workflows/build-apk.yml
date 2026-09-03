@@ -24,7 +24,7 @@ jobs:
         run: |
           keytool -genkeypair \
             -v \
-            -keystore pocketboard-release.jks \
+            -keystore "$GITHUB_WORKSPACE/pocketboard-release.jks" \
             -alias pocketboard \
             -keyalg RSA \
             -keysize 2048 \
@@ -33,30 +33,37 @@ jobs:
             -keypass pocketboard \
             -dname "CN=PocketBoard, OU=PocketBoard, O=PocketBoard, L=Unknown, ST=Unknown, C=US"
 
-      - name: Build APK
+      - name: Build release APK
         run: |
           chmod +x ./gradlew
           ./gradlew assembleRelease
 
-      - name: Sign APK
+      - name: Align APK
         run: |
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
           "$BUILD_TOOLS/zipalign" -f 4 \
             app/build/outputs/apk/release/app-release-unsigned.apk \
             app-release-aligned.apk
 
+      - name: Sign APK
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
           "$BUILD_TOOLS/apksigner" sign \
-            --ks pocketboard-release.jks \
+            --ks "$GITHUB_WORKSPACE/pocketboard-release.jks" \
             --ks-key-alias pocketboard \
             --ks-pass pass:pocketboard \
             --key-pass pass:pocketboard \
             --out PocketBoard.apk \
             app-release-aligned.apk
 
-          "$BUILD_TOOLS/apksigner" verify PocketBoard.apk
+      - name: Verify signature
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$BUILD_TOOLS/apksigner" verify --verbose PocketBoard.apk
 
-      - name: Upload APK
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: PocketBoard-APK
+          name: PocketBoard-Signed
           path: PocketBoard.apk
+          if-no-files-found: error
