@@ -22,7 +22,8 @@ android {
         release {
             minifyEnabled true
             shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                    'proguard-rules.pro'
         }
     }
 
@@ -46,69 +47,89 @@ dependencies {
     testImplementation 'net.sf.kxml:kxml2:2.3.0'
 }
 
+
 /*
  * ============================================================
- * POCKETBOARD DICTIONARIES
+ * POCKETBOARD HUNSPELL DICTIONARIES
  *
- * Downloads the Hunspell dictionaries from:
- *
+ * Source:
  * https://github.com/wooorm/dictionaries
- *
- * and converts the .dic files into the simple one-word-per-line
- * format used by DictionaryManager.
  *
  * Languages:
  *
- *     es-AR = Spanish (Argentina)
- *     en    = English
- *     de    = German
+ * es-AR = Spanish (Argentina)
+ * en    = English
+ * de    = German
  *
- * The dictionaries are downloaded during the build, so they do
- * not need to be committed to the PocketBoard repository.
+ * We download the original Hunspell files:
  *
- * IMPORTANT:
- * The original dictionary licenses remain applicable to the
- * downloaded dictionary data.
+ *     .dic = dictionary entries
+ *     .aff = affix/rules
+ *
+ * NO .txt conversion is performed.
  * ============================================================
  */
 
 def dictionariesOutputDir =
         file("${projectDir}/src/main/assets/dictionaries")
 
-def dictionariesVersion =
-        "main"
+def dictionariesVersion = "main"
 
 def dictionarySources = [
-        "es-AR": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
-        "en"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
-        "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
+        "es-AR": [
+                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
+                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.aff"
+        ],
+
+        "en": [
+                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
+                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.aff"
+        ],
+
+        "de": [
+                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic",
+                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.aff"
+        ]
 ]
 
-def downloadAndConvertDictionary = { String language, String url ->
+
+def downloadDictionaryFile = {
+    String language,
+    String extension,
+    String url ->
 
     File outputFile =
             new File(
                     dictionariesOutputDir,
-                    "${language}.txt"
+                    "${language}.${extension}"
             )
 
     if (outputFile.exists() &&
             outputFile.length() > 0) {
 
-        println "PocketBoard dictionary already exists: ${outputFile.name}"
+        println(
+                "PocketBoard dictionary already exists: " +
+                        outputFile.name
+        )
+
         return
     }
 
-    println "Downloading PocketBoard dictionary: ${language}"
+    println(
+            "Downloading PocketBoard dictionary: " +
+                    outputFile.name
+    )
 
     URL dictionaryUrl =
             new URL(url)
 
     HttpURLConnection connection =
-            (HttpURLConnection) dictionaryUrl.openConnection()
+            (HttpURLConnection)
+                    dictionaryUrl.openConnection()
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
+
     connection.setRequestProperty(
             "User-Agent",
             "PocketBoard-Build"
@@ -120,118 +141,62 @@ def downloadAndConvertDictionary = { String language, String url ->
                 connection.getResponseCode()
 
         if (responseCode != HttpURLConnection.HTTP_OK) {
+
             throw new GradleException(
-                    "Could not download ${language} dictionary. HTTP ${responseCode}"
+                    "Could not download " +
+                            outputFile.name +
+                            ". HTTP " +
+                            responseCode
             )
         }
 
         dictionariesOutputDir.mkdirs()
 
-        BufferedReader reader =
-                new BufferedReader(
-                        new InputStreamReader(
-                                connection.getInputStream(),
-                                "UTF-8"
-                        )
-                )
+        outputFile.withOutputStream { outputStream ->
 
-        outputFile.withWriter(
-                "UTF-8"
-        ) { writer ->
+            connection.getInputStream().withStream {
+                inputStream ->
 
-            String line
-            boolean firstLine = true
+                byte[] buffer =
+                        new byte[8192]
 
-            while ((line = reader.readLine()) != null) {
+                int bytesRead
 
-                line = line.trim()
+                while (
+                        (bytesRead =
+                                inputStream.read(buffer)) != -1
+                ) {
 
-                if (line.isEmpty()) {
-                    continue
-                }
-
-                /*
-                 * The first line of a Hunspell .dic file is the
-                 * number of entries.
-                 */
-                if (firstLine) {
-                    firstLine = false
-                    continue
-                }
-
-                /*
-                 * Hunspell entries can contain flags:
-                 *
-                 *     casa/S
-                 *     abandonar/RED
-                 *
-                 * We only need the actual word.
-                 */
-                int slash =
-                        line.indexOf('/')
-
-                if (slash >= 0) {
-                    line =
-                            line.substring(
-                                    0,
-                                    slash
-                            )
-                }
-
-                line = line.trim()
-
-                if (line.isEmpty()) {
-                    continue
-                }
-
-                /*
-                 * Ignore entries containing whitespace.
-                 */
-                if (line.indexOf(' ') >= 0 ||
-                        line.indexOf('\t') >= 0) {
-                    continue
-                }
-
-                /*
-                 * Keep letters, apostrophes and hyphens.
-                 */
-                boolean valid = true
-
-                for (int i = 0; i < line.length(); i++) {
-
-                    char c = line.charAt(i)
-
-                    if (Character.isLetter(c) ||
-                            c == '\'' ||
-                            c == '-') {
-                        continue
-                    }
-
-                    valid = false
-                    break
-                }
-
-                if (valid) {
-                    writer.write(
-                            line.toLowerCase(
-                                    Locale.ROOT
-                            )
+                    outputStream.write(
+                            buffer,
+                            0,
+                            bytesRead
                     )
-                    writer.newLine()
                 }
             }
         }
 
-        reader.close()
+        if (outputFile.length() == 0) {
+
+            outputFile.delete()
+
+            throw new GradleException(
+                    "Downloaded empty dictionary file: " +
+                            outputFile.name
+            )
+        }
 
         println(
-                "PocketBoard dictionary generated: ${outputFile.absolutePath}"
+                "PocketBoard dictionary downloaded: " +
+                        outputFile.absolutePath
         )
 
     } finally {
+
         connection.disconnect()
     }
 }
+
 
 task downloadPocketBoardDictionaries {
 
@@ -242,24 +207,41 @@ task downloadPocketBoardDictionaries {
     doLast {
 
         dictionarySources.each {
-            language, url ->
+            language, sources ->
 
-            downloadAndConvertDictionary(
+            downloadDictionaryFile(
                     language,
-                    url
+                    "dic",
+                    sources.dic
+            )
+
+            downloadDictionaryFile(
+                    language,
+                    "aff",
+                    sources.aff
             )
         }
     }
 }
 
+
 /*
- * Make sure dictionaries exist before Android starts processing
+ * Make sure dictionaries exist before Android processes
  * the application's assets.
  */
 tasks.named("preBuild") {
-    dependsOn(downloadPocketBoardDictionaries)
+
+    dependsOn(
+            downloadPocketBoardDictionaries
+    )
 }
 
+
+/*
+ * ============================================================
+ * KEYBOARD MAPPING VALIDATION
+ * ============================================================
+ */
 
 task validateKeyboardMappings {
 
@@ -294,6 +276,7 @@ task validateKeyboardMappings {
                                 File dir,
                                 String name
                         ) {
+
                             return name.startsWith(
                                     "keyboard_mapping_"
                             ) &&
