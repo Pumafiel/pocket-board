@@ -22,8 +22,9 @@ android {
         release {
             minifyEnabled true
             shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
-                    'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile(
+                    'proguard-android-optimize.txt'
+            ), 'proguard-rules.pro'
         }
     }
 
@@ -50,23 +51,20 @@ dependencies {
 
 /*
  * ============================================================
- * POCKETBOARD HUNSPELL DICTIONARIES
+ * POCKETBOARD DICTIONARIES
  *
- * Source:
+ * Dictionaries are downloaded from:
+ *
  * https://github.com/wooorm/dictionaries
  *
  * Languages:
  *
- * es-AR = Spanish (Argentina)
- * en    = English
- * de    = German
+ *     es-AR = Spanish (Argentina)
+ *     en    = English (USA)
+ *     de    = German
  *
- * We download the original Hunspell files:
- *
- *     .dic = dictionary entries
- *     .aff = affix/rules
- *
- * NO .txt conversion is performed.
+ * The downloaded Hunspell .dic files are converted to the
+ * simple one-word-per-line format expected by DictionaryManager.
  * ============================================================
  */
 
@@ -76,34 +74,24 @@ def dictionariesOutputDir =
 def dictionariesVersion = "main"
 
 def dictionarySources = [
-        "es-AR": [
-                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
-                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.aff"
-        ],
-
-        "en": [
-                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
-                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.aff"
-        ],
-
-        "de": [
-                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic",
-                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.aff"
-        ]
+        "es-AR": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
+        "en"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
+        "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
 ]
 
-
-def downloadDictionaryFile = {
+def downloadAndConvertDictionary = {
     String language,
-    String extension,
-    String url ->
+    String dictionaryUrlString ->
 
-    File outputFile =
-            new File(
-                    dictionariesOutputDir,
-                    "${language}.${extension}"
-            )
+    File outputFile = new File(
+            dictionariesOutputDir,
+            "${language}.txt"
+    )
 
+    /*
+     * Do not download again if the generated dictionary
+     * already exists.
+     */
     if (outputFile.exists() &&
             outputFile.length() > 0) {
 
@@ -117,19 +105,22 @@ def downloadDictionaryFile = {
 
     println(
             "Downloading PocketBoard dictionary: " +
-                    outputFile.name
+                    language
     )
 
-    URL dictionaryUrl =
-            new URL(url)
+    dictionariesOutputDir.mkdirs()
 
-   URL dictionaryUrl = new URL(url)
-
-def connection = dictionaryUrl.openConnection()
+    /*
+     * Important:
+     *
+     * Do NOT declare a variable named dictionaryUrl here.
+     * Groovy can interpret closure variables unexpectedly.
+     */
+    def connection =
+            new URL(dictionaryUrlString).openConnection()
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
-
     connection.setRequestProperty(
             "User-Agent",
             "PocketBoard-Build"
@@ -140,65 +131,147 @@ def connection = dictionaryUrl.openConnection()
         int responseCode =
                 connection.getResponseCode()
 
-        if (responseCode != HttpURLConnection.HTTP_OK) {
+        if (responseCode != 200) {
 
             throw new GradleException(
                     "Could not download " +
-                            outputFile.name +
-                            ". HTTP " +
+                            language +
+                            " dictionary. HTTP " +
                             responseCode
             )
         }
 
-        dictionariesOutputDir.mkdirs()
+        BufferedReader reader =
+                new BufferedReader(
+                        new InputStreamReader(
+                                connection.getInputStream(),
+                                "UTF-8"
+                        )
+                )
 
-        outputFile.withOutputStream { outputStream ->
+        try {
 
-            connection.getInputStream().withStream {
-                inputStream ->
+            outputFile.withWriter(
+                    "UTF-8"
+            ) { writer ->
 
-                byte[] buffer =
-                        new byte[8192]
-
-                int bytesRead
+                String line
+                boolean firstLine = true
 
                 while (
-                        (bytesRead =
-                                inputStream.read(buffer)) != -1
+                        (line = reader.readLine()) != null
                 ) {
 
-                    outputStream.write(
-                            buffer,
-                            0,
-                            bytesRead
+                    line = line.trim()
+
+                    if (line.isEmpty()) {
+                        continue
+                    }
+
+                    /*
+                     * Hunspell .dic first line:
+                     *
+                     *     number of entries
+                     */
+                    if (firstLine) {
+
+                        firstLine = false
+                        continue
+                    }
+
+                    /*
+                     * Remove Hunspell flags.
+                     *
+                     * Example:
+                     *
+                     * casa/S
+                     * abandonar/RED
+                     */
+                    int slash =
+                            line.indexOf('/')
+
+                    if (slash >= 0) {
+
+                        line =
+                                line.substring(
+                                        0,
+                                        slash
+                                )
+                    }
+
+                    line = line.trim()
+
+                    if (line.isEmpty()) {
+                        continue
+                    }
+
+                    /*
+                     * Ignore entries containing whitespace.
+                     */
+                    if (line.indexOf(' ') >= 0 ||
+                            line.indexOf('\t') >= 0) {
+
+                        continue
+                    }
+
+                    /*
+                     * Keep only letters, apostrophes
+                     * and hyphens.
+                     */
+                    boolean valid = true
+
+                    for (
+                            int i = 0;
+                            i < line.length();
+                            i++
+                    ) {
+
+                        char c =
+                                line.charAt(i)
+
+                        if (Character.isLetter(c) ||
+                                c == '\'' ||
+                                c == '-') {
+
+                            continue
+                        }
+
+                        valid = false
+                        break
+                    }
+
+                    if (!valid) {
+                        continue
+                    }
+
+                    writer.write(
+                            line.toLowerCase(
+                                    Locale.ROOT
+                            )
                     )
+
+                    writer.newLine()
                 }
             }
-        }
 
-        if (outputFile.length() == 0) {
-
-            outputFile.delete()
-
-            throw new GradleException(
-                    "Downloaded empty dictionary file: " +
-                            outputFile.name
-            )
+        } finally {
+            reader.close()
         }
 
         println(
-                "PocketBoard dictionary downloaded: " +
+                "PocketBoard dictionary generated: " +
                         outputFile.absolutePath
         )
 
     } finally {
-
         connection.disconnect()
     }
 }
 
 
-task downloadPocketBoardDictionaries {
+tasks.register(
+        "downloadPocketBoardDictionaries"
+) {
 
     outputs.dir(
             dictionariesOutputDir
@@ -207,18 +280,12 @@ task downloadPocketBoardDictionaries {
     doLast {
 
         dictionarySources.each {
-            language, sources ->
+            String language,
+            String dictionaryUrl ->
 
-            downloadDictionaryFile(
+            downloadAndConvertDictionary(
                     language,
-                    "dic",
-                    sources.dic
-            )
-
-            downloadDictionaryFile(
-                    language,
-                    "aff",
-                    sources.aff
+                    dictionaryUrl
             )
         }
     }
@@ -226,73 +293,89 @@ task downloadPocketBoardDictionaries {
 
 
 /*
- * Make sure dictionaries exist before Android processes
- * the application's assets.
+ * Dictionaries must exist before Android processes assets.
  */
 tasks.named("preBuild") {
 
     dependsOn(
-            downloadPocketBoardDictionaries
+            "downloadPocketBoardDictionaries"
     )
 }
 
 
 /*
  * ============================================================
- * KEYBOARD MAPPING VALIDATION
+ * KEYBOARD MAPPING XML VALIDATION
  * ============================================================
  */
 
-task validateKeyboardMappings {
+tasks.register(
+        "validateKeyboardMappings"
+) {
 
-    dependsOn 'build'
+    dependsOn("build")
 
-    def factory =
-            SchemaFactory.newInstance(
-                    XMLConstants.W3C_XML_SCHEMA_NS_URI
+    doLast {
+
+        def factory =
+                SchemaFactory.newInstance(
+                        XMLConstants.W3C_XML_SCHEMA_NS_URI
+                )
+
+        def schema =
+                factory.newSchema(
+                        new File(
+                                "${rootProject.projectDir}/app/keyboard-mapping.xsd"
+                        )
+                )
+
+        def validator =
+                schema.newValidator()
+
+        File xmlRoot =
+                new File(
+                        "${rootProject.projectDir}/app/src/main/res/xml/"
+                )
+
+        File[] keyboardMappings =
+                xmlRoot.listFiles(
+                        new FilenameFilter() {
+
+                            @Override
+                            boolean accept(
+                                    File dir,
+                                    String name
+                            ) {
+
+                                return name.startsWith(
+                                        "keyboard_mapping_"
+                                ) &&
+                                        name.endsWith(
+                                                ".xml"
+                                        )
+                            }
+                        }
+                )
+
+        if (keyboardMappings == null) {
+            return
+        }
+
+        for (
+                File mappingFile :
+                        keyboardMappings
+        ) {
+
+            println(
+                    "Validating keyboard mapping: " +
+                            mappingFile.name
             )
 
-    def schema =
-            factory.newSchema(
-                    new File(
-                            "${rootProject.projectDir}/app/keyboard-mapping.xsd"
+            validator.validate(
+                    new StreamSource(
+                            mappingFile
                     )
             )
-
-    def validator =
-            schema.newValidator()
-
-    File xmlRoot =
-            new File(
-                    "${rootProject.projectDir}/app/src/main/res/xml/"
-            )
-
-    List<File> keyboardMappings =
-            xmlRoot.listFiles(
-                    new FilenameFilter() {
-
-                        @Override
-                        boolean accept(
-                                File dir,
-                                String name
-                        ) {
-
-                            return name.startsWith(
-                                    "keyboard_mapping_"
-                            ) &&
-                                    name.endsWith(
-                                            ".xml"
-                                    )
-                        }
-                    }
-            )
-
-    for (File mappingFile : keyboardMappings) {
-
-        validator.validate(
-                new StreamSource(
-                        mappingFile
-                )
-        )
+        }
     }
 }
