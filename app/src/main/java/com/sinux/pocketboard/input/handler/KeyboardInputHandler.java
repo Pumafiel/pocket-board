@@ -426,8 +426,148 @@ private boolean isSpanishAccentKey(int keyCode) {
             || keyCode == KeyEvent.KEYCODE_N;
 }
 
+private boolean handleCharacter(int keyCode, KeyEvent event, InputConnection inputConnection,
+                                boolean shiftEnabled, boolean altEnabled, long eventTime) {
+
+    if (event.getRepeatCount() == 0) {
+
+        KeyMapping keyMapping =
+                keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
+
+        if (keyMapping == null) {
+            return false;
+        }
+
+        boolean isNewKey = lastKeyCode != keyCode;
+        boolean isShortPress =
+                eventTime - lastKeyDownTime <= keyLongPressDuration;
+
+        /*
+         * Segunda pulsación rápida:
+         *
+         * a -> á
+         * e -> é
+         * i -> í
+         * o -> ó
+         * u -> ú
+         * n -> ñ
+         *
+         * No utilizamos los valores Alt del XML para esto.
+         */
+        if (!numericInputMode
+                && !altEnabled
+                && !lastAltEnabled
+                && !isNewKey
+                && isShortPress
+                && isSpanishAccentKey(keyCode)) {
+
+            replaceLastCharacter(
+                    inputConnection,
+                    getSpanishAccentCharacter(keyCode, shiftEnabled)
+            );
+
+            keyIterationCounter = 0;
+
+            return true;
+        }
+
+        /*
+         * Comportamiento original de PocketBoard:
+         * pulsaciones rápidas para recorrer valores adicionales.
+         */
+        boolean keyIterationModeEnabled;
+
+        if (keyMapping.hasAdditionalValues(lastAltEnabled)
+                && !isNewKey
+                && isShortPress) {
+
+            keyIterationModeEnabled = true;
+            keyIterationCounter++;
+
+        } else {
+
+            keyIterationModeEnabled = false;
+            keyIterationCounter = 0;
+            lastShiftEnabled = shiftEnabled;
+            lastAltEnabled = altEnabled;
+        }
+
+        if (!keyIterationModeEnabled || numericInputMode) {
+
+            printNextCharacter(
+                    inputConnection,
+                    keyMapping.getValue(
+                            lastShiftEnabled,
+                            lastAltEnabled,
+                            keyIterationCounter
+                    )
+            );
+
+        } else {
+
+            replaceLastCharacter(
+                    inputConnection,
+                    keyMapping.getValue(
+                            lastShiftEnabled,
+                            lastAltEnabled,
+                            keyIterationCounter
+                    )
+            );
+        }
+
+        return true;
+
+    } else {
+
+        /*
+         * Pulsación larga:
+         * mantiene el comportamiento original de Alt.
+         */
+        if (!numericInputMode
+                && !lastAltEnabled
+                && (eventTime - lastKeyDownTime > keyLongPressDuration)) {
+
+            lastAltEnabled = true;
+            keyIterationCounter = 0;
+
+            KeyMapping keyMapping =
+                    keyboardMappingManager.getCurrentMapping().getKeyMapping(keyCode);
+
+            if (keyMapping == null) {
+                return false;
+            }
+
+            replaceLastCharacter(
+                    inputConnection,
+                    keyMapping.getValue(
+                            lastShiftEnabled,
+                            lastAltEnabled,
+                            keyIterationCounter
+                    )
+            );
+
+            lastKeyDownTime = eventTime;
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+private boolean isSpanishAccentKey(int keyCode) {
+    return keyCode == KeyEvent.KEYCODE_A
+            || keyCode == KeyEvent.KEYCODE_E
+            || keyCode == KeyEvent.KEYCODE_I
+            || keyCode == KeyEvent.KEYCODE_O
+            || keyCode == KeyEvent.KEYCODE_U
+            || keyCode == KeyEvent.KEYCODE_N;
+}
+
 private int getSpanishAccentCharacter(int keyCode, boolean shiftEnabled) {
+
     switch (keyCode) {
+
         case KeyEvent.KEYCODE_A:
             return shiftEnabled ? 'Á' : 'á';
 
