@@ -3,53 +3,50 @@ package com.sinux.pocketboard.input.handler;
 import android.view.KeyEvent;
 
 /**
- * Detects consecutive short presses of the same physical key.
+ * Detects a second short press of the same physical key.
  *
- * Multipress is independent from long press.
+ * This controller deliberately handles ONLY double press.
+ * Long press is handled independently by KeyboardInputHandler.
  *
- * First press:
- *     N -> n
+ * Examples:
  *
- * Second press:
- *     N N -> ñ
+ * N       -> first press
+ * N N     -> second press / multipress
  *
- * Shift affects the result of the multipress:
- *     Shift + N N -> Ñ
- *
- * Alt is NOT converted into the multipress character.
- * Alt selects the normal alternative value, which is the same
- * value used by long press.
+ * Shift state is NOT stored here because the Shift state of the
+ * second physical press must be evaluated by KeyboardInputHandler.
  */
 public final class MultipressController {
 
     private static final long MULTIPRESS_TIMEOUT = 750L;
 
     private int lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
-    private long lastKeyTime = 0L;
-    private boolean active = false;
+    private long lastKeyDownTime = 0L;
+    private boolean waitingForSecondPress = false;
 
     public void reset() {
         lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
-        lastKeyTime = 0L;
-        active = false;
+        lastKeyDownTime = 0L;
+        waitingForSecondPress = false;
     }
 
     /**
-     * Registers a normal ACTION_DOWN event.
+     * Processes an ACTION_DOWN event.
      *
-     * @return true when this event is a second consecutive
-     *         press of the same key inside the multipress window.
+     * @return true when this is a second short press of the same key.
      */
     public boolean process(KeyEvent event) {
-        if (event == null ||
-                event.getAction() != KeyEvent.ACTION_DOWN) {
+        if (event == null) {
+            return false;
+        }
+
+        if (event.getAction() != KeyEvent.ACTION_DOWN) {
             return false;
         }
 
         /*
-         * Android repeat events are generated while holding
-         * the physical key. They belong to long-press handling,
-         * never to multipress.
+         * Repeat events belong to long-press handling.
+         * They must never be interpreted as multipress.
          */
         if (event.getRepeatCount() != 0) {
             return false;
@@ -58,39 +55,40 @@ public final class MultipressController {
         int keyCode = event.getKeyCode();
         long eventTime = event.getEventTime();
 
-        boolean sameKey =
-                active &&
-                lastKeyCode == keyCode;
+        boolean isSecondPress =
+                waitingForSecondPress
+                        && lastKeyCode == keyCode
+                        && eventTime - lastKeyDownTime
+                        <= MULTIPRESS_TIMEOUT;
 
-        boolean withinTimeout =
-                sameKey &&
-                eventTime - lastKeyTime <= MULTIPRESS_TIMEOUT;
-
-        boolean multipress =
-                withinTimeout;
-
-        if (multipress) {
+        if (isSecondPress) {
             /*
-             * Consume this sequence.
+             * The double press has been consumed.
              *
-             * After the second press we reset the sequence so
-             * a third press is NOT interpreted as another
-             * multipress level.
+             * A third press starts a completely new sequence.
+             * Therefore:
+             *
+             * N N     -> multipress
+             * N N N   -> another first press after the pair
              */
             reset();
-        } else {
-            lastKeyCode = keyCode;
-            lastKeyTime = eventTime;
-            active = true;
+            return true;
         }
 
-        return multipress;
+        /*
+         * Start waiting for a possible second press.
+         */
+        lastKeyCode = keyCode;
+        lastKeyDownTime = eventTime;
+        waitingForSecondPress = true;
+
+        return false;
     }
 
     /**
-     * Called when a long press has been detected.
+     * Called when a long press is detected.
      *
-     * The current multipress sequence must be discarded.
+     * Long press cancels any pending double-press sequence.
      */
     public void markLongPress() {
         reset();
