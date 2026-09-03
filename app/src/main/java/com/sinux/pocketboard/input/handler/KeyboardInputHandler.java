@@ -792,38 +792,75 @@ public class KeyboardInputHandler {
         }
     }
 
-    private void composeNewCharacter(InputConnection inputConnection,
-                                     int character) {
+ private void composeNewCharacter(InputConnection inputConnection,
+                                 int character) {
 
-        if (textComposer.length() == 0) {
-
-            textComposer.append((char) character);
-
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-            return;
-        }
-
-        if (dictShortcuts || autocorrection) {
-
-            textComposer.append((char) character);
-
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-        } else {
-
-            inputConnection.commitText(
-                    String.valueOf((char) character),
-                    1
-            );
-        }
+    if (inputConnection == null) {
+        return;
     }
+
+    /*
+     * No previous composing text.
+     *
+     * Start a new composing character.
+     */
+    if (textComposer.length() == 0) {
+
+        textComposer.append((char) character);
+
+        inputConnection.setComposingText(
+                textComposer,
+                1
+        );
+
+        return;
+    }
+
+    /*
+     * When dictionary shortcuts or autocorrection are enabled,
+     * keep accumulating characters in the composing buffer.
+     */
+    if (dictShortcuts || autocorrection) {
+
+        textComposer.append((char) character);
+
+        inputConnection.setComposingText(
+                textComposer,
+                1
+        );
+
+        return;
+    }
+
+    /*
+     * No dictionary/autocorrection:
+     *
+     * The previous character is still marked as composing.
+     * We MUST commit it before starting the next character.
+     *
+     * Otherwise commitText() for the new character can replace
+     * the previous composing character.
+     *
+     * Example:
+     *
+     *   n       -> composing "n"
+     *   n       -> composing "ñ"
+     *   a       -> commit "ñ", then composing "a"
+     *
+     * Result:
+     *
+     *   "ña"
+     */
+    commitComposingText(inputConnection);
+
+    textComposer.append((char) character);
+
+    inputConnection.setComposingText(
+            textComposer,
+            1
+    );
+}
+
 
     /**
      * Replaces ONLY the character currently represented by the
