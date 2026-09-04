@@ -25,7 +25,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-           - name: Download dictionaries
+      - name: Download dictionaries
         run: |
           set -e
 
@@ -65,18 +65,13 @@ jobs:
 
               print(f"Processing {language}...")
 
-              # Hunspell dictionaries are normally UTF-8, but some
-              # dictionaries contain BOMs or metadata/comment lines.
               raw = source.read_bytes()
-
               text = raw.decode("utf-8-sig", errors="replace")
-
-              lines = text.splitlines()
 
               words = set()
 
-              # First line is normally the Hunspell entry count.
-              for index, line in enumerate(lines):
+              for index, line in enumerate(text.splitlines()):
+
                   line = line.strip()
 
                   if not line:
@@ -85,17 +80,14 @@ jobs:
                   if index == 0:
                       continue
 
-                  # Hunspell comments / metadata.
                   if line.startswith("##"):
                       continue
 
-                  # Remove Hunspell flags.
                   word = line.split("/", 1)[0].strip()
 
                   if not word:
                       continue
 
-                  # Ignore metadata/license lines.
                   if any(
                       word.startswith(prefix)
                       for prefix in (
@@ -113,11 +105,9 @@ jobs:
                   ):
                       continue
 
-                  # DictionaryManager expects one word per line.
                   if any(character.isspace() for character in word):
                       continue
 
-                  # Keep alphabetic words, apostrophes and hyphens.
                   if not all(
                       character.isalpha()
                       or character in "'-"
@@ -136,8 +126,7 @@ jobs:
                       file.write(word + "\n")
 
               print(
-                  f"Generated {output}: "
-                  f"{len(words)} words"
+                  f"Generated {output}: {len(words)} words"
               )
           PY
 
@@ -171,7 +160,6 @@ jobs:
 
           head -n 10 \
             app/src/main/assets/dictionaries/de.txt
-
 
       - name: Build APK
         run: |
