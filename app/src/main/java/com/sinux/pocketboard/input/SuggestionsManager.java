@@ -73,6 +73,7 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             KeyboardInputHandler keyboardInputHandler) {
 
         this.pocketBoardIME = pocketBoardIME;
+
         this.preferencesHolder =
                 pocketBoardIME.getPreferencesHolder();
 
@@ -193,9 +194,6 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         /*
          * =========================================================
          * POCKETBOARD INTERNAL DICTIONARY
-         *
-         * This works even when Android has no system spellchecker
-         * selected.
          * =========================================================
          */
         if (dictionarySuggestionsAllowed) {
@@ -208,9 +206,6 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         /*
          * =========================================================
          * SYSTEM SPELLCHECKER
-         *
-         * Optional. If Android provides one, we use it as an
-         * additional source of suggestions.
          * =========================================================
          */
         if (spellcheckerSuggestionsAllowed) {
@@ -221,7 +216,7 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                 String spellText = composingText;
 
                 /*
-                 * Magic trick for AOSP/OpenBoard spellchecker.
+                 * AOSP/OpenBoard workaround.
                  */
                 if (aospSpellchecker) {
                     spellText += "#";
@@ -254,9 +249,6 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return;
         }
 
-        /*
-         * Completions supplied by the current editor are optional.
-         */
         if (completions != null) {
 
             spellcheckerSuggestions.clear();
@@ -516,9 +508,6 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         /*
          * Dictionary suggestions come first.
-         *
-         * This means PocketBoard's own dictionary works even
-         * when Android has no spellchecker selected.
          */
         List<CharSequence> merged =
                 Stream.concat(
@@ -570,19 +559,29 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         if (TextUtils.isEmpty(languageTag)) {
 
-            Locale locale =
-                    subtype.getLocale() != null
-                            ? Locale.forLanguageTag(
-                            subtype.getLocale()
-                    )
-                            : Locale.ENGLISH;
+            String localeString =
+                    subtype.getLocale();
 
-            languageTag =
-                    locale.toLanguageTag();
+            if (!TextUtils.isEmpty(localeString)) {
+
+                languageTag =
+                        localeString.replace('_', '-');
+
+            } else {
+
+                languageTag = "en";
+            }
+        }
+
+        Locale locale =
+                Locale.forLanguageTag(languageTag);
+
+        if (locale.getLanguage().isEmpty()) {
+            locale = Locale.ENGLISH;
         }
 
         currentLanguageTag =
-                languageTag;
+                locale.toLanguageTag();
     }
 
     private boolean startSpellCheckerSession(
@@ -592,10 +591,44 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return false;
         }
 
+        /*
+         * Get the language from the keyboard subtype.
+         *
+         * Prefer languageTag.
+         * Fall back to the legacy locale string.
+         */
+        String languageTag =
+                inputMethodSubtype.getLanguageTag();
+
+        if (TextUtils.isEmpty(languageTag)) {
+
+            String localeString =
+                    inputMethodSubtype.getLocale();
+
+            if (!TextUtils.isEmpty(localeString)) {
+
+                languageTag =
+                        localeString.replace('_', '-');
+
+            } else {
+
+                languageTag = "en";
+            }
+        }
+
         Locale locale =
-                Locale.forLanguageTag(
-                        inputMethodSubtype.getLanguageTag()
-                );
+                Locale.forLanguageTag(languageTag);
+
+        if (locale.getLanguage().isEmpty()) {
+            locale = Locale.ENGLISH;
+        }
+
+        /*
+         * Keep the internal dictionary language synchronized
+         * with the spellchecker language.
+         */
+        currentLanguageTag =
+                locale.toLanguageTag();
 
         TextServicesManager tsm =
                 (TextServicesManager)
@@ -607,6 +640,10 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return false;
         }
 
+        /*
+         * Request the spellchecker session for the selected
+         * keyboard language.
+         */
         spellCheckerSession =
                 tsm.newSpellCheckerSession(
                         null,
@@ -617,6 +654,9 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         if (spellCheckerSession != null) {
 
+            /*
+             * Detect AOSP/OpenBoard spellcheckers.
+             */
             aospSpellchecker =
                     spellCheckerSession
                             .getSpellChecker() != null
