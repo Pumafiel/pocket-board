@@ -10,12 +10,12 @@
 
     <subtype
         android:label="@string/ime_name"
-        android:languageTag="en"
-        android:subtypeLocale="en" />
+        android:languageTag="en-US"
+        android:subtypeLocale="en_US" />
 
     <subtype
         android:label="@string/ime_name"
-        android:languageTag="de"
-        android:subtypeLocale="de" />
+        android:languageTag="de-DE"
+        android:subtypeLocale="de_DE" />
 
 </spell-checker>
