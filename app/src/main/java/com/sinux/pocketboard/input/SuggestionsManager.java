@@ -23,7 +23,6 @@ import com.sinux.pocketboard.preferences.PreferencesHolder;
 import com.sinux.pocketboard.spellchecker.DictionaryManager;
 import com.sinux.pocketboard.ui.InputView;
 import com.sinux.pocketboard.ui.SuggestionView;
-import com.sinux.pocketboard.utils.CharacterUtils;
 import com.sinux.pocketboard.utils.InputUtils;
 
 import java.util.ArrayList;
@@ -34,12 +33,6 @@ import java.util.stream.Stream;
 
 public class SuggestionsManager implements SuggestionView.OnClickListener,
         SpellCheckerSession.SpellCheckerSessionListener {
-
-    private static final String AOSP_SPELLCHECKER_PACKAGE =
-            "com.android.inputmethod.latin";
-
-    private static final String AOSP_SPELLCHECKER_PACKAGE_OPENBOARD =
-            "org.dslul.openboard.inputmethod.latin";
 
     private final PocketBoardIME pocketBoardIME;
     private final PreferencesHolder preferencesHolder;
@@ -58,14 +51,16 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     private boolean dictionarySuggestionsAllowed;
     private boolean spellcheckerSuggestionsAllowed;
 
-    private boolean aospSpellchecker;
-
     private boolean hasRecommendedSpellcheckerSuggestion;
 
     private CharSequence lastRecommendedSuggestion;
 
     private boolean isPaused;
 
+    /*
+     * Language used by both the internal dictionary and the
+     * PocketBoard spellchecker.
+     */
     private String currentLanguageTag = "en";
 
     public SuggestionsManager(
@@ -105,11 +100,11 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
         disallowSuggestions();
 
-        var suggestionAllowedEditor =
+        boolean suggestionAllowedEditor =
                 InputUtils.isSuggestionAllowedEditor(attribute)
                         && !InputUtils.isNumericEditor(attribute);
 
-        var suggestionsPanelVisible =
+        boolean suggestionsPanelVisible =
                 pocketBoardIME.isShouldShowIme()
                         && preferencesHolder.isShowSuggestionsEnabled();
 
@@ -118,6 +113,8 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                         && (suggestionsPanelVisible
                         || preferencesHolder.isDictShortcutsEnabled());
 
+        updateCurrentLanguage(currentInputMethodSubtype);
+
         spellcheckerSuggestionsAllowed =
                 suggestionAllowedEditor
                         && (suggestionsPanelVisible
@@ -125,8 +122,6 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                         && startSpellCheckerSession(
                         currentInputMethodSubtype
                 );
-
-        updateCurrentLanguage(currentInputMethodSubtype);
     }
 
     public void onStartInputView(
@@ -137,9 +132,10 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         if (spellcheckerSuggestionsAllowed
                 && spellCheckerSession == null) {
 
-            startSpellCheckerSession(
-                    currentInputMethodSubtype
-            );
+            spellcheckerSuggestionsAllowed =
+                    startSpellCheckerSession(
+                            currentInputMethodSubtype
+                    );
         }
     }
 
@@ -180,8 +176,7 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         }
 
         CharSequence composing =
-                keyboardInputHandler
-                        .getCurrentComposingText();
+                keyboardInputHandler.getCurrentComposingText();
 
         if (TextUtils.isEmpty(composing)) {
             clear();
@@ -192,9 +187,7 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                 composing.toString();
 
         /*
-         * =========================================================
-         * POCKETBOARD INTERNAL DICTIONARY
-         * =========================================================
+         * Internal PocketBoard dictionary.
          */
         if (dictionarySuggestionsAllowed) {
 
@@ -204,40 +197,29 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         }
 
         /*
-         * =========================================================
-         * SYSTEM SPELLCHECKER
-         * =========================================================
+         * PocketBoard spellchecker.
+         *
+         * The active keyboard subtype determines the locale
+         * used by the spellchecker session.
          */
-        if (spellcheckerSuggestionsAllowed) {
+        if (spellcheckerSuggestionsAllowed
+                && spellCheckerSession != null
+                && !spellCheckerSession.isSessionDisconnected()) {
 
-            if (spellCheckerSession != null
-                    && !spellCheckerSession.isSessionDisconnected()) {
+            TextInfo[] textInfos = {
+                    new TextInfo(
+                            composingText,
+                            0,
+                            composingText.length(),
+                            0,
+                            0
+                    )
+            };
 
-                String spellText = composingText;
-
-                /*
-                 * AOSP/OpenBoard workaround.
-                 */
-                if (aospSpellchecker) {
-                    spellText += "#";
-                }
-
-                TextInfo[] textInfos = {
-                        new TextInfo(
-                                spellText,
-                                0,
-                                spellText.length(),
-                                0,
-                                0
-                        )
-                };
-
-                spellCheckerSession
-                        .getSentenceSuggestions(
-                                textInfos,
-                                suggestionsCount
-                        );
-            }
+            spellCheckerSession.getSentenceSuggestions(
+                    textInfos,
+                    suggestionsCount
+            );
         }
 
         showSuggestions();
@@ -253,15 +235,12 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
             spellcheckerSuggestions.clear();
 
-            hasRecommendedSpellcheckerSuggestion =
-                    false;
+            hasRecommendedSpellcheckerSuggestion = false;
 
-            for (
-                    int i = 0;
-                    i < completions.length
-                            && i < suggestionsCount;
-                    i++
-            ) {
+            for (int i = 0;
+                 i < completions.length
+                         && i < suggestionsCount;
+                 i++) {
 
                 if (!TextUtils.isEmpty(
                         completions[i].getText()
@@ -296,10 +275,7 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                 );
 
         if (suggestions != null) {
-
-            dictionarySuggestions.addAll(
-                    suggestions
-            );
+            dictionarySuggestions.addAll(suggestions);
         }
 
         showSuggestions();
@@ -331,12 +307,23 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     public void onInputMethodSubtypeChanged(
             InputMethodSubtype inputMethodSubtype) {
 
+        /*
+         * Close the previous language session before creating
+         * the new one.
+         */
         closeSpellCheckerSession();
 
-        updateCurrentLanguage(
-                inputMethodSubtype
-        );
+        clear();
 
+        /*
+         * Update the dictionary language first.
+         */
+        updateCurrentLanguage(inputMethodSubtype);
+
+        /*
+         * Create a completely new spellchecker session using
+         * the new keyboard subtype.
+         */
         if (spellcheckerSuggestionsAllowed) {
 
             spellcheckerSuggestionsAllowed =
@@ -368,11 +355,8 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
     public void onGetSentenceSuggestions(
             SentenceSuggestionsInfo[] results) {
 
-        if (!spellcheckerSuggestionsAllowed) {
-            return;
-        }
-
-        if (results == null) {
+        if (!spellcheckerSuggestionsAllowed
+                || results == null) {
             return;
         }
 
@@ -387,11 +371,9 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                 continue;
             }
 
-            for (
-                    int i = 0;
-                    i < ssi.getSuggestionsCount();
-                    i++
-            ) {
+            for (int i = 0;
+                 i < ssi.getSuggestionsCount();
+                 i++) {
 
                 SuggestionsInfo si =
                         ssi.getSuggestionsInfoAt(i);
@@ -406,22 +388,16 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                                 .RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS)
                                 != 0;
 
-                for (
-                        int j = 0;
-                        j < si.getSuggestionsCount();
-                        j++
-                ) {
+                for (int j = 0;
+                     j < si.getSuggestionsCount();
+                     j++) {
 
                     String suggestion =
                             si.getSuggestionAt(j);
 
-                    if (!TextUtils.isEmpty(
-                            suggestion
-                    )) {
+                    if (!TextUtils.isEmpty(suggestion)) {
 
-                        tempSuggestions.add(
-                                suggestion
-                        );
+                        tempSuggestions.add(suggestion);
                     }
                 }
             }
@@ -459,15 +435,12 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             List<InlineSuggestion> inlineSuggestions) {
 
         if (inputView != null) {
-
             return inputView.setInlineSuggestions(
                     inlineSuggestions
             );
-
-        } else {
-
-            return false;
         }
+
+        return false;
     }
 
     public boolean isInlineSuggestionsShown() {
@@ -506,9 +479,6 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return;
         }
 
-        /*
-         * Dictionary suggestions come first.
-         */
         List<CharSequence> merged =
                 Stream.concat(
                         dictionarySuggestions.stream(),
@@ -539,51 +509,34 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
 
             keyboardInputHandler.applySuggestion(
                     text,
-                    pocketBoardIME
-                            .getCurrentInputConnection(),
+                    pocketBoardIME.getCurrentInputConnection(),
                     true
             );
         }
     }
 
+    /**
+     * Updates the language used by the internal dictionary.
+     *
+     * Supported languages:
+     *
+     * es-* -> es-AR
+     * en-* -> en
+     * de-* -> de
+     */
     private void updateCurrentLanguage(
             InputMethodSubtype subtype) {
 
-        if (subtype == null) {
-            currentLanguageTag = "en";
-            return;
-        }
-
-        String languageTag =
-                subtype.getLanguageTag();
-
-        if (TextUtils.isEmpty(languageTag)) {
-
-            String localeString =
-                    subtype.getLocale();
-
-            if (!TextUtils.isEmpty(localeString)) {
-
-                languageTag =
-                        localeString.replace('_', '-');
-
-            } else {
-
-                languageTag = "en";
-            }
-        }
-
-        Locale locale =
-                Locale.forLanguageTag(languageTag);
-
-        if (locale.getLanguage().isEmpty()) {
-            locale = Locale.ENGLISH;
-        }
-
         currentLanguageTag =
-                locale.toLanguageTag();
+                normalizeLanguageTag(
+                        getSubtypeLanguageTag(subtype)
+                );
     }
 
+    /**
+     * Creates the spellchecker session using exactly the
+     * locale represented by the active keyboard subtype.
+     */
     private boolean startSpellCheckerSession(
             InputMethodSubtype inputMethodSubtype) {
 
@@ -591,44 +544,32 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
             return false;
         }
 
-        /*
-         * Get the language from the keyboard subtype.
-         *
-         * Prefer languageTag.
-         * Fall back to the legacy locale string.
-         */
         String languageTag =
-                inputMethodSubtype.getLanguageTag();
+                getSubtypeLanguageTag(
+                        inputMethodSubtype
+                );
 
         if (TextUtils.isEmpty(languageTag)) {
-
-            String localeString =
-                    inputMethodSubtype.getLocale();
-
-            if (!TextUtils.isEmpty(localeString)) {
-
-                languageTag =
-                        localeString.replace('_', '-');
-
-            } else {
-
-                languageTag = "en";
-            }
+            return false;
         }
 
         Locale locale =
-                Locale.forLanguageTag(languageTag);
+                Locale.forLanguageTag(
+                        languageTag
+                );
 
         if (locale.getLanguage().isEmpty()) {
-            locale = Locale.ENGLISH;
+            return false;
         }
 
         /*
-         * Keep the internal dictionary language synchronized
-         * with the spellchecker language.
+         * Keep the internal dictionary synchronized with the
+         * spellchecker.
          */
         currentLanguageTag =
-                locale.toLanguageTag();
+                normalizeLanguageTag(
+                        languageTag
+                );
 
         TextServicesManager tsm =
                 (TextServicesManager)
@@ -641,8 +582,13 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
         }
 
         /*
-         * Request the spellchecker session for the selected
-         * keyboard language.
+         * Ask Android for a spellchecker session matching the
+         * active keyboard locale.
+         *
+         * The selected PocketBoard spellchecker advertises:
+         * es-AR
+         * en
+         * de
          */
         spellCheckerSession =
                 tsm.newSpellCheckerSession(
@@ -652,32 +598,72 @@ public class SuggestionsManager implements SuggestionView.OnClickListener,
                         false
                 );
 
-        if (spellCheckerSession != null) {
+        return spellCheckerSession != null;
+    }
 
-            /*
-             * Detect AOSP/OpenBoard spellcheckers.
-             */
-            aospSpellchecker =
-                    spellCheckerSession
-                            .getSpellChecker() != null
-                            && (
-                            AOSP_SPELLCHECKER_PACKAGE.equals(
-                                    spellCheckerSession
-                                            .getSpellChecker()
-                                            .getPackageName()
-                            )
-                                    ||
-                                    AOSP_SPELLCHECKER_PACKAGE_OPENBOARD.equals(
-                                            spellCheckerSession
-                                                    .getSpellChecker()
-                                                    .getPackageName()
-                                    )
-                    );
+    /**
+     * Gets the language tag from the active keyboard subtype.
+     */
+    private String getSubtypeLanguageTag(
+            InputMethodSubtype subtype) {
 
-            return true;
+        if (subtype == null) {
+            return null;
         }
 
-        return false;
+        String languageTag =
+                subtype.getLanguageTag();
+
+        if (!TextUtils.isEmpty(languageTag)) {
+            return languageTag;
+        }
+
+        String localeString =
+                subtype.getLocale();
+
+        if (!TextUtils.isEmpty(localeString)) {
+            return localeString.replace('_', '-');
+        }
+
+        return null;
+    }
+
+    /**
+     * Converts Android locale variants to the dictionary names
+     * used by PocketBoard.
+     */
+    private String normalizeLanguageTag(
+            String languageTag) {
+
+        if (TextUtils.isEmpty(languageTag)) {
+            return "en";
+        }
+
+        Locale locale =
+                Locale.forLanguageTag(
+                        languageTag.replace('_', '-')
+                );
+
+        String language =
+                locale.getLanguage();
+
+        if ("es".equals(language)) {
+            return "es-AR";
+        }
+
+        if ("de".equals(language)) {
+            return "de";
+        }
+
+        if ("en".equals(language)) {
+            return "en";
+        }
+
+        /*
+         * Unknown languages are not silently mapped into a
+         * PocketBoard dictionary.
+         */
+        return "en";
     }
 
     private void closeSpellCheckerSession() {
