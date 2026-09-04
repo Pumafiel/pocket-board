@@ -25,7 +25,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Download dictionaries
+           - name: Download dictionaries
         run: |
           set -e
 
@@ -48,29 +48,98 @@ jobs:
           echo ""
           echo "Converting dictionaries..."
 
-          # The first line of a Hunspell .dic file is the number
-          # of entries. The remaining lines contain words,
-          # optionally followed by Hunspell flags after '/'.
-          #
-          # DictionaryManager only needs the word itself.
+          python3 <<'PY'
+          from pathlib import Path
 
-          tail -n +2 node_modules/dictionary-es-ar/index.dic \
-            | cut -d'/' -f1 \
-            | sed '/^[[:space:]]*$/d' \
-            | sort -u \
-            > app/src/main/assets/dictionaries/es-AR.txt
+          dictionaries = {
+              "es-AR": Path("node_modules/dictionary-es-ar/index.dic"),
+              "en": Path("node_modules/dictionary-en/index.dic"),
+              "de": Path("node_modules/dictionary-de/index.dic"),
+          }
 
-          tail -n +2 node_modules/dictionary-en/index.dic \
-            | cut -d'/' -f1 \
-            | sed '/^[[:space:]]*$/d' \
-            | sort -u \
-            > app/src/main/assets/dictionaries/en.txt
+          output_dir = Path("app/src/main/assets/dictionaries")
+          output_dir.mkdir(parents=True, exist_ok=True)
 
-          tail -n +2 node_modules/dictionary-de/index.dic \
-            | cut -d'/' -f1 \
-            | sed '/^[[:space:]]*$/d' \
-            | sort -u \
-            > app/src/main/assets/dictionaries/de.txt
+          for language, source in dictionaries.items():
+              output = output_dir / f"{language}.txt"
+
+              print(f"Processing {language}...")
+
+              # Hunspell dictionaries are normally UTF-8, but some
+              # dictionaries contain BOMs or metadata/comment lines.
+              raw = source.read_bytes()
+
+              text = raw.decode("utf-8-sig", errors="replace")
+
+              lines = text.splitlines()
+
+              words = set()
+
+              # First line is normally the Hunspell entry count.
+              for index, line in enumerate(lines):
+                  line = line.strip()
+
+                  if not line:
+                      continue
+
+                  if index == 0:
+                      continue
+
+                  # Hunspell comments / metadata.
+                  if line.startswith("##"):
+                      continue
+
+                  # Remove Hunspell flags.
+                  word = line.split("/", 1)[0].strip()
+
+                  if not word:
+                      continue
+
+                  # Ignore metadata/license lines.
+                  if any(
+                      word.startswith(prefix)
+                      for prefix in (
+                          "Copyright",
+                          "GPL",
+                          "License:",
+                          "There should",
+                          "This is the dictionary",
+                          "Version:",
+                          "derived from",
+                          "for igerman",
+                          "of this dictionary",
+                          "Modified versions",
+                      )
+                  ):
+                      continue
+
+                  # DictionaryManager expects one word per line.
+                  if any(character.isspace() for character in word):
+                      continue
+
+                  # Keep alphabetic words, apostrophes and hyphens.
+                  if not all(
+                      character.isalpha()
+                      or character in "'-"
+                      for character in word
+                  ):
+                      continue
+
+                  words.add(word.lower())
+
+              with output.open(
+                  "w",
+                  encoding="utf-8",
+                  newline="\n"
+              ) as file:
+                  for word in sorted(words):
+                      file.write(word + "\n")
+
+              print(
+                  f"Generated {output}: "
+                  f"{len(words)} words"
+              )
+          PY
 
           echo ""
           echo "=== Dictionary sizes ==="
@@ -102,6 +171,7 @@ jobs:
 
           head -n 10 \
             app/src/main/assets/dictionaries/de.txt
+
 
       - name: Build APK
         run: |
