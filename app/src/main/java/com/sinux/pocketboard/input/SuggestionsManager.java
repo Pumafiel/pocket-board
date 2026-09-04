@@ -20,10 +20,10 @@ import com.sinux.pocketboard.ui.SuggestionView;
 import com.sinux.pocketboard.utils.InputUtils;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.Set;
 
 public class SuggestionsManager
         implements SuggestionView.OnClickListener {
@@ -50,13 +50,14 @@ public class SuggestionsManager
     private boolean isPaused;
 
     /*
-     * Idioma actualmente seleccionado por el teclado.
+     * Idioma actualmente seleccionado por el subtype
+     * del teclado.
      *
      * PocketBoard soporta:
      *
-     * es-AR -> español
-     * en    -> inglés
-     * de    -> alemán
+     *     es-AR
+     *     en
+     *     de
      */
     private String currentLanguageTag = "en";
 
@@ -72,10 +73,6 @@ public class SuggestionsManager
         this.keyboardInputHandler =
                 keyboardInputHandler;
 
-        /*
-         * ESTE es el único motor de diccionario/corrección
-         * utilizado por PocketBoard.
-         */
         this.dictionaryManager =
                 new DictionaryManager(pocketBoardIME);
 
@@ -97,12 +94,6 @@ public class SuggestionsManager
         this.inputView = inputView;
     }
 
-    /**
-     * Se llama al comenzar una nueva entrada.
-     *
-     * El idioma se obtiene directamente del subtype
-     * seleccionado por el teclado.
-     */
     public void onStartInput(
             EditorInfo attribute,
             InputMethodSubtype currentInputMethodSubtype) {
@@ -121,9 +112,6 @@ public class SuggestionsManager
                 pocketBoardIME.isShouldShowIme()
                         && preferencesHolder.isShowSuggestionsEnabled();
 
-        /*
-         * Las suggestions normales vienen de nuestro diccionario.
-         */
         dictionarySuggestionsAllowed =
                 suggestionAllowedEditor
                         && (
@@ -132,11 +120,10 @@ public class SuggestionsManager
                 );
 
         /*
-         * La autocorrección también utiliza NUESTRO diccionario.
+         * El corrector de PocketBoard utiliza SIEMPRE
+         * DictionaryManager.
          *
-         * No se crea SpellCheckerSession.
-         * No se consulta AOSP.
-         * No se consulta OpenBoard.
+         * No se utiliza el SpellChecker del sistema.
          */
         spellcheckerSuggestionsAllowed =
                 suggestionAllowedEditor
@@ -183,10 +170,6 @@ public class SuggestionsManager
         showSuggestions();
     }
 
-    /**
-     * Actualiza las suggestions utilizando exclusivamente
-     * DictionaryManager.
-     */
     public void update() {
 
         if (isPaused) {
@@ -207,26 +190,33 @@ public class SuggestionsManager
 
         /*
          * =========================================================
-         * POCKETBOARD DICTIONARY
+         * SUGGESTIONS DEL DICCIONARIO DE POCKETBOARD
          * =========================================================
-         *
-         * Tanto las suggestions como las correcciones salen
-         * del mismo diccionario correspondiente al idioma actual.
          */
-        if (dictionarySuggestionsAllowed
-                || spellcheckerSuggestionsAllowed) {
+        if (dictionarySuggestionsAllowed) {
 
             updateDictionarySuggestions(
                     composingText
             );
+
         } else {
+
             dictionarySuggestions.clear();
         }
 
         /*
-         * La lista de correcciones internas se mantiene separada
-         * para que la lógica existente de autocorrección pueda
-         * utilizarla.
+         * =========================================================
+         * CORRECTOR DE POCKETBOARD
+         * =========================================================
+         *
+         * No usamos:
+         *
+         *     TextServicesManager
+         *     SpellCheckerSession
+         *     corrector del sistema
+         *
+         * El idioma se determina exclusivamente mediante
+         * currentLanguageTag.
          */
         if (spellcheckerSuggestionsAllowed) {
 
@@ -238,27 +228,26 @@ public class SuggestionsManager
 
             spellcheckerSuggestions.clear();
 
-            hasRecommendedSpellcheckerSuggestion = false;
-            lastRecommendedSuggestion = null;
+            hasRecommendedSpellcheckerSuggestion =
+                    false;
         }
 
         showSuggestions();
     }
 
-    /**
-     * Mantiene compatibilidad con CompletionInfo.
-     *
-     * Si Android entrega completions, se pueden mostrar, pero
-     * esto NO reemplaza nuestro diccionario para la corrección
-     * ortográfica normal.
-     */
-    public void update(CompletionInfo[] completions) {
+    public void update(
+            CompletionInfo[] completions) {
 
         if (isPaused) {
             return;
         }
 
         if (completions != null) {
+
+            spellcheckerSuggestions.clear();
+
+            hasRecommendedSpellcheckerSuggestion =
+                    false;
 
             for (
                     int i = 0;
@@ -267,17 +256,21 @@ public class SuggestionsManager
                     i++
             ) {
 
-                if (completions[i] == null) {
+                CompletionInfo completion =
+                        completions[i];
+
+                if (completion == null) {
                     continue;
                 }
 
                 CharSequence text =
-                        completions[i].getText();
+                        completion.getText();
 
-                if (!TextUtils.isEmpty(text)
-                        && !spellcheckerSuggestions.contains(text)) {
+                if (!TextUtils.isEmpty(text)) {
 
-                    spellcheckerSuggestions.add(text);
+                    spellcheckerSuggestions.add(
+                            text
+                    );
                 }
             }
         }
@@ -285,9 +278,6 @@ public class SuggestionsManager
         showSuggestions();
     }
 
-    /**
-     * Obtiene suggestions desde DictionaryManager.
-     */
     private void updateDictionarySuggestions(
             String composingText) {
 
@@ -304,83 +294,102 @@ public class SuggestionsManager
                         suggestionsCount
                 );
 
-        if (suggestions != null) {
+        if (suggestions == null) {
+            return;
+        }
 
-            dictionarySuggestions.addAll(
-                    suggestions
-            );
+        for (String suggestion : suggestions) {
+
+            if (!TextUtils.isEmpty(suggestion)) {
+
+                dictionarySuggestions.add(
+                        suggestion
+                );
+            }
+
+            if (dictionarySuggestions.size()
+                    >= suggestionsCount) {
+
+                break;
+            }
         }
     }
 
-    /**
-     * Genera las correcciones ortográficas usando exactamente
-     * el mismo diccionario y el mismo idioma seleccionado.
-     *
-     * Por ejemplo:
-     *
-     * es-AR:
-     *   "csa" -> "casa"
-     *
-     * en:
-     *   "helo" -> "hello"
-     *
-     * de:
-     *   "hause" -> "haus"
-     */
     private void updateSpellcheckerSuggestions(
             String composingText) {
 
         spellcheckerSuggestions.clear();
 
+        hasRecommendedSpellcheckerSuggestion =
+                false;
+
         if (TextUtils.isEmpty(composingText)) {
-            hasRecommendedSpellcheckerSuggestion = false;
             return;
         }
 
         /*
-         * Si la palabra exacta existe, no necesitamos
-         * autocorrección.
+         * Si la palabra existe en el diccionario del idioma
+         * seleccionado, no necesita corrección.
          */
         if (dictionaryManager.contains(
                 composingText,
                 currentLanguageTag
         )) {
 
-            hasRecommendedSpellcheckerSuggestion = false;
             return;
         }
 
         /*
-         * Pedimos al MISMO DictionaryManager las correcciones.
+         * Las correcciones salen del MISMO diccionario
+         * seleccionado para el teclado.
          */
-        List<String> corrections =
+        List<String> suggestions =
                 dictionaryManager.getSuggestions(
                         composingText,
                         currentLanguageTag,
                         suggestionsCount
                 );
 
-        if (corrections == null ||
-                corrections.isEmpty()) {
+        if (suggestions == null ||
+                suggestions.isEmpty()) {
 
-            hasRecommendedSpellcheckerSuggestion = false;
             return;
         }
 
+        Set<String> uniqueSuggestions =
+                new LinkedHashSet<>();
+
+        for (String suggestion : suggestions) {
+
+            if (!TextUtils.isEmpty(suggestion)) {
+
+                uniqueSuggestions.add(
+                        suggestion
+                );
+            }
+
+            if (uniqueSuggestions.size()
+                    >= suggestionsCount) {
+
+                break;
+            }
+        }
+
         spellcheckerSuggestions.addAll(
-                corrections
+                uniqueSuggestions
         );
 
         /*
-         * La primera corrección se considera recomendada.
+         * La primera sugerencia de nuestro diccionario
+         * es la recomendada.
          */
-        hasRecommendedSpellcheckerSuggestion =
-                !spellcheckerSuggestions.isEmpty();
-
         if (!spellcheckerSuggestions.isEmpty()) {
 
             lastRecommendedSuggestion =
                     spellcheckerSuggestions.get(0);
+
+            hasRecommendedSpellcheckerSuggestion =
+                    true;
         }
     }
 
@@ -393,7 +402,8 @@ public class SuggestionsManager
         return null;
     }
 
-    public CharSequence getCurrentSpellcheckerRecommendedSuggestion() {
+    public CharSequence
+    getCurrentSpellcheckerRecommendedSuggestion() {
 
         if (hasRecommendedSpellcheckerSuggestion
                 && !spellcheckerSuggestions.isEmpty()) {
@@ -407,24 +417,12 @@ public class SuggestionsManager
         return null;
     }
 
-    /**
-     * Cambia inmediatamente el diccionario cuando cambia
-     * el idioma del teclado.
-     */
     public void onInputMethodSubtypeChanged(
             InputMethodSubtype inputMethodSubtype) {
 
         updateCurrentLanguage(
                 inputMethodSubtype
         );
-
-        /*
-         * Importante:
-         *
-         * No reiniciamos ningún SpellCheckerSession porque
-         * PocketBoard ya no depende del servicio de Android.
-         */
-        clear();
 
         update();
     }
@@ -457,6 +455,7 @@ public class SuggestionsManager
     public boolean isInlineSuggestionsShown() {
 
         if (inputView != null) {
+
             return inputView.isInlineSuggestionsShown();
         }
 
@@ -466,6 +465,7 @@ public class SuggestionsManager
     public void cancelInlineSuggestions() {
 
         if (inputView != null) {
+
             inputView.cancelInlineSuggestions();
         }
     }
@@ -484,12 +484,6 @@ public class SuggestionsManager
         update();
     }
 
-    /**
-     * Combina las suggestions del diccionario y las
-     * correcciones propias de PocketBoard.
-     *
-     * Máximo: 3 suggestions visibles.
-     */
     private void showSuggestions() {
 
         if (inputView == null) {
@@ -497,22 +491,38 @@ public class SuggestionsManager
         }
 
         List<CharSequence> merged =
-                Stream.concat(
-                        dictionarySuggestions.stream(),
-                        spellcheckerSuggestions.stream()
-                )
-                .distinct()
-                .limit(3)
-                .collect(Collectors.toList());
+                new ArrayList<>(suggestionsCount);
 
-        boolean hasRecommended =
-                hasRecommendedSpellcheckerSuggestion;
+        Set<CharSequence> unique =
+                new LinkedHashSet<>();
 
         /*
-         * Si no hay corrección ortográfica, las suggestions
-         * normales siguen mostrándose sin marcarse como
-         * autocorrección.
+         * Primero las sugerencias normales del idioma.
          */
+        unique.addAll(
+                dictionarySuggestions
+        );
+
+        /*
+         * Después las correcciones ortográficas.
+         */
+        unique.addAll(
+                spellcheckerSuggestions
+        );
+
+        for (CharSequence suggestion : unique) {
+
+            if (merged.size() >= 3) {
+                break;
+            }
+
+            merged.add(suggestion);
+        }
+
+        boolean hasRecommended =
+                !dictionarySuggestions.isEmpty()
+                        || hasRecommendedSpellcheckerSuggestion;
+
         inputView.setSuggestions(
                 merged,
                 hasRecommended
@@ -537,9 +547,6 @@ public class SuggestionsManager
         }
     }
 
-    /**
-     * Obtiene el idioma del subtype del teclado.
-     */
     private void updateCurrentLanguage(
             InputMethodSubtype subtype) {
 
@@ -559,24 +566,27 @@ public class SuggestionsManager
             if (!TextUtils.isEmpty(localeString)) {
 
                 languageTag =
-                        localeString.replace('_', '-');
+                        localeString.replace(
+                                '_',
+                                '-'
+                        );
 
             } else {
 
-                currentLanguageTag = "en";
-                return;
+                languageTag = "en";
             }
         }
 
         Locale locale =
-                Locale.forLanguageTag(languageTag);
+                Locale.forLanguageTag(
+                        languageTag
+                );
 
         if (TextUtils.isEmpty(
                 locale.getLanguage()
         )) {
 
-            currentLanguageTag = "en";
-            return;
+            locale = Locale.ENGLISH;
         }
 
         currentLanguageTag =
@@ -585,32 +595,6 @@ public class SuggestionsManager
                 );
     }
 
-    /**
-     * Convierte cualquier variante compatible al diccionario
-     * que realmente existe en PocketBoard.
-     *
-     * Español:
-     *   es
-     *   es-AR
-     *   es-ES
-     *   es-MX
-     *   etc.
-     *       -> es-AR
-     *
-     * Inglés:
-     *   en
-     *   en-US
-     *   en-GB
-     *   etc.
-     *       -> en
-     *
-     * Alemán:
-     *   de
-     *   de-DE
-     *   de-AT
-     *   etc.
-     *       -> de
-     */
     private String normalizeDictionaryLanguage(
             Locale locale) {
 
@@ -633,9 +617,6 @@ public class SuggestionsManager
             return "en";
         }
 
-        /*
-         * Idioma no soportado actualmente.
-         */
         return "en";
     }
 }
