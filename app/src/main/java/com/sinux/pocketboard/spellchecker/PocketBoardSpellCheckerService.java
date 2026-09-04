@@ -27,26 +27,20 @@ public class PocketBoardSpellCheckerService
     private class PocketBoardSpellCheckerSession
             extends SpellCheckerService.Session {
 
-        private Locale locale = Locale.ENGLISH;
+        /*
+         * Do NOT default the actual requested language to English.
+         *
+         * English is only used when Android genuinely does not
+         * provide a usable locale.
+         */
+        private Locale locale;
 
         @Override
         public void onCreate() {
 
-            /*
-             * Android 11 returns the session locale as a String.
-             */
             String languageTag = getLocale();
 
-            if (languageTag != null &&
-                    !languageTag.isEmpty()) {
-
-                Locale parsedLocale =
-                        Locale.forLanguageTag(languageTag);
-
-                if (!parsedLocale.getLanguage().isEmpty()) {
-                    locale = parsedLocale;
-                }
-            }
+            locale = resolveLocale(languageTag);
         }
 
         @Override
@@ -73,8 +67,8 @@ public class PocketBoardSpellCheckerService
                     originalWord;
 
             /*
-             * Android may append "#" when asking for suggestions
-             * for the word currently being edited.
+             * Android/AOSP may append "#" to the currently
+             * composing word.
              */
             if (word.endsWith("#")) {
                 word = word.substring(
@@ -95,8 +89,18 @@ public class PocketBoardSpellCheckerService
                 );
             }
 
+            /*
+             * Resolve the language that DictionaryManager should use.
+             *
+             * es-AR -> es-AR
+             * es-*  -> es-AR
+             * de-*  -> de
+             * en-*  -> en
+             */
             String languageTag =
-                    locale.toLanguageTag();
+                    normalizeDictionaryLanguage(
+                            locale
+                    );
 
             /*
              * Check whether this is an actual dictionary word.
@@ -118,9 +122,8 @@ public class PocketBoardSpellCheckerService
             }
 
             /*
-             * The word is not in the dictionary.
-             *
-             * Ask DictionaryManager for corrections.
+             * The word isn't present in the selected language
+             * dictionary. Ask that SAME dictionary for corrections.
              */
             List<String> suggestions =
                     dictionaryManager.getSuggestions(
@@ -132,12 +135,6 @@ public class PocketBoardSpellCheckerService
             if (suggestions == null ||
                     suggestions.isEmpty()) {
 
-                /*
-                 * Important:
-                 *
-                 * Even when we have no replacement suggestion,
-                 * tell Android that the word looks like a typo.
-                 */
                 return new SuggestionsInfo(
                         SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO,
                         new String[0],
@@ -160,17 +157,86 @@ public class PocketBoardSpellCheckerService
             );
         }
 
-        /*
-         * We intentionally do NOT override
-         * onGetSentenceSuggestionsMultiple().
-         *
-         * Android's SpellCheckerService provides the default
-         * implementation. It splits sentences into words and
-         * calls onGetSuggestionsMultiple(), preserving the
-         * TextInfo metadata required by the framework.
-         *
-         * This is especially important for Android 11.
+        /**
+         * Convert the locale supplied by Android into the languages
+         * supported by PocketBoard.
          */
+        private Locale resolveLocale(
+                String languageTag) {
+
+            if (languageTag == null ||
+                    languageTag.trim().isEmpty()) {
+
+                /*
+                 * There is genuinely no locale information.
+                 * This is the only case where we use English.
+                 */
+                return Locale.ENGLISH;
+            }
+
+            Locale parsed =
+                    Locale.forLanguageTag(
+                            languageTag.replace('_', '-')
+                    );
+
+            String language =
+                    parsed.getLanguage();
+
+            if ("es".equals(language)) {
+
+                /*
+                 * PocketBoard uses the Argentine Spanish
+                 * dictionary for all Spanish variants.
+                 */
+                return Locale.forLanguageTag("es-AR");
+            }
+
+            if ("de".equals(language)) {
+                return Locale.GERMAN;
+            }
+
+            if ("en".equals(language)) {
+
+                return Locale.ENGLISH;
+            }
+
+            /*
+             * Unknown language.
+             *
+             * PocketBoard currently supports only:
+             * es-AR, de and en.
+             */
+            return Locale.ENGLISH;
+        }
+
+        /**
+         * Maps the resolved Locale to the exact dictionary names
+         * understood by DictionaryManager.
+         */
+        private String normalizeDictionaryLanguage(
+                Locale locale) {
+
+            if (locale == null) {
+                return "en";
+            }
+
+            String language =
+                    locale.getLanguage();
+
+            if ("es".equals(language)) {
+                return "es-AR";
+            }
+
+            if ("de".equals(language)) {
+                return "de";
+            }
+
+            if ("en".equals(language)) {
+                return "en";
+            }
+
+            return "en";
+        }
 
         private int getCookie(TextInfo textInfo) {
 
