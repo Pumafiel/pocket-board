@@ -1,36 +1,162 @@
 <?xml version="1.0" encoding="utf-8"?>
 <KeyboardMapping>
+    <!-- Q -->
+    <Key code="45" value="q" shiftValue="Q">
+        <Alt value=":" />
+        <Alt value=";" />
+    </Key>
 
-    <Key code="65" value="a" shiftValue="A" />
-    <Key code="66" value="b" shiftValue="B" />
-    <Key code="67" value="c" shiftValue="C" />
-    <Key code="68" value="d" shiftValue="D" />
-    <Key code="69" value="e" shiftValue="E" />
-    <Key code="70" value="f" shiftValue="F" />
-    <Key code="71" value="g" shiftValue="G" />
-    <Key code="72" value="h" shiftValue="H" />
-    <Key code="73" value="i" shiftValue="I" />
-    <Key code="74" value="j" shiftValue="J" />
-    <Key code="75" value="k" shiftValue="K" />
-    <Key code="76" value="l" shiftValue="L" />
-    <Key code="77" value="m" shiftValue="M" />
-    <Key code="78" value="n" shiftValue="N" />
-    <Key code="79" value="o" shiftValue="O" />
-    <Key code="80" value="p" shiftValue="P" />
-    <Key code="81" value="q" shiftValue="Q" />
-    <Key code="82" value="r" shiftValue="R" />
-    <Key code="83" value="s" shiftValue="S" />
-    <Key code="84" value="t" shiftValue="T" />
-    <Key code="85" value="u" shiftValue="U" />
-    <Key code="86" value="v" shiftValue="V" />
-    <Key code="87" value="w" shiftValue="W" />
-    <Key code="88" value="x" shiftValue="X" />
-    <Key code="89" value="z" shiftValue="Z" />
-    <Key code="90" value="y" shiftValue="Y" />
+    <!-- W -->
+    <Key code="51" value="w" shiftValue="W">
+        <Alt value="/" />
+        <Alt value="\\" />
+    </Key>
 
-    <Key code="196" value="ä" shiftValue="Ä" />
-    <Key code="214" value="ö" shiftValue="Ö" />
-    <Key code="220" value="ü" shiftValue="Ü" />
-    <Key code="223" value="ß" shiftValue="ẞ" />
+    <!-- E -->
+    <Key code="33" value="e" shiftValue="E">
+        <Alt value="_" />
+    </Key>
 
+    <!-- R -->
+    <Key code="46" value="r" shiftValue="R">
+        <Alt value="-" />
+        <Alt value="~" />
+    </Key>
+
+    <!-- T -->
+    <Key code="48" value="t" shiftValue="T">
+        <Alt value="(" />
+        <Alt value="{" />
+        <Alt value="[" />
+        <Alt value="&lt;" />
+    </Key>
+
+    <!-- Y - QWERTY, NOT QWERTZ -->
+    <Key code="53" value="y" shiftValue="Y">
+        <Alt value=")" />
+        <Alt value="}" />
+        <Alt value="]" />
+        <Alt value="&gt;" />
+    </Key>
+
+    <!-- U -->
+    <Key code="49" value="u" shiftValue="U">
+        <Alt value="1" />
+        <Alt value="ü" />
+        <Alt value="Ü" />
+    </Key>
+
+    <!-- I -->
+    <Key code="37" value="i" shiftValue="I">
+        <Alt value="2" />
+    </Key>
+
+    <!-- O -->
+    <Key code="43" value="o" shiftValue="O">
+        <Alt value="3" />
+        <Alt value="ö" />
+        <Alt value="Ö" />
+    </Key>
+
+    <!-- P -->
+    <Key code="44" value="p" shiftValue="P">
+        <Alt value="0" />
+    </Key>
+
+    <!-- A -->
+    <Key code="29" value="a" shiftValue="A">
+        <Alt value="@" />
+        <Alt value="&amp;" />
+        <Alt value="$" />
+        <Alt value="€" />
+        <Alt value="¥" />
+        <Alt value="ä" />
+        <Alt value="Ä" />
+    </Key>
+
+    <!-- S -->
+    <Key code="47" value="s" shiftValue="S">
+        <Alt value="&apos;" />
+        <Alt value="`" />
+        <Alt value="^" />
+        <Alt value="ß" />
+        <Alt value="ẞ" />
+    </Key>
+
+    <!-- D -->
+    <Key code="32" value="d" shiftValue="D">
+        <Alt value="&quot;" />
+        <Alt value="«" />
+        <Alt value="»" />
+    </Key>
+
+    <!-- F -->
+    <Key code="34" value="f" shiftValue="F">
+        <Alt value="+" />
+        <Alt value="±" />
+    </Key>
+
+    <!-- G -->
+    <Key code="35" value="g" shiftValue="G">
+        <Alt value="*" />
+        <Alt value="=" />
+        <Alt value="≈" />
+    </Key>
+
+    <!-- H -->
+    <Key code="36" value="h" shiftValue="H">
+        <Alt value="#" />
+        <Alt value="№" />
+        <Alt value="%" />
+    </Key>
+
+    <!-- J -->
+    <Key code="38" value="j" shiftValue="J">
+        <Alt value="4" />
+    </Key>
+
+    <!-- K -->
+    <Key code="39" value="k" shiftValue="K">
+        <Alt value="5" />
+    </Key>
+
+    <!-- L -->
+    <Key code="40" value="l" shiftValue="L">
+        <Alt value="6" />
+    </Key>
+
+    <!-- Z - QWERTY, NOT QWERTZ -->
+    <Key code="54" value="z" shiftValue="Z">
+        <Alt value="!" />
+    </Key>
+
+    <!-- X -->
+    <Key code="52" value="x" shiftValue="X">
+        <Alt value="?" />
+    </Key>
+
+    <!-- C -->
+    <Key code="31" value="c" shiftValue="C">
+        <Alt value="," />
+    </Key>
+
+    <!-- V -->
+    <Key code="50" value="v" shiftValue="V">
+        <Alt value="." />
+    </Key>
+
+    <!-- B -->
+    <Key code="30" value="b" shiftValue="B">
+        <Alt value="7" />
+    </Key>
+
+    <!-- N -->
+    <Key code="42" value="n" shiftValue="N">
+        <Alt value="8" />
+    </Key>
+
+    <!-- M -->
+    <Key code="41" value="m" shiftValue="M">
+        <Alt value="9" />
+    </Key>
 </KeyboardMapping>
