@@ -1,1178 +1,832 @@
-package com.sinux.pocketboard.input.handler;
+package com.sinux.pocketboard.input;
 
-import android.os.SystemClock;
+import android.content.Context;
+import android.os.Build;
 import android.text.TextUtils;
-import android.view.KeyEvent;
+import android.view.View;
+import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputConnection;
-import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.InlineSuggestion;
 import android.view.inputmethod.InputMethodSubtype;
+import android.view.textservice.SentenceSuggestionsInfo;
+import android.view.textservice.SpellCheckerSession;
+import android.view.textservice.SuggestionsInfo;
+import android.view.textservice.TextInfo;
+import android.view.textservice.TextServicesManager;
+
+import androidx.annotation.RequiresApi;
 
 import com.sinux.pocketboard.PocketBoardIME;
 import com.sinux.pocketboard.R;
-import com.sinux.pocketboard.input.mapping.KeyMapping;
-import com.sinux.pocketboard.input.mapping.KeyboardMappingManager;
+import com.sinux.pocketboard.input.handler.KeyboardInputHandler;
 import com.sinux.pocketboard.preferences.PreferencesHolder;
-import com.sinux.pocketboard.utils.CharacterUtils;
+import com.sinux.pocketboard.spellchecker.DictionaryManager;
+import com.sinux.pocketboard.ui.InputView;
+import com.sinux.pocketboard.ui.SuggestionView;
 import com.sinux.pocketboard.utils.InputUtils;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-public class KeyboardInputHandler {
+public class SuggestionsManager
+        implements SuggestionView.OnClickListener,
+        SpellCheckerSession.SpellCheckerSessionListener {
+
+    private static final String AOSP_SPELLCHECKER_PACKAGE =
+            "com.android.inputmethod.latin";
+
+    private static final String AOSP_SPELLCHECKER_PACKAGE_OPENBOARD =
+            "org.dslul.openboard.inputmethod.latin";
 
     private final PocketBoardIME pocketBoardIME;
-    private final InputMethodManager inputMethodManager;
     private final PreferencesHolder preferencesHolder;
-    private final KeyboardMappingManager keyboardMappingManager;
+    private final KeyboardInputHandler keyboardInputHandler;
 
-    private final StringBuilder textComposer;
-    private final String nonLetterOrDigitExclusions;
-    private final int wordLookupLength;
-    private final long keyLongPressDuration;
-    private final int layoutChangeShortcutEventRepeatCount;
+    private final DictionaryManager dictionaryManager;
 
-    private final MultipressController multipressController;
+    private final int suggestionsCount;
 
-    private boolean composingEnabled;
-    private boolean numericInputMode;
-    private boolean layoutChangeShortcut;
-    private boolean doubleSpacePeriod;
-    private boolean dictShortcuts;
-    private boolean autocorrection;
+    private final List<CharSequence> dictionarySuggestions;
+    private final List<CharSequence> spellcheckerSuggestions;
 
-    private CharSequence currentSelectedText;
-    private byte keyIterationCounter;
-    private long lastKeyDownTime;
-    private int lastKeyCode;
-    private boolean lastShiftEnabled;
-    private boolean lastAltEnabled;
-    private int lastCursorPosition;
+    private InputView inputView;
+    private SpellCheckerSession spellCheckerSession;
 
-    private final List<String> rawInputEditors;
-    private boolean rawInputMode;
+    private boolean dictionarySuggestionsAllowed;
+    private boolean spellcheckerSuggestionsAllowed;
 
-    public KeyboardInputHandler(PocketBoardIME pocketBoardIME) {
+    private boolean aospSpellchecker;
+
+    private boolean hasRecommendedSpellcheckerSuggestion;
+
+    private CharSequence lastRecommendedSuggestion;
+
+    private boolean isPaused;
+
+    /*
+     * This always represents the language of the CURRENT
+     * keyboard subtype.
+     *
+     * en-US -> en
+     * es-AR -> es-AR
+     * de-DE -> de
+     */
+    private String currentLanguageTag = "en";
+
+    public SuggestionsManager(
+            PocketBoardIME pocketBoardIME,
+            KeyboardInputHandler keyboardInputHandler) {
 
         this.pocketBoardIME = pocketBoardIME;
-
-        this.inputMethodManager =
-                pocketBoardIME.getInputMethodManager();
 
         this.preferencesHolder =
                 pocketBoardIME.getPreferencesHolder();
 
-        keyboardMappingManager =
-                new KeyboardMappingManager(
-                        pocketBoardIME,
-                        inputMethodManager
-                );
+        this.keyboardInputHandler =
+                keyboardInputHandler;
 
-        textComposer = new StringBuilder();
+        dictionaryManager =
+                new DictionaryManager(pocketBoardIME);
 
-        nonLetterOrDigitExclusions =
-                pocketBoardIME.getResources()
-                        .getString(
-                                R.string.non_letter_or_digit_exclusions
-                        );
+        suggestionsCount =
+                pocketBoardIME
+                        .getResources()
+                        .getInteger(R.integer.suggestions_count);
 
-        wordLookupLength =
-                pocketBoardIME.getResources()
-                        .getInteger(
-                                R.integer.word_lookup_length
-                        );
+        dictionarySuggestions =
+                new ArrayList<>(suggestionsCount);
 
-        keyLongPressDuration =
-                preferencesHolder.getLongKeyPressDuration();
+        spellcheckerSuggestions =
+                new ArrayList<>(suggestionsCount);
+    }
 
-        layoutChangeShortcutEventRepeatCount =
-                pocketBoardIME.getResources()
-                        .getInteger(
-                                R.integer.layout_change_shortcut_event_repeat_count
-                        );
-
-        rawInputEditors =
-                Arrays.asList(
-                        pocketBoardIME.getResources()
-                                .getStringArray(
-                                        R.array.raw_input_editors
-                                )
-                );
-
-        multipressController =
-                new MultipressController();
+    public void setInputView(InputView inputView) {
+        this.inputView = inputView;
     }
 
     public void onStartInput(
             EditorInfo attribute,
-            boolean suggestionsAllowed,
-            int cursorPosition) {
+            InputMethodSubtype currentInputMethodSubtype) {
 
-        rawInputMode =
-                rawInputEditors.contains(
-                        attribute.packageName
+        disallowSuggestions();
+
+        /*
+         * Resolve the language BEFORE creating the spellchecker
+         * session so both use exactly the same subtype language.
+         */
+        updateCurrentLanguage(
+                currentInputMethodSubtype
+        );
+
+        boolean suggestionAllowedEditor =
+                InputUtils.isSuggestionAllowedEditor(attribute)
+                        && !InputUtils.isNumericEditor(attribute);
+
+        boolean suggestionsPanelVisible =
+                pocketBoardIME.isShouldShowIme()
+                        && preferencesHolder.isShowSuggestionsEnabled();
+
+        dictionarySuggestionsAllowed =
+                suggestionAllowedEditor
+                        && (
+                        suggestionsPanelVisible
+                                || preferencesHolder.isDictShortcutsEnabled()
                 );
 
-        composingEnabled =
-                suggestionsAllowed
-                        && !rawInputMode;
+        spellcheckerSuggestionsAllowed =
+                suggestionAllowedEditor
+                        && (
+                        suggestionsPanelVisible
+                                || preferencesHolder.isAutoCorrectionEnabled()
+                )
+                        && startSpellCheckerSession(
+                        currentInputMethodSubtype
+                );
+    }
 
-        if (InputUtils.isNumericEditor(attribute)) {
+    public void onStartInputView(
+            InputMethodSubtype currentInputMethodSubtype) {
 
-            numericInputMode = true;
+        updateCurrentLanguage(
+                currentInputMethodSubtype
+        );
 
-            keyboardMappingManager
-                    .switchToNumericKeyboardMapping();
+        if (spellcheckerSuggestionsAllowed
+                && spellCheckerSession == null) {
 
-        } else {
-
-            numericInputMode = false;
-
-            keyboardMappingManager
-                    .switchToKeyboardMapping(
-                            inputMethodManager
-                                    .getCurrentInputMethodSubtype()
+            spellcheckerSuggestionsAllowed =
+                    startSpellCheckerSession(
+                            currentInputMethodSubtype
                     );
         }
-
-        layoutChangeShortcut =
-                preferencesHolder
-                        .isLayoutChangeShortcutEnabled();
-
-        doubleSpacePeriod =
-                preferencesHolder
-                        .isDoubleSpacePeriodEnabled();
-
-        dictShortcuts =
-                composingEnabled
-                        && preferencesHolder
-                        .isDictShortcutsEnabled();
-
-        autocorrection =
-                composingEnabled
-                        && preferencesHolder
-                        .isAutoCorrectionEnabled();
-
-        textComposer.setLength(0);
-        currentSelectedText = "";
-
-        multipressController.reset();
-
-        keyIterationCounter = 0;
-        lastKeyDownTime = 0;
-        lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
-        lastShiftEnabled = false;
-        lastAltEnabled = false;
-
-        lastCursorPosition = cursorPosition;
     }
 
     public void onFinishInput() {
-
-        textComposer.setLength(0);
-        currentSelectedText = "";
-
-        multipressController.reset();
-
-        keyIterationCounter = 0;
-        lastKeyDownTime = 0;
-        lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
-        lastShiftEnabled = false;
-        lastAltEnabled = false;
+        closeSpellCheckerSession();
     }
 
-    public void onUpdateSelection(
-            InputConnection inputConnection,
-            int newSelStart,
-            int newSelEnd,
-            int candidatesEnd) {
+    public void disallowSuggestions() {
 
-        if (composingEnabled) {
+        clear();
 
-            currentSelectedText = "";
+        closeSpellCheckerSession();
 
-            if (textComposer.length() > 0
-                    && (
-                    newSelStart != candidatesEnd
-                            || newSelEnd != candidatesEnd
-            )) {
+        dictionarySuggestionsAllowed = false;
+        spellcheckerSuggestionsAllowed = false;
+    }
 
-                textComposer.setLength(0);
+    public boolean isSuggestionsAllowed() {
 
-                if (inputConnection != null) {
-                    inputConnection.finishComposingText();
+        return spellcheckerSuggestionsAllowed
+                || dictionarySuggestionsAllowed;
+    }
+
+    public void clear() {
+
+        dictionarySuggestions.clear();
+        spellcheckerSuggestions.clear();
+
+        hasRecommendedSpellcheckerSuggestion = false;
+        lastRecommendedSuggestion = null;
+
+        showSuggestions();
+    }
+
+    public void update() {
+
+        if (isPaused) {
+            return;
+        }
+
+        CharSequence composing =
+                keyboardInputHandler
+                        .getCurrentComposingText();
+
+        if (TextUtils.isEmpty(composing)) {
+
+            clear();
+
+            return;
+        }
+
+        String composingText =
+                composing.toString();
+
+        /*
+         * =========================================================
+         * POCKETBOARD INTERNAL DICTIONARY
+         * =========================================================
+         *
+         * Uses the SAME language selected by the keyboard subtype.
+         */
+        if (dictionarySuggestionsAllowed) {
+
+            updateDictionarySuggestions(
+                    composingText
+            );
+        }
+
+        /*
+         * =========================================================
+         * SYSTEM SPELLCHECKER
+         * =========================================================
+         */
+        if (spellcheckerSuggestionsAllowed
+                && spellCheckerSession != null
+                && !spellCheckerSession.isSessionDisconnected()) {
+
+            String spellText =
+                    composingText;
+
+            /*
+             * AOSP/OpenBoard workaround.
+             */
+            if (aospSpellchecker) {
+                spellText += "#";
+            }
+
+            TextInfo[] textInfos = {
+                    new TextInfo(
+                            spellText,
+                            0,
+                            spellText.length(),
+                            0,
+                            0
+                    )
+            };
+
+            spellCheckerSession
+                    .getSentenceSuggestions(
+                            textInfos,
+                            suggestionsCount
+                    );
+        }
+
+        showSuggestions();
+    }
+
+    public void update(CompletionInfo[] completions) {
+
+        if (isPaused) {
+            return;
+        }
+
+        if (completions != null) {
+
+            spellcheckerSuggestions.clear();
+
+            hasRecommendedSpellcheckerSuggestion =
+                    false;
+
+            for (
+                    int i = 0;
+                    i < completions.length
+                            && i < suggestionsCount;
+                    i++
+            ) {
+
+                if (!TextUtils.isEmpty(
+                        completions[i].getText()
+                )) {
+
+                    spellcheckerSuggestions.add(
+                            completions[i]
+                                    .getText()
+                                    .toString()
+                    );
                 }
-
-                multipressController.reset();
-
-            } else if (newSelStart != newSelEnd
-                    && inputConnection != null) {
-
-                currentSelectedText =
-                        inputConnection.getSelectedText(0);
             }
         }
 
-        lastCursorPosition =
-                Math.min(
-                        newSelStart,
-                        newSelEnd
+        showSuggestions();
+    }
+
+    private void updateDictionarySuggestions(
+            String composingText) {
+
+        dictionarySuggestions.clear();
+
+        if (TextUtils.isEmpty(composingText)) {
+            return;
+        }
+
+        List<String> suggestions =
+                dictionaryManager.getSuggestions(
+                        composingText,
+                        currentLanguageTag,
+                        suggestionsCount
                 );
+
+        if (suggestions != null) {
+
+            dictionarySuggestions.addAll(
+                    suggestions
+            );
+        }
+
+        showSuggestions();
+    }
+
+    public CharSequence getCurrentDictSuggestion() {
+
+        if (!dictionarySuggestions.isEmpty()) {
+            return dictionarySuggestions.get(0);
+        }
+
+        return null;
+    }
+
+    public CharSequence getCurrentSpellcheckerRecommendedSuggestion() {
+
+        if (hasRecommendedSpellcheckerSuggestion
+                && !spellcheckerSuggestions.isEmpty()) {
+
+            lastRecommendedSuggestion =
+                    spellcheckerSuggestions.get(0);
+
+            return lastRecommendedSuggestion;
+        }
+
+        return null;
     }
 
     public void onInputMethodSubtypeChanged(
-            InputMethodSubtype inputMethodSubtype,
-            boolean suggestionsAllowed) {
+            InputMethodSubtype inputMethodSubtype) {
 
-        if (composingEnabled) {
+        /*
+         * The language changed.
+         *
+         * Close the old session BEFORE creating the new one.
+         */
+        closeSpellCheckerSession();
 
-            InputConnection inputConnection =
-                    pocketBoardIME
-                            .getCurrentInputConnection();
-
-            if (inputConnection != null) {
-                commitComposingText(
-                        inputConnection
-                );
-            }
-        }
-
-        composingEnabled =
-                suggestionsAllowed;
-
-        multipressController.reset();
-
-        keyboardMappingManager
-                .switchToKeyboardMapping(
-                        inputMethodSubtype
-                );
-    }
-
-    public CharSequence getCurrentComposingText() {
-
-        if (!TextUtils.isEmpty(textComposer)) {
-            return textComposer;
-        }
-
-        return currentSelectedText;
-    }
-
-    public boolean isInRawInputMode() {
-        return rawInputMode;
-    }
-
-    public void resetComposing(
-            InputConnection inputConnection) {
-
-        if (inputConnection == null) {
-
-            textComposer.setLength(0);
-            multipressController.reset();
-
-            return;
-        }
-
-        if (textComposer.length() > 0) {
-
-            textComposer.setLength(0);
-
-            inputConnection.finishComposingText();
-        }
-
-        multipressController.reset();
-        keyIterationCounter = 0;
-    }
-
-    public void commitEmoji(CharSequence emoji) {
-
-        if (emoji == null) {
-            return;
-        }
-
-        InputConnection inputConnection =
-                pocketBoardIME
-                        .getCurrentInputConnection();
-
-        if (inputConnection == null) {
-            return;
-        }
-
-        if (composingEnabled) {
-            commitComposingText(
-                    inputConnection
-            );
-        }
-
-        inputConnection.commitText(
-                emoji,
-                1
+        /*
+         * Update the internal dictionary language first.
+         */
+        updateCurrentLanguage(
+                inputMethodSubtype
         );
 
-        multipressController.reset();
-        keyIterationCounter = 0;
+        /*
+         * Recreate the spellchecker session using the NEW
+         * keyboard subtype language.
+         */
+        if (spellcheckerSuggestionsAllowed) {
+
+            spellcheckerSuggestionsAllowed =
+                    startSpellCheckerSession(
+                            inputMethodSubtype
+                    );
+        }
+
+        clear();
+
+        update();
     }
 
-    public void applySuggestion(
-            CharSequence text,
-            InputConnection inputConnection,
-            boolean appendSpace) {
+    @Override
+    public void onClick(View v) {
 
-        if (inputConnection == null
-                || TextUtils.isEmpty(text)) {
+        if (v instanceof SuggestionView) {
+
+            applySuggestion(
+                    ((SuggestionView) v).getText()
+            );
+        }
+    }
+
+    @Override
+    public void onGetSuggestions(
+            SuggestionsInfo[] results) {
+    }
+
+    @Override
+    public void onGetSentenceSuggestions(
+            SentenceSuggestionsInfo[] results) {
+
+        if (!spellcheckerSuggestionsAllowed) {
             return;
         }
 
-        if (composingEnabled) {
-
-            textComposer.setLength(0);
-            textComposer.append(text);
-
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-            if (appendSpace) {
-
-                textComposer.append(' ');
-
-                inputConnection.commitText(
-                        textComposer,
-                        1
-                );
-
-                textComposer.setLength(0);
-
-                lastKeyDownTime =
-                        SystemClock.uptimeMillis();
-
-            } else {
-
-                commitComposingText(
-                        inputConnection
-                );
-            }
-
-        } else {
-
-            inputConnection.commitText(
-                    text,
-                    1
-            );
+        if (results == null) {
+            return;
         }
 
-        multipressController.reset();
-        keyIterationCounter = 0;
-    }
+        List<CharSequence> tempSuggestions =
+                new ArrayList<>(suggestionsCount);
 
-    public boolean handleKeyDown(
-            int keyCode,
-            KeyEvent event,
-            InputConnection inputConnection,
-            boolean shiftEnabled,
-            boolean altEnabled) {
+        boolean hasRecommended = false;
 
-        long eventTime =
-                event.getEventTime();
+        for (SentenceSuggestionsInfo ssi : results) {
 
-        if (keyCode == KeyEvent.KEYCODE_DEL) {
+            if (ssi == null) {
+                continue;
+            }
 
-            multipressController.reset();
+            for (
+                    int i = 0;
+                    i < ssi.getSuggestionsCount();
+                    i++
+            ) {
 
-            if (!composingEnabled
-                    || event.getRepeatCount() == 0) {
+                SuggestionsInfo si =
+                        ssi.getSuggestionsInfoAt(i);
 
-                handleBackspace(
-                        inputConnection
-                );
+                if (si == null) {
+                    continue;
+                }
 
-                lastKeyDownTime = eventTime;
-                lastKeyCode = keyCode;
+                hasRecommended |=
+                        (
+                                si.getSuggestionsAttributes()
+                                        & SuggestionsInfo
+                                        .RESULT_ATTR_HAS_RECOMMENDED_SUGGESTIONS
+                        ) != 0;
 
-            } else {
+                for (
+                        int j = 0;
+                        j < si.getSuggestionsCount();
+                        j++
+                ) {
 
-                if (eventTime - lastKeyDownTime
-                        > keyLongPressDuration) {
+                    String suggestion =
+                            si.getSuggestionAt(j);
 
-                    handleBackspace(
-                            inputConnection
-                    );
+                    if (!TextUtils.isEmpty(
+                            suggestion
+                    )) {
 
-                    boolean hadComposingText =
-                            textComposer.length() > 0;
-
-                    inputConnection.beginBatchEdit();
-
-                    textComposer.setLength(0);
-
-                    inputConnection.commitText(
-                            "",
-                            1
-                    );
-
-                    inputConnection.endBatchEdit();
-
-                    if (hadComposingText) {
-                        lastKeyDownTime =
-                                eventTime;
+                        tempSuggestions.add(
+                                suggestion
+                        );
                     }
                 }
             }
-
-            notifySuggestions();
-
-            return true;
         }
 
-        if (keyCode == KeyEvent.KEYCODE_SPACE) {
+        if (!tempSuggestions.isEmpty()) {
 
-            multipressController.reset();
+            spellcheckerSuggestions.clear();
 
-            handleSpace(
-                    inputConnection,
-                    eventTime,
-                    event.getRepeatCount()
+            spellcheckerSuggestions.addAll(
+                    tempSuggestions
             );
 
-            lastKeyDownTime = eventTime;
-            lastKeyCode = keyCode;
+            if (hasRecommended
+                    && lastRecommendedSuggestion != null
+                    && lastRecommendedSuggestion.equals(
+                    tempSuggestions.get(0)
+            )) {
 
-            notifySuggestions();
+                hasRecommendedSpellcheckerSuggestion =
+                        false;
 
-            return true;
+            } else {
+
+                hasRecommendedSpellcheckerSuggestion =
+                        hasRecommended;
+            }
+
+            showSuggestions();
         }
+    }
 
-        if (event.getUnicodeChar() == 0) {
+    @RequiresApi(Build.VERSION_CODES.R)
+    public boolean showInlineSuggestions(
+            List<InlineSuggestion> inlineSuggestions) {
+
+        if (inputView != null) {
+
+            return inputView.setInlineSuggestions(
+                    inlineSuggestions
+            );
+
+        } else {
+
             return false;
         }
+    }
 
-        if (handleCharacter(
-                keyCode,
-                event,
-                inputConnection,
-                shiftEnabled,
-                altEnabled,
-                eventTime)) {
+    public boolean isInlineSuggestionsShown() {
 
-            lastKeyDownTime = eventTime;
-            lastKeyCode = keyCode;
-
-            /*
-             * This is important.
-             *
-             * Every character typed updates the suggestion
-             * engine immediately.
-             */
-            notifySuggestions();
-
-            return true;
+        if (inputView != null) {
+            return inputView.isInlineSuggestionsShown();
         }
 
         return false;
     }
 
-    public boolean handleKeyUp(
-            int keyCode,
-            KeyEvent event) {
+    public void cancelInlineSuggestions() {
 
-        if (keyCode == KeyEvent.KEYCODE_DEL
-                || keyCode == KeyEvent.KEYCODE_SPACE) {
-            return true;
-        }
-
-        if (event.getUnicodeChar() == 0) {
-            return false;
-        }
-
-        KeyMapping keyMapping =
-                keyboardMappingManager
-                        .getCurrentMapping()
-                        .getKeyMapping(keyCode);
-
-        return keyMapping != null;
-    }
-
-    private void notifySuggestions() {
-
-        if (composingEnabled
-                && pocketBoardIME
-                .getSuggestionsManager() != null) {
-
-            pocketBoardIME
-                    .getSuggestionsManager()
-                    .update();
+        if (inputView != null) {
+            inputView.cancelInlineSuggestions();
         }
     }
 
-    private void handleBackspace(
-            InputConnection inputConnection) {
+    public void pause() {
 
-        if (composingEnabled) {
+        isPaused = true;
 
-            int composingLength =
-                    textComposer.length();
-
-            if (composingLength > 1) {
-
-                textComposer.setLength(
-                        textComposer.length()
-                                - CharacterUtils
-                                .getLastCharacterLength(
-                                        textComposer
-                                )
-                );
-
-                inputConnection.setComposingText(
-                        textComposer,
-                        1
-                );
-
-            } else if (composingLength > 0) {
-
-                textComposer.setLength(0);
-
-                inputConnection.commitText(
-                        "",
-                        1
-                );
-
-            } else {
-
-                inputConnection.beginBatchEdit();
-
-                deleteLastCharacter(
-                        inputConnection
-                );
-
-                findAndComposeLastWord(
-                        inputConnection
-                );
-
-                inputConnection.endBatchEdit();
-            }
-
-        } else {
-
-            deleteLastCharacter(
-                    inputConnection
-            );
-        }
+        clear();
     }
 
-    private void deleteLastCharacter(
-            InputConnection inputConnection) {
+    public void resume() {
 
-        if (rawInputMode) {
+        isPaused = false;
 
-            pocketBoardIME.sendDownUpKeyEvents(
-                    KeyEvent.KEYCODE_DEL
-            );
-
-            return;
-        }
-
-        if (TextUtils.isEmpty(
-                inputConnection.getSelectedText(0))) {
-
-            CharSequence str =
-                    inputConnection.getTextBeforeCursor(
-                            wordLookupLength,
-                            0
-                    );
-
-            if (!TextUtils.isEmpty(str)) {
-
-                int beforeLength =
-                        CharacterUtils
-                                .getLastCharacterLength(
-                                        str
-                                );
-
-                inputConnection.deleteSurroundingText(
-                        beforeLength,
-                        0
-                );
-
-                lastCursorPosition -=
-                        beforeLength;
-            }
-
-        } else {
-
-            inputConnection.commitText(
-                    "",
-                    1
-            );
-        }
+        update();
     }
 
-    private void findAndComposeLastWord(
-            InputConnection inputConnection) {
+    private void showSuggestions() {
 
-        CharSequence str =
-                inputConnection.getTextBeforeCursor(
-                        wordLookupLength,
-                        0
-                );
-
-        if (!TextUtils.isEmpty(str)) {
-
-            int regionStart =
-                    CharacterUtils
-                            .getLastWordStartIndex(
-                                    str,
-                                    nonLetterOrDigitExclusions
-                            );
-
-            int regionEnd =
-                    str.length();
-
-            if (regionStart != regionEnd) {
-
-                textComposer.append(
-                        str.subSequence(
-                                regionStart,
-                                regionEnd
-                        )
-                );
-
-                int composingLength =
-                        textComposer.length();
-
-                inputConnection.finishComposingText();
-
-                inputConnection.setComposingRegion(
-                        lastCursorPosition
-                                - composingLength,
-                        lastCursorPosition
-                );
-            }
-        }
-    }
-
-    private void handleSpace(
-            InputConnection inputConnection,
-            long eventTime,
-            int eventRepeatCount) {
-
-        if (layoutChangeShortcut) {
-
-            if (eventRepeatCount ==
-                    layoutChangeShortcutEventRepeatCount) {
-
-                handleBackspace(
-                        inputConnection
-                );
-
-                pocketBoardIME
-                        .switchToNextInputMethod(
-                                true
-                        );
-
-                return;
-
-            } else if (eventRepeatCount > 0) {
-
-                return;
-            }
-        }
-
-        if (doubleSpacePeriod
-                && eventTime - lastKeyDownTime
-                <= keyLongPressDuration) {
-
-            if (composingEnabled) {
-
-                if (!handleDictAndAutocorrection()) {
-                    commitComposingText(
-                            inputConnection
-                    );
-                }
-            }
-
-            CharSequence lastChars =
-                    inputConnection
-                            .getTextBeforeCursor(
-                                    3,
-                                    0
-                            );
-
-            if (CharacterUtils
-                    .isLetterOrDigitAndSpace(
-                            lastChars
-                    )) {
-
-                inputConnection.beginBatchEdit();
-
-                inputConnection.deleteSurroundingText(
-                        1,
-                        0
-                );
-
-                inputConnection.commitText(
-                        ". ",
-                        1
-                );
-
-                inputConnection.endBatchEdit();
-
-            } else {
-
-                inputConnection.commitText(
-                        " ",
-                        1
-                );
-            }
-
-        } else {
-
-            if (composingEnabled) {
-
-                if (!handleDictAndAutocorrection()) {
-                    commitComposingText(
-                            inputConnection
-                    );
-                }
-            }
-
-            inputConnection.commitText(
-                    " ",
-                    1
-            );
-        }
-    }
-
-    private boolean handleCharacter(
-            int keyCode,
-            KeyEvent event,
-            InputConnection inputConnection,
-            boolean shiftEnabled,
-            boolean altEnabled,
-            long eventTime) {
-
-        if (event.getRepeatCount() == 0) {
-
-            KeyMapping keyMapping =
-                    keyboardMappingManager
-                            .getCurrentMapping()
-                            .getKeyMapping(
-                                    keyCode
-                            );
-
-            if (keyMapping == null) {
-
-                multipressController.reset();
-
-                return false;
-            }
-
-            boolean isMultipress =
-                    multipressController
-                            .process(event);
-
-            /*
-             * =====================================================
-             * DOUBLE PRESS ACCENT MODE
-             *
-             * N -> n
-             * N N -> ñ
-             *
-             * Shift + N N -> Ñ
-             * =====================================================
-             */
-            if (!numericInputMode
-                    && !altEnabled
-                    && isSpanishAccentKey(keyCode)
-                    && isMultipress) {
-
-                int character;
-
-                if (shiftEnabled) {
-
-                    character =
-                            keyMapping.getValue(
-                                    false,
-                                    true,
-                                    (byte) 2
-                            );
-
-                } else {
-
-                    character =
-                            keyMapping.getValue(
-                                    false,
-                                    true,
-                                    (byte) 1
-                            );
-                }
-
-                replaceLastCharacter(
-                        inputConnection,
-                        character
-                );
-
-                keyIterationCounter = 0;
-
-                return true;
-            }
-
-            boolean isNewKey =
-                    lastKeyCode != keyCode;
-
-            boolean isShortPress =
-                    eventTime - lastKeyDownTime
-                            <= keyLongPressDuration;
-
-            boolean keyIterationModeEnabled;
-
-            if (keyMapping.hasAdditionalValues(
-                    lastAltEnabled
-            )
-                    && !isNewKey
-                    && isShortPress
-                    && isMultipress) {
-
-                keyIterationModeEnabled = true;
-                keyIterationCounter++;
-
-            } else {
-
-                keyIterationModeEnabled = false;
-                keyIterationCounter = 0;
-
-                lastShiftEnabled =
-                        shiftEnabled;
-
-                lastAltEnabled =
-                        altEnabled;
-            }
-
-            if (!keyIterationModeEnabled
-                    || numericInputMode) {
-
-                printNextCharacter(
-                        inputConnection,
-                        keyMapping.getValue(
-                                lastShiftEnabled,
-                                lastAltEnabled,
-                                keyIterationCounter
-                        )
-                );
-
-            } else {
-
-                replaceLastCharacter(
-                        inputConnection,
-                        keyMapping.getValue(
-                                lastShiftEnabled,
-                                lastAltEnabled,
-                                keyIterationCounter
-                        )
-                );
-            }
-
-            return true;
-        }
-
-        /*
-         * LONG PRESS
-         */
-        if (!numericInputMode
-                && !lastAltEnabled
-                && eventTime - lastKeyDownTime
-                > keyLongPressDuration) {
-
-            multipressController.markLongPress();
-
-            lastAltEnabled = true;
-            keyIterationCounter = 0;
-
-            KeyMapping keyMapping =
-                    keyboardMappingManager
-                            .getCurrentMapping()
-                            .getKeyMapping(
-                                    keyCode
-                            );
-
-            if (keyMapping == null) {
-                return false;
-            }
-
-            replaceLastCharacter(
-                    inputConnection,
-                    keyMapping.getValue(
-                            lastShiftEnabled,
-                            lastAltEnabled,
-                            (byte) 0
-                    )
-            );
-
-            lastKeyDownTime = eventTime;
-
-            return true;
-        }
-
-        return false;
-    }
-
-    private boolean isSpanishAccentKey(
-            int keyCode) {
-
-        return keyCode == KeyEvent.KEYCODE_A
-                || keyCode == KeyEvent.KEYCODE_E
-                || keyCode == KeyEvent.KEYCODE_I
-                || keyCode == KeyEvent.KEYCODE_O
-                || keyCode == KeyEvent.KEYCODE_U
-                || keyCode == KeyEvent.KEYCODE_N;
-    }
-
-    private void printNextCharacter(
-            InputConnection inputConnection,
-            int character) {
-
-        if (composingEnabled) {
-
-            composeNewCharacter(
-                    inputConnection,
-                    character
-            );
-
-        } else {
-
-            inputConnection.commitText(
-                    String.valueOf(
-                            (char) character
-                    ),
-                    1
-            );
-        }
-    }
-
-    private void composeNewCharacter(
-            InputConnection inputConnection,
-            int character) {
-
-        if (inputConnection == null) {
+        if (inputView == null) {
             return;
         }
 
         /*
-         * Always keep the current word composing when
-         * suggestions/autocorrection are enabled.
-         *
-         * This allows the SpellChecker to see:
-         *
-         *   h
-         *   he
-         *   hel
-         *   hell
-         *   hello
+         * Dictionary suggestions come first.
          */
-        if (textComposer.length() == 0) {
+        List<CharSequence> merged =
+                Stream.concat(
+                        dictionarySuggestions.stream(),
+                        spellcheckerSuggestions.stream()
+                )
+                .distinct()
+                .limit(3)
+                .collect(Collectors.toList());
 
-            textComposer.append(
-                    (char) character
-            );
+        boolean hasRecommended =
+                !dictionarySuggestions.isEmpty()
+                        || hasRecommendedSpellcheckerSuggestion;
 
-        } else {
-
-            textComposer.append(
-                    (char) character
-            );
-        }
-
-        inputConnection.setComposingText(
-                textComposer,
-                1
+        inputView.setSuggestions(
+                merged,
+                hasRecommended
         );
+    }
+
+    private void applySuggestion(
+            CharSequence text) {
+
+        if (isPaused) {
+            return;
+        }
+
+        if (!TextUtils.isEmpty(text)) {
+
+            keyboardInputHandler.applySuggestion(
+                    text,
+                    pocketBoardIME
+                            .getCurrentInputConnection(),
+                    true
+            );
+        }
     }
 
     /**
-     * Replaces ONLY the character currently represented
-     * by the keyboard handler.
+     * Reads the language from the CURRENT keyboard subtype.
      *
-     * N -> n
-     * N N -> ñ
+     * Supported PocketBoard languages:
+     *
+     * en-US / en-* -> en
+     * es-AR / es-* -> es-AR
+     * de-DE / de-* -> de
      */
-    private void replaceLastCharacter(
-            InputConnection inputConnection,
-            int character) {
+    private void updateCurrentLanguage(
+            InputMethodSubtype subtype) {
 
-        if (inputConnection == null) {
-            return;
-        }
-
-        if (textComposer.length() > 0) {
-
-            textComposer.setLength(
-                    textComposer.length()
-                            - CharacterUtils
-                            .getLastCharacterLength(
-                                    textComposer
-                            )
-            );
-
-            textComposer.append(
-                    (char) character
-            );
-
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-            return;
-        }
-
-        CharSequence beforeCursor =
-                inputConnection.getTextBeforeCursor(
-                        2,
-                        0
+        currentLanguageTag =
+                normalizeDictionaryLanguage(
+                        getSubtypeLanguageTag(subtype)
                 );
-
-        if (!TextUtils.isEmpty(beforeCursor)) {
-
-            int lastCharacterLength =
-                    CharacterUtils
-                            .getLastCharacterLength(
-                                    beforeCursor
-                            );
-
-            inputConnection.deleteSurroundingText(
-                    lastCharacterLength,
-                    0
-            );
-
-            inputConnection.commitText(
-                    String.valueOf(
-                            (char) character
-                    ),
-                    1
-            );
-        }
     }
 
-    private void commitComposingText(
-            InputConnection inputConnection) {
+    /**
+     * Starts a spellchecker session using the EXACT language
+     * represented by the keyboard subtype.
+     */
+    private boolean startSpellCheckerSession(
+            InputMethodSubtype inputMethodSubtype) {
 
-        if (inputConnection == null) {
-            return;
-        }
-
-        if (textComposer.length() > 0) {
-
-            inputConnection.commitText(
-                    textComposer,
-                    1
-            );
-
-            textComposer.setLength(0);
-        }
-    }
-
-    private boolean handleDictAndAutocorrection() {
-
-        if (!composingEnabled
-                || textComposer.length() == 0) {
+        if (inputMethodSubtype == null) {
             return false;
         }
 
-        if (dictShortcuts
-                && handleDictShortcut()) {
-            return true;
-        }
-
-        if (autocorrection
-                && handleAutocorrection()) {
-            return true;
-        }
-
-        return false;
-    }
-
-    private boolean handleDictShortcut() {
-        return false;
-    }
-
-    private boolean handleAutocorrection() {
-        return false;
-    }
-
-    private void handleEnter(
-            InputConnection inputConnection) {
-
-        if (composingEnabled) {
-
-            if (!handleDictAndAutocorrection()) {
-
-                commitComposingText(
-                        inputConnection
+        String languageTag =
+                getSubtypeLanguageTag(
+                        inputMethodSubtype
                 );
-            }
+
+        Locale locale =
+                resolveSpellCheckerLocale(
+                        languageTag
+                );
+
+        /*
+         * Keep the internal dictionary synchronized with the
+         * same language used for the spellchecker.
+         */
+        currentLanguageTag =
+                normalizeDictionaryLanguage(
+                        locale.toLanguageTag()
+                );
+
+        TextServicesManager tsm =
+                (TextServicesManager)
+                        pocketBoardIME.getSystemService(
+                                Context.TEXT_SERVICES_MANAGER_SERVICE
+                        );
+
+        if (tsm == null) {
+            return false;
         }
 
-        inputConnection.sendKeyEvent(
-                new KeyEvent(
-                        KeyEvent.ACTION_DOWN,
-                        KeyEvent.KEYCODE_ENTER
-                )
-        );
+        /*
+         * Create the session using the resolved keyboard language.
+         */
+        spellCheckerSession =
+                tsm.newSpellCheckerSession(
+                        null,
+                        locale,
+                        this,
+                        false
+                );
 
-        inputConnection.sendKeyEvent(
-                new KeyEvent(
-                        KeyEvent.ACTION_UP,
-                        KeyEvent.KEYCODE_ENTER
-                )
-        );
+        if (spellCheckerSession == null) {
+            return false;
+        }
+
+        /*
+         * Detect AOSP/OpenBoard spellcheckers.
+         */
+        aospSpellchecker =
+                spellCheckerSession
+                        .getSpellChecker() != null
+                        && (
+                        AOSP_SPELLCHECKER_PACKAGE.equals(
+                                spellCheckerSession
+                                        .getSpellChecker()
+                                        .getPackageName()
+                        )
+                                ||
+                                AOSP_SPELLCHECKER_PACKAGE_OPENBOARD.equals(
+                                        spellCheckerSession
+                                                .getSpellChecker()
+                                                .getPackageName()
+                                )
+                );
+
+        return true;
     }
 
-    private void handleTab(
-            InputConnection inputConnection) {
+    /**
+     * Gets the language tag from the keyboard subtype.
+     *
+     * Android 11+:
+     *     getLanguageTag()
+     *
+     * Older/legacy subtype:
+     *     getLocale()
+     */
+    private String getSubtypeLanguageTag(
+            InputMethodSubtype subtype) {
 
-        if (composingEnabled) {
-
-            if (!handleDictAndAutocorrection()) {
-
-                commitComposingText(
-                        inputConnection
-                );
-            }
+        if (subtype == null) {
+            return "en";
         }
 
-        inputConnection.sendKeyEvent(
-                new KeyEvent(
-                        KeyEvent.ACTION_DOWN,
-                        KeyEvent.KEYCODE_TAB
-                )
-        );
+        String languageTag =
+                subtype.getLanguageTag();
 
-        inputConnection.sendKeyEvent(
-                new KeyEvent(
-                        KeyEvent.ACTION_UP,
-                        KeyEvent.KEYCODE_TAB
-                )
-        );
+        if (!TextUtils.isEmpty(languageTag)) {
+
+            return languageTag
+                    .replace('_', '-');
+        }
+
+        String localeString =
+                subtype.getLocale();
+
+        if (!TextUtils.isEmpty(localeString)) {
+
+            return localeString
+                    .replace('_', '-');
+        }
+
+        return "en";
     }
 
-    private void handlePunctuation(
-            InputConnection inputConnection,
-            int character) {
+    /**
+     * Converts the keyboard language into a Locale used by
+     * TextServicesManager.
+     *
+     * PocketBoard supports:
+     *
+     * Spanish -> es-AR
+     * German  -> de-DE
+     * English -> en-US
+     */
+    private Locale resolveSpellCheckerLocale(
+            String languageTag) {
 
-        if (composingEnabled) {
-
-            if (!handleDictAndAutocorrection()) {
-
-                commitComposingText(
-                        inputConnection
-                );
-            }
+        if (TextUtils.isEmpty(languageTag)) {
+            return Locale.US;
         }
 
-        inputConnection.commitText(
-                String.valueOf(
-                        (char) character
-                ),
-                1
-        );
+        Locale parsed =
+                Locale.forLanguageTag(
+                        languageTag.replace('_', '-')
+                );
+
+        String language =
+                parsed.getLanguage();
+
+        if ("es".equals(language)) {
+
+            return Locale.forLanguageTag(
+                    "es-AR"
+            );
+        }
+
+        if ("de".equals(language)) {
+
+            return Locale.forLanguageTag(
+                    "de-DE"
+            );
+        }
+
+        if ("en".equals(language)) {
+
+            /*
+             * Keep English English.
+             *
+             * Do NOT turn this into Spanish.
+             */
+            return Locale.US;
+        }
+
+        /*
+         * Unsupported language.
+         *
+         * English is the final fallback only.
+         */
+        return Locale.US;
+    }
+
+    /**
+     * Converts the Locale/language into the exact dictionary
+     * identifiers understood by DictionaryManager.
+     */
+    private String normalizeDictionaryLanguage(
+            String languageTag) {
+
+        if (TextUtils.isEmpty(languageTag)) {
+            return "en";
+        }
+
+        Locale locale =
+                Locale.forLanguageTag(
+                        languageTag.replace('_', '-')
+                );
+
+        String language =
+                locale.getLanguage();
+
+        if ("es".equals(language)) {
+            return "es-AR";
+        }
+
+        if ("de".equals(language)) {
+            return "de";
+        }
+
+        if ("en".equals(language)) {
+            return "en";
+        }
+
+        return "en";
+    }
+
+    private void closeSpellCheckerSession() {
+
+        if (spellCheckerSession != null) {
+
+            spellCheckerSession.cancel();
+            spellCheckerSession.close();
+
+            spellCheckerSession = null;
+        }
+
+        aospSpellchecker = false;
+
+        spellcheckerSuggestions.clear();
+
+        hasRecommendedSpellcheckerSuggestion =
+                false;
+
+        lastRecommendedSuggestion = null;
     }
 }
