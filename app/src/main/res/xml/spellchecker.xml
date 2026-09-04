@@ -1,20 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<spell-checker xmlns:android="http://schemas.android.com/apk/res/android"
+<spell-checker
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:label="@string/ime_name"
     android:settingsActivity="com.sinux.pocketboard.preferences.PreferencesActivity">
 
     <subtype
-        android:label="@string/ime_name"
+        android:label="PocketBoard — Español"
         android:languageTag="es-AR"
         android:subtypeLocale="es_AR" />
 
     <subtype
-        android:label="@string/ime_name"
+        android:label="PocketBoard — English"
         android:languageTag="en-US"
         android:subtypeLocale="en_US" />
 
     <subtype
-        android:label="@string/ime_name"
+        android:label="PocketBoard — Deutsch"
         android:languageTag="de-DE"
         android:subtypeLocale="de_DE" />
 
