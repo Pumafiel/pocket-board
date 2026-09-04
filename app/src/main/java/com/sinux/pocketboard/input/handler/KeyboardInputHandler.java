@@ -764,6 +764,13 @@ public class KeyboardInputHandler {
                     multipressController
                             .process(event);
 
+            /*
+             * DOUBLE PRESS ACCENT MODE
+             *
+             * N -> n
+             * N N -> ñ
+             * Shift + N N -> Ñ
+             */
             if (!numericInputMode
                     && !altEnabled
                     && isSpanishAccentKey(keyCode)
@@ -858,6 +865,9 @@ public class KeyboardInputHandler {
             return true;
         }
 
+        /*
+         * LONG PRESS
+         */
         if (!numericInputMode
                 && !lastAltEnabled
                 && eventTime - lastKeyDownTime
