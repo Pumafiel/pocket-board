@@ -52,9 +52,11 @@ public class KeyboardInputHandler {
     private final List<String> rawInputEditors;
     private boolean rawInputMode;
 
-    public KeyboardInputHandler(PocketBoardIME pocketBoardIME) {
+    public KeyboardInputHandler(
+            PocketBoardIME pocketBoardIME) {
 
-        this.pocketBoardIME = pocketBoardIME;
+        this.pocketBoardIME =
+                pocketBoardIME;
 
         this.inputMethodManager =
                 pocketBoardIME.getInputMethodManager();
@@ -68,7 +70,8 @@ public class KeyboardInputHandler {
                         inputMethodManager
                 );
 
-        textComposer = new StringBuilder();
+        textComposer =
+                new StringBuilder();
 
         nonLetterOrDigitExclusions =
                 pocketBoardIME.getResources()
@@ -83,12 +86,14 @@ public class KeyboardInputHandler {
                         );
 
         keyLongPressDuration =
-                preferencesHolder.getLongKeyPressDuration();
+                preferencesHolder
+                        .getLongKeyPressDuration();
 
         layoutChangeShortcutEventRepeatCount =
                 pocketBoardIME.getResources()
                         .getInteger(
-                                R.integer.layout_change_shortcut_event_repeat_count
+                                R.integer
+                                        .layout_change_shortcut_event_repeat_count
                         );
 
         rawInputEditors =
@@ -146,12 +151,12 @@ public class KeyboardInputHandler {
         dictShortcuts =
                 composingEnabled
                         && preferencesHolder
-                        .isDictShortcutsEnabled();
+                                .isDictShortcutsEnabled();
 
         autocorrection =
                 composingEnabled
                         && preferencesHolder
-                        .isAutoCorrectionEnabled();
+                                .isAutoCorrectionEnabled();
 
         textComposer.setLength(0);
         currentSelectedText = "";
@@ -160,11 +165,13 @@ public class KeyboardInputHandler {
 
         keyIterationCounter = 0;
         lastKeyDownTime = 0;
-        lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+        lastKeyCode =
+                KeyEvent.KEYCODE_UNKNOWN;
         lastShiftEnabled = false;
         lastAltEnabled = false;
 
-        lastCursorPosition = cursorPosition;
+        lastCursorPosition =
+                cursorPosition;
     }
 
     public void onFinishInput() {
@@ -176,7 +183,8 @@ public class KeyboardInputHandler {
 
         keyIterationCounter = 0;
         lastKeyDownTime = 0;
-        lastKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+        lastKeyCode =
+                KeyEvent.KEYCODE_UNKNOWN;
         lastShiftEnabled = false;
         lastAltEnabled = false;
     }
@@ -209,7 +217,8 @@ public class KeyboardInputHandler {
                     && inputConnection != null) {
 
                 currentSelectedText =
-                        inputConnection.getSelectedText(0);
+                        inputConnection
+                                .getSelectedText(0);
             }
         }
 
@@ -231,6 +240,7 @@ public class KeyboardInputHandler {
                             .getCurrentInputConnection();
 
             if (inputConnection != null) {
+
                 commitComposingText(
                         inputConnection
                 );
@@ -283,7 +293,8 @@ public class KeyboardInputHandler {
         keyIterationCounter = 0;
     }
 
-    public void commitEmoji(CharSequence emoji) {
+    public void commitEmoji(
+            CharSequence emoji) {
 
         if (emoji == null) {
             return;
@@ -298,6 +309,7 @@ public class KeyboardInputHandler {
         }
 
         if (composingEnabled) {
+
             commitComposingText(
                     inputConnection
             );
@@ -386,12 +398,16 @@ public class KeyboardInputHandler {
                         inputConnection
                 );
 
-                lastKeyDownTime = eventTime;
-                lastKeyCode = keyCode;
+                lastKeyDownTime =
+                        eventTime;
+
+                lastKeyCode =
+                        keyCode;
 
             } else {
 
-                if (eventTime - lastKeyDownTime
+                if (eventTime
+                        - lastKeyDownTime
                         > keyLongPressDuration) {
 
                     handleBackspace(
@@ -434,8 +450,11 @@ public class KeyboardInputHandler {
                     event.getRepeatCount()
             );
 
-            lastKeyDownTime = eventTime;
-            lastKeyCode = keyCode;
+            lastKeyDownTime =
+                    eventTime;
+
+            lastKeyCode =
+                    keyCode;
 
             notifySuggestions();
 
@@ -454,8 +473,11 @@ public class KeyboardInputHandler {
                 altEnabled,
                 eventTime)) {
 
-            lastKeyDownTime = eventTime;
-            lastKeyCode = keyCode;
+            lastKeyDownTime =
+                    eventTime;
+
+            lastKeyCode =
+                    keyCode;
 
             notifySuggestions();
 
@@ -471,6 +493,7 @@ public class KeyboardInputHandler {
 
         if (keyCode == KeyEvent.KEYCODE_DEL
                 || keyCode == KeyEvent.KEYCODE_SPACE) {
+
             return true;
         }
 
@@ -481,7 +504,9 @@ public class KeyboardInputHandler {
         KeyMapping keyMapping =
                 keyboardMappingManager
                         .getCurrentMapping()
-                        .getKeyMapping(keyCode);
+                        .getKeyMapping(
+                                keyCode
+                        );
 
         return keyMapping != null;
     }
@@ -490,7 +515,8 @@ public class KeyboardInputHandler {
 
         if (composingEnabled
                 && pocketBoardIME
-                .getSuggestionsManager() != null) {
+                        .getSuggestionsManager()
+                        != null) {
 
             pocketBoardIME
                     .getSuggestionsManager()
@@ -558,9 +584,10 @@ public class KeyboardInputHandler {
 
         if (rawInputMode) {
 
-            pocketBoardIME.sendDownUpKeyEvents(
-                    KeyEvent.KEYCODE_DEL
-            );
+            pocketBoardIME
+                    .sendDownUpKeyEvents(
+                            KeyEvent.KEYCODE_DEL
+                    );
 
             return;
         }
@@ -569,10 +596,11 @@ public class KeyboardInputHandler {
                 inputConnection.getSelectedText(0))) {
 
             CharSequence str =
-                    inputConnection.getTextBeforeCursor(
-                            wordLookupLength,
-                            0
-                    );
+                    inputConnection
+                            .getTextBeforeCursor(
+                                    wordLookupLength,
+                                    0
+                            );
 
             if (!TextUtils.isEmpty(str)) {
 
@@ -582,10 +610,11 @@ public class KeyboardInputHandler {
                                         str
                                 );
 
-                inputConnection.deleteSurroundingText(
-                        beforeLength,
-                        0
-                );
+                inputConnection
+                        .deleteSurroundingText(
+                                beforeLength,
+                                0
+                        );
 
                 lastCursorPosition -=
                         beforeLength;
@@ -604,10 +633,11 @@ public class KeyboardInputHandler {
             InputConnection inputConnection) {
 
         CharSequence str =
-                inputConnection.getTextBeforeCursor(
-                        wordLookupLength,
-                        0
-                );
+                inputConnection
+                        .getTextBeforeCursor(
+                                wordLookupLength,
+                                0
+                        );
 
         if (!TextUtils.isEmpty(str)) {
 
@@ -678,6 +708,7 @@ public class KeyboardInputHandler {
             if (composingEnabled) {
 
                 if (!handleDictAndAutocorrection()) {
+
                     commitComposingText(
                             inputConnection
                     );
@@ -698,10 +729,11 @@ public class KeyboardInputHandler {
 
                 inputConnection.beginBatchEdit();
 
-                inputConnection.deleteSurroundingText(
-                        1,
-                        0
-                );
+                inputConnection
+                        .deleteSurroundingText(
+                                1,
+                                0
+                        );
 
                 inputConnection.commitText(
                         ". ",
@@ -723,6 +755,7 @@ public class KeyboardInputHandler {
             if (composingEnabled) {
 
                 if (!handleDictAndAutocorrection()) {
+
                     commitComposingText(
                             inputConnection
                     );
@@ -744,29 +777,82 @@ public class KeyboardInputHandler {
             boolean altEnabled,
             long eventTime) {
 
+        KeyMapping keyMapping =
+                keyboardMappingManager
+                        .getCurrentMapping()
+                        .getKeyMapping(
+                                keyCode
+                        );
+
+        if (keyMapping == null) {
+            multipressController.reset();
+            return false;
+        }
+
         /*
-         * NORMAL KEY PRESS
+         * ---------------------------------------------------------
+         * FIRST / SECOND SHORT PRESS
+         * ---------------------------------------------------------
+         *
+         * The MultipressController is responsible only for
+         * detecting the second short press.
+         *
+         * Language-specific characters are stored in the normal
+         * KeyMapping values, not in the ALT sequence.
+         *
+         * Therefore:
+         *
+         *   A A -> language-specific character
+         *   N N -> language-specific character
+         *
+         * while:
+         *
+         *   long press -> Alt[0]
+         *
+         * remains completely independent.
          */
         if (event.getRepeatCount() == 0) {
 
-            KeyMapping keyMapping =
-                    keyboardMappingManager
-                            .getCurrentMapping()
-                            .getKeyMapping(
-                                    keyCode
-                            );
+            boolean isMultipress =
+                    multipressController.process(
+                            event
+                    );
 
-            if (keyMapping == null) {
+            if (isMultipress
+                    && !numericInputMode
+                    && !altEnabled) {
 
-                multipressController.reset();
+                int specialCharacter =
+                        getLanguageDoublePressCharacter(
+                                keyCode,
+                                shiftEnabled
+                        );
 
-                return false;
+                if (specialCharacter != -1) {
+
+                    replaceLastCharacter(
+                            inputConnection,
+                            specialCharacter
+                    );
+
+                    keyIterationCounter = 0;
+
+                    lastShiftEnabled =
+                            shiftEnabled;
+
+                    lastAltEnabled = false;
+
+                    return true;
+                }
             }
 
-            boolean isMultipress =
-                    multipressController
-                            .process(event);
-
+            /*
+             * Normal physical-key / ALT cycling.
+             *
+             * ALT is never interpreted as a language-specific
+             * character. It always comes directly from the XML
+             * <Alt> entries.
+             */
             boolean isNewKey =
                     lastKeyCode != keyCode;
 
@@ -774,42 +860,14 @@ public class KeyboardInputHandler {
                     eventTime - lastKeyDownTime
                             <= keyLongPressDuration;
 
-            /*
-             * Multipress is completely driven by the XML.
-             *
-             * index 0:
-             *     normal value
-             *
-             * index 1+:
-             *     <Add> values
-             *
-             * Therefore:
-             *
-             * Spanish:
-             *     A A -> á
-             *     N N -> ñ
-             *
-             * German:
-             *     A A -> ä
-             *     O O -> ö
-             *     U U -> ü
-             *     S S -> ß
-             *
-             * English:
-             *     no <Add> values, so there is no
-             *     language-specific multipress.
-             *
-             * ALT is NOT involved in this process.
-             */
             boolean keyIterationModeEnabled;
 
             if (keyMapping.hasAdditionalValues(
-                    false
+                    lastAltEnabled
             )
-                    && !altEnabled
                     && !isNewKey
                     && isShortPress
-                    && isMultipress) {
+                    && !isMultipress) {
 
                 keyIterationModeEnabled = true;
                 keyIterationCounter++;
@@ -854,44 +912,26 @@ public class KeyboardInputHandler {
         }
 
         /*
+         * ---------------------------------------------------------
          * LONG PRESS
+         * ---------------------------------------------------------
          *
-         * Long press ALWAYS selects the physical <Alt>
-         * character from the XML.
+         * Long press ALWAYS selects Alt[0].
          *
-         * It does NOT use <Add>.
+         * This is the character physically printed as ALT on the
+         * Titan Slim keyboard.
          *
-         * Example Titan Slim:
-         *
-         *     S -> s
-         *     long S -> 4
-         *
-         * German:
-         *
-         *     S -> s
-         *     S S -> ß
-         *     long S -> 4
+         * It does NOT use Alt[1], Alt[2], etc.
          */
         if (!numericInputMode
-                && !lastAltEnabled
                 && eventTime - lastKeyDownTime
                 > keyLongPressDuration) {
 
-            multipressController.markLongPress();
+            multipressController
+                    .markLongPress();
 
             lastAltEnabled = true;
             keyIterationCounter = 0;
-
-            KeyMapping keyMapping =
-                    keyboardMappingManager
-                            .getCurrentMapping()
-                            .getKeyMapping(
-                                    keyCode
-                            );
-
-            if (keyMapping == null) {
-                return false;
-            }
 
             replaceLastCharacter(
                     inputConnection,
@@ -902,12 +942,84 @@ public class KeyboardInputHandler {
                     )
             );
 
-            lastKeyDownTime = eventTime;
+            lastKeyDownTime =
+                    eventTime;
 
             return true;
         }
 
         return false;
+    }
+
+    /**
+     * Returns the language-specific character associated with
+     * a double press of a physical key.
+     *
+     * IMPORTANT:
+     *
+     * This method does not read the ALT array.
+     *
+     * Language-specific characters are represented by additional
+     * normal KeyMapping values in the XML.
+     *
+     * Example:
+     *
+     *   <Key code="29" value="a" shiftValue="A">
+     *       <Add value="á" shiftValue="Á" />
+     *   </Key>
+     *
+     * The first normal value is the physical key character.
+     * The first additional normal value is the language-specific
+     * double-press character.
+     *
+     * ALT remains completely separate.
+     */
+    private int getLanguageDoublePressCharacter(
+            int keyCode,
+            boolean shiftEnabled) {
+
+        KeyMapping keyMapping =
+                keyboardMappingManager
+                        .getCurrentMapping()
+                        .getKeyMapping(
+                                keyCode
+                        );
+
+        if (keyMapping == null) {
+            return -1;
+        }
+
+        /*
+         * The XML's normal values are exposed through
+         * getValue(). Since KeyMapping intentionally wraps the
+         * index using modulo, index 1 can be requested safely
+         * only when an additional value exists.
+         */
+        if (!keyMapping.hasAdditionalValues(false)) {
+            return -1;
+        }
+
+        int character =
+                keyMapping.getValue(
+                        shiftEnabled,
+                        false,
+                        (byte) 1
+                );
+
+        if (!isLanguageSpecificCharacter(
+                character)) {
+
+            return -1;
+        }
+
+        return character;
+    }
+
+    private boolean isLanguageSpecificCharacter(
+            int character) {
+
+        return Character.isLetter(character)
+                && !Character.isDigit(character);
     }
 
     private void printNextCharacter(
@@ -981,10 +1093,11 @@ public class KeyboardInputHandler {
         }
 
         CharSequence beforeCursor =
-                inputConnection.getTextBeforeCursor(
-                        2,
-                        0
-                );
+                inputConnection
+                        .getTextBeforeCursor(
+                                2,
+                                0
+                        );
 
         if (!TextUtils.isEmpty(beforeCursor)) {
 
@@ -994,10 +1107,11 @@ public class KeyboardInputHandler {
                                     beforeCursor
                             );
 
-            inputConnection.deleteSurroundingText(
-                    lastCharacterLength,
-                    0
-            );
+            inputConnection
+                    .deleteSurroundingText(
+                            lastCharacterLength,
+                            0
+                    );
 
             inputConnection.commitText(
                     String.valueOf(
@@ -1030,16 +1144,19 @@ public class KeyboardInputHandler {
 
         if (!composingEnabled
                 || textComposer.length() == 0) {
+
             return false;
         }
 
         if (dictShortcuts
                 && handleDictShortcut()) {
+
             return true;
         }
 
         if (autocorrection
                 && handleAutocorrection()) {
+
             return true;
         }
 
