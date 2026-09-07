@@ -24,24 +24,17 @@
     <!-- T -->
     <Key code="48" value="t" shiftValue="T">
         <Alt value="(" />
-        <Alt value="{" />
-        <Alt value="[" />
-        <Alt value="&lt;" />
     </Key>
 
     <!-- Y -->
     <Key code="53" value="y" shiftValue="Y">
         <Alt value=")" />
-        <Alt value="}" />
-        <Alt value="]" />
-        <Alt value="&gt;" />
     </Key>
 
     <!-- U -->
     <Key code="49" value="u" shiftValue="U">
+        <Add value="ü" shiftValue="Ü" />
         <Alt value="-" />
-        <Alt value="ü" />
-        <Alt value="Ü" />
     </Key>
 
     <!-- I -->
@@ -51,106 +44,82 @@
 
     <!-- O -->
     <Key code="43" value="o" shiftValue="O">
-        <Alt value="ö" />
-        <Alt value="Ö" />
+        <Add value="ö" shiftValue="Ö" />
+        <Alt value="/" />
     </Key>
 
     <!-- P -->
     <Key code="44" value="p" shiftValue="P">
-        <Alt value=":" />
         <Alt value=";" />
     </Key>
 
+
     <!-- A -->
     <Key code="29" value="a" shiftValue="A">
+        <Add value="ä" shiftValue="Ä" />
         <Alt value="@" />
-        <Alt value="ä" />
-        <Alt value="Ä" />
-        <Alt value="&amp;" />
-        <Alt value="$" />
-        <Alt value="€" />
-        <Alt value="¥" />
     </Key>
 
-    <!-- S - 4 -->
+    <!-- S -->
     <Key code="47" value="s" shiftValue="S">
+        <Add value="ß" shiftValue="ẞ" />
         <Alt value="4" />
-        <Alt value="ß" />
-        <Alt value="ẞ" />
-        <Alt value="`" />
-        <Alt value="^" />
     </Key>
 
-    <!-- D - 5 -->
+    <!-- D -->
     <Key code="32" value="d" shiftValue="D">
         <Alt value="5" />
-        <Alt value="&quot;" />
-        <Alt value="«" />
-        <Alt value="»" />
     </Key>
 
-    <!-- F - 6 -->
+    <!-- F -->
     <Key code="34" value="f" shiftValue="F">
         <Alt value="6" />
-        <Alt value="±" />
     </Key>
 
     <!-- G -->
     <Key code="35" value="g" shiftValue="G">
         <Alt value="*" />
-        <Alt value="=" />
-        <Alt value="≈" />
     </Key>
 
     <!-- H -->
     <Key code="36" value="h" shiftValue="H">
         <Alt value="#" />
-        <Alt value="№" />
-        <Alt value="%" />
     </Key>
 
     <!-- J -->
     <Key code="38" value="j" shiftValue="J">
         <Alt value="+" />
-        <Alt value="=" />
-        <Alt value="≈" />
-        <Alt value="±" />
     </Key>
 
     <!-- K -->
     <Key code="39" value="k" shiftValue="K">
         <Alt value="&quot;" />
-        <Alt value="%" />
     </Key>
 
     <!-- L -->
     <Key code="40" value="l" shiftValue="L">
         <Alt value="&apos;" />
-        <Alt value="`" />
     </Key>
+
 
     <!-- Z -->
     <Key code="54" value="z" shiftValue="Z">
         <Alt value="!" />
     </Key>
 
-    <!-- X - 7 -->
+    <!-- X -->
     <Key code="52" value="x" shiftValue="X">
         <Alt value="7" />
-        <Alt value="?" />
     </Key>
 
-    <!-- C - 8 -->
+    <!-- C -->
     <Key code="31" value="c" shiftValue="C">
         <Alt value="8" />
-        <Alt value="ç" />
-        <Alt value="Ç" />
     </Key>
 
-    <!-- V - 9 -->
+    <!-- V -->
     <Key code="50" value="v" shiftValue="V">
         <Alt value="9" />
-        <Alt value="." />
     </Key>
 
     <!-- B -->
