@@ -4,13 +4,19 @@ public final class KeyMapping {
 
     private final KeyMappingValue[] keyMappingValues;
     private final boolean hasAdditionalValues;
+
     private final KeyMappingValue[] keyMappingAltValues;
     private final boolean hasAltValues;
     private final boolean hasAdditionalAltValues;
 
+    private final int doublePressValue;
+    private final int doublePressShiftValue;
+
     public KeyMapping(
             KeyMappingValue[] keyMappingValues,
-            KeyMappingValue[] keyMappingAltValues) {
+            KeyMappingValue[] keyMappingAltValues,
+            int doublePressValue,
+            int doublePressShiftValue) {
 
         if (keyMappingValues == null
                 || keyMappingValues.length == 0) {
@@ -35,6 +41,12 @@ public final class KeyMapping {
         hasAdditionalAltValues =
                 hasAltValues
                         && keyMappingAltValues.length > 1;
+
+        this.doublePressValue =
+                doublePressValue;
+
+        this.doublePressShiftValue =
+                doublePressShiftValue;
     }
 
     public int getValue(
@@ -46,18 +58,16 @@ public final class KeyMapping {
 
             if (altEnabled) {
                 return getAltShiftValue(keyIndex);
-            } else {
-                return getShiftValue(keyIndex);
             }
 
-        } else {
-
-            if (altEnabled) {
-                return getAltValue(keyIndex);
-            } else {
-                return getValue(keyIndex);
-            }
+            return getShiftValue(keyIndex);
         }
+
+        if (altEnabled) {
+            return getAltValue(keyIndex);
+        }
+
+        return getValue(keyIndex);
     }
 
     public boolean hasAdditionalValues(
@@ -68,18 +78,21 @@ public final class KeyMapping {
                 : hasAdditionalValues;
     }
 
-    /**
-     * Returns the number of ALT values defined for this key.
-     *
-     * This is used by language-specific double-press
-     * handling to search for special characters such as
-     * ä, ö, ü, ß and their uppercase variants.
-     */
-    public int getAltValueCount() {
+    public int getDoublePressValue(
+            boolean shiftEnabled) {
 
-        return hasAltValues
-                ? keyMappingAltValues.length
-                : 0;
+        if (shiftEnabled
+                && doublePressShiftValue != 0) {
+
+            return doublePressShiftValue;
+        }
+
+        return doublePressValue;
+    }
+
+    public boolean hasDoublePressValue() {
+        return doublePressValue != 0
+                || doublePressShiftValue != 0;
     }
 
     private int getValue(byte keyIndex) {
@@ -98,10 +111,12 @@ public final class KeyMapping {
                 (keyIndex & 0xFF)
                         % keyMappingValues.length;
 
-        return keyMappingValues[index]
-                .getShiftValue() != 0
-                ? keyMappingValues[index]
-                        .getShiftValue()
+        int shiftValue =
+                keyMappingValues[index]
+                        .getShiftValue();
+
+        return shiftValue != 0
+                ? shiftValue
                 : getValue(keyIndex);
     }
 
@@ -115,11 +130,9 @@ public final class KeyMapping {
 
             return keyMappingAltValues[index]
                     .getValue();
-
-        } else {
-
-            return getValue(keyIndex);
         }
+
+        return getValue(keyIndex);
     }
 
     private int getAltShiftValue(byte keyIndex) {
@@ -137,10 +150,8 @@ public final class KeyMapping {
             return shiftValue != 0
                     ? shiftValue
                     : getAltValue(keyIndex);
-
-        } else {
-
-            return getShiftValue(keyIndex);
         }
+
+        return getShiftValue(keyIndex);
     }
 }
