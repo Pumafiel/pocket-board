@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <KeyboardMapping>
+
     <!-- Q -->
     <Key code="45" value="q" shiftValue="Q">
         <Alt value="0" />
@@ -23,23 +24,16 @@
     <!-- T -->
     <Key code="48" value="t" shiftValue="T">
         <Alt value="(" />
-        <Alt value="{" />
-        <Alt value="[" />
-        <Alt value="&lt;" />
     </Key>
 
     <!-- Y -->
     <Key code="53" value="y" shiftValue="Y">
         <Alt value=")" />
-        <Alt value="}" />
-        <Alt value="]" />
-        <Alt value="&gt;" />
     </Key>
 
     <!-- U -->
     <Key code="49" value="u" shiftValue="U">
         <Alt value="-" />
-        <Alt value="~" />
     </Key>
 
     <!-- I -->
@@ -50,22 +44,17 @@
     <!-- O -->
     <Key code="43" value="o" shiftValue="O">
         <Alt value="/" />
-        <Alt value="\\" />
     </Key>
 
     <!-- P -->
     <Key code="44" value="p" shiftValue="P">
-        <Alt value=":" />
         <Alt value=";" />
     </Key>
+
 
     <!-- A -->
     <Key code="29" value="a" shiftValue="A">
         <Alt value="@" />
-        <Alt value="&amp;" />
-        <Alt value="$" />
-        <Alt value="€" />
-        <Alt value="¥" />
     </Key>
 
     <!-- S -->
@@ -86,36 +75,28 @@
     <!-- G -->
     <Key code="35" value="g" shiftValue="G">
         <Alt value="*" />
-        <Alt value="=" />
-        <Alt value="≈" />
     </Key>
 
     <!-- H -->
     <Key code="36" value="h" shiftValue="H">
         <Alt value="#" />
-        <Alt value="№" />
-        <Alt value="%" />
     </Key>
 
     <!-- J -->
     <Key code="38" value="j" shiftValue="J">
         <Alt value="+" />
-        <Alt value="±" />
     </Key>
 
     <!-- K -->
     <Key code="39" value="k" shiftValue="K">
         <Alt value="&quot;" />
-        <Alt value="«" />
-        <Alt value="»" />
     </Key>
 
     <!-- L -->
     <Key code="40" value="l" shiftValue="L">
         <Alt value="&apos;" />
-        <Alt value="`" />
-        <Alt value="^" />
     </Key>
+
 
     <!-- Z -->
     <Key code="54" value="z" shiftValue="Z">
@@ -151,4 +132,5 @@
     <Key code="41" value="m" shiftValue="M">
         <Alt value="?" />
     </Key>
+
 </KeyboardMapping>
