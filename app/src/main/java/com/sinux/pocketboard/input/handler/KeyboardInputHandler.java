@@ -791,25 +791,19 @@ public class KeyboardInputHandler {
 
         /*
          * ---------------------------------------------------------
-         * FIRST / SECOND SHORT PRESS
+         * SHORT PRESS / MULTIPRESS
          * ---------------------------------------------------------
          *
-         * The MultipressController is responsible only for
-         * detecting the second short press.
+         * Multipress has priority over the normal key-iteration
+         * mechanism.
          *
-         * Language-specific characters are stored in the normal
-         * KeyMapping values, not in the ALT sequence.
+         * Normal values:
          *
-         * Therefore:
+         *   index 0 = physical key character
+         *   index 1 = language-specific multipress character
+         *   index 2+ = additional multipress characters
          *
-         *   A A -> language-specific character
-         *   N N -> language-specific character
-         *
-         * while:
-         *
-         *   long press -> Alt[0]
-         *
-         * remains completely independent.
+         * ALT values are completely independent.
          */
         if (event.getRepeatCount() == 0) {
 
@@ -818,40 +812,57 @@ public class KeyboardInputHandler {
                             event
                     );
 
-            if (isMultipress
-                    && !numericInputMode
-                    && !altEnabled) {
+            /*
+             * A detected second press is a complete multipress
+             * action. It must never fall through into the normal
+             * key-iteration mechanism.
+             */
+            if (isMultipress) {
 
-                int specialCharacter =
-                        getLanguageDoublePressCharacter(
-                                keyCode,
-                                shiftEnabled
+                keyIterationCounter = 0;
+
+                if (!numericInputMode
+                        && !altEnabled) {
+
+                    int specialCharacter =
+                            getLanguageDoublePressCharacter(
+                                    keyCode,
+                                    shiftEnabled
+                            );
+
+                    if (specialCharacter != -1) {
+
+                        replaceLastCharacter(
+                                inputConnection,
+                                specialCharacter
                         );
 
-                if (specialCharacter != -1) {
+                        lastShiftEnabled =
+                                shiftEnabled;
 
-                    replaceLastCharacter(
-                            inputConnection,
-                            specialCharacter
-                    );
+                        lastAltEnabled =
+                                false;
 
-                    keyIterationCounter = 0;
-
-                    lastShiftEnabled =
-                            shiftEnabled;
-
-                    lastAltEnabled = false;
-
-                    return true;
+                        return true;
+                    }
                 }
+
+                /*
+                 * No language-specific multipress character
+                 * exists for this key.
+                 *
+                 * The second physical press has nevertheless
+                 * been consumed by MultipressController.
+                 */
+                return true;
             }
 
             /*
              * Normal physical-key / ALT cycling.
              *
              * ALT is never interpreted as a language-specific
-             * character. It always comes directly from the XML
-             * <Alt> entries.
+             * character. It always comes directly from the
+             * KeyMapping ALT values.
              */
             boolean isNewKey =
                     lastKeyCode != keyCode;
@@ -866,8 +877,7 @@ public class KeyboardInputHandler {
                     lastAltEnabled
             )
                     && !isNewKey
-                    && isShortPress
-                    && !isMultipress) {
+                    && isShortPress) {
 
                 keyIterationModeEnabled = true;
                 keyIterationCounter++;
@@ -918,10 +928,9 @@ public class KeyboardInputHandler {
          *
          * Long press ALWAYS selects Alt[0].
          *
-         * This is the character physically printed as ALT on the
-         * Titan Slim keyboard.
+         * It does not use Alt[1], Alt[2], etc.
          *
-         * It does NOT use Alt[1], Alt[2], etc.
+         * Long press also cancels any pending multipress sequence.
          */
         if (!numericInputMode
                 && eventTime - lastKeyDownTime
@@ -955,22 +964,18 @@ public class KeyboardInputHandler {
      * Returns the language-specific character associated with
      * a double press of a physical key.
      *
-     * IMPORTANT:
+     * This method NEVER reads the ALT array.
      *
-     * This method does not read the ALT array.
+     * Normal KeyMapping values:
      *
-     * Language-specific characters are represented by additional
-     * normal KeyMapping values in the XML.
+     *   index 0 = physical key
+     *   index 1 = language-specific double-press character
      *
      * Example:
      *
      *   <Key code="29" value="a" shiftValue="A">
      *       <Add value="á" shiftValue="Á" />
      *   </Key>
-     *
-     * The first normal value is the physical key character.
-     * The first additional normal value is the language-specific
-     * double-press character.
      *
      * ALT remains completely separate.
      */
@@ -989,12 +994,6 @@ public class KeyboardInputHandler {
             return -1;
         }
 
-        /*
-         * The XML's normal values are exposed through
-         * getValue(). Since KeyMapping intentionally wraps the
-         * index using modulo, index 1 can be requested safely
-         * only when an additional value exists.
-         */
         if (!keyMapping.hasAdditionalValues(false)) {
             return -1;
         }
