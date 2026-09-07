@@ -46,16 +46,16 @@ public int getValue(
     if (shiftEnabled) {
         if (altEnabled) {
             return getAltShiftValue(keyIndex);
-        } else {
-            return getShiftValue(keyIndex);
         }
-    } else {
-        if (altEnabled) {
-            return getAltValue(keyIndex);
-        } else {
-            return getValue(keyIndex);
-        }
+
+        return getShiftValue(keyIndex);
     }
+
+    if (altEnabled) {
+        return getAltValue(keyIndex);
+    }
+
+    return getValue(keyIndex);
 }
 
 public boolean hasAdditionalValues(
