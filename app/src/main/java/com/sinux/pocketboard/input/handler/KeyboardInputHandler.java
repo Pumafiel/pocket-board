@@ -770,6 +770,9 @@ public class KeyboardInputHandler {
              * N -> n
              * N N -> ñ
              * Shift + N N -> Ñ
+             *
+             * This is the existing Spanish behavior.
+             * It is intentionally kept unchanged.
              */
             if (!numericInputMode
                     && !altEnabled
@@ -805,6 +808,48 @@ public class KeyboardInputHandler {
                 keyIterationCounter = 0;
 
                 return true;
+            }
+
+            /*
+             * DOUBLE PRESS GERMAN SPECIAL CHARACTER MODE
+             *
+             * A A -> ä
+             * Shift + A A -> Ä
+             *
+             * O O -> ö
+             * Shift + O O -> Ö
+             *
+             * U U -> ü
+             * Shift + U U -> Ü
+             *
+             * S S -> ß
+             * Shift + S S -> ẞ
+             *
+             * This is independent from ALT / long-press handling.
+             */
+            if (!numericInputMode
+                    && !altEnabled
+                    && isGermanSpecialKey(keyCode)
+                    && isMultipress) {
+
+                int character =
+                        getGermanDoublePressCharacter(
+                                keyCode,
+                                keyMapping,
+                                shiftEnabled
+                        );
+
+                if (character != -1) {
+
+                    replaceLastCharacter(
+                            inputConnection,
+                            character
+                    );
+
+                    keyIterationCounter = 0;
+
+                    return true;
+                }
             }
 
             boolean isNewKey =
@@ -915,6 +960,63 @@ public class KeyboardInputHandler {
                 || keyCode == KeyEvent.KEYCODE_O
                 || keyCode == KeyEvent.KEYCODE_U
                 || keyCode == KeyEvent.KEYCODE_N;
+    }
+
+    private boolean isGermanSpecialKey(
+            int keyCode) {
+
+        return keyCode == KeyEvent.KEYCODE_A
+                || keyCode == KeyEvent.KEYCODE_O
+                || keyCode == KeyEvent.KEYCODE_U
+                || keyCode == KeyEvent.KEYCODE_S;
+    }
+
+    private int getGermanDoublePressCharacter(
+            int keyCode,
+            KeyMapping keyMapping,
+            boolean shiftEnabled) {
+
+        char target;
+
+        switch (keyCode) {
+
+            case KeyEvent.KEYCODE_A:
+                target = shiftEnabled ? 'Ä' : 'ä';
+                break;
+
+            case KeyEvent.KEYCODE_O:
+                target = shiftEnabled ? 'Ö' : 'ö';
+                break;
+
+            case KeyEvent.KEYCODE_U:
+                target = shiftEnabled ? 'Ü' : 'ü';
+                break;
+
+            case KeyEvent.KEYCODE_S:
+                target = shiftEnabled ? 'ẞ' : 'ß';
+                break;
+
+            default:
+                return -1;
+        }
+
+        for (byte index = 0;
+             index < keyMapping.getAltValueCount();
+             index++) {
+
+            int character =
+                    keyMapping.getValue(
+                            false,
+                            true,
+                            index
+                    );
+
+            if (character == target) {
+                return character;
+            }
+        }
+
+        return -1;
     }
 
     private void printNextCharacter(
