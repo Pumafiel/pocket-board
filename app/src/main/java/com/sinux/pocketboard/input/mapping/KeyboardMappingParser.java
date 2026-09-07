@@ -79,7 +79,6 @@ public KeyboardMapping parseMapping()
                 if (KEY_TAG.equals(xpp.getName())) {
 
                     currentKeyCode = 0;
-
                     currentKeyValues.clear();
                     currentKeyAltValues.clear();
 
