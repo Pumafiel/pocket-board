@@ -252,10 +252,18 @@ public class KeyboardInputHandler {
 
         multipressController.reset();
 
-        keyboardMappingManager
-                .switchToKeyboardMapping(
-                        inputMethodSubtype
-                );
+        if (numericInputMode) {
+
+            keyboardMappingManager
+                    .switchToNumericKeyboardMapping();
+
+        } else {
+
+            keyboardMappingManager
+                    .switchToKeyboardMapping(
+                            inputMethodSubtype
+                    );
+        }
     }
 
     public CharSequence getCurrentComposingText() {
