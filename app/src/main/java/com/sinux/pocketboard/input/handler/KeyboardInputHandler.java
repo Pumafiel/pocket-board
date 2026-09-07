@@ -765,85 +765,51 @@ public class KeyboardInputHandler {
                             .process(event);
 
             /*
-             * DOUBLE PRESS ACCENT MODE
+             * LANGUAGE-SPECIFIC DOUBLE PRESS
              *
-             * N -> n
-             * N N -> ñ
-             * Shift + N N -> Ñ
+             * The language-specific character is taken from
+             * the current XML mapping.
              *
-             * This is the existing Spanish behavior.
-             * It is intentionally kept unchanged.
+             * Examples:
+             *
+             * Spanish:
+             *   A A -> á
+             *   Shift + A A -> Á
+             *   N N -> ñ
+             *   Shift + N N -> Ñ
+             *
+             * German:
+             *   A A -> ä
+             *   Shift + A A -> Ä
+             *   O O -> ö
+             *   Shift + O O -> Ö
+             *   U U -> ü
+             *   Shift + U U -> Ü
+             *   S S -> ß
+             *   Shift + S S -> ẞ
+             *
+             * English:
+             *   No language-specific character is present in
+             *   the XML, so normal multipress/Alt cycling applies.
+             *
+             * ALT is deliberately excluded here. ALT always
+             * uses the normal <Alt> sequence from the XML.
              */
             if (!numericInputMode
                     && !altEnabled
-                    && isSpanishAccentKey(keyCode)
                     && isMultipress) {
 
-                int character;
-
-                if (shiftEnabled) {
-
-                    character =
-                            keyMapping.getValue(
-                                    false,
-                                    true,
-                                    (byte) 2
-                            );
-
-                } else {
-
-                    character =
-                            keyMapping.getValue(
-                                    false,
-                                    true,
-                                    (byte) 1
-                            );
-                }
-
-                replaceLastCharacter(
-                        inputConnection,
-                        character
-                );
-
-                keyIterationCounter = 0;
-
-                return true;
-            }
-
-            /*
-             * DOUBLE PRESS GERMAN SPECIAL CHARACTER MODE
-             *
-             * A A -> ä
-             * Shift + A A -> Ä
-             *
-             * O O -> ö
-             * Shift + O O -> Ö
-             *
-             * U U -> ü
-             * Shift + U U -> Ü
-             *
-             * S S -> ß
-             * Shift + S S -> ẞ
-             *
-             * This is independent from ALT / long-press handling.
-             */
-            if (!numericInputMode
-                    && !altEnabled
-                    && isGermanSpecialKey(keyCode)
-                    && isMultipress) {
-
-                int character =
-                        getGermanDoublePressCharacter(
-                                keyCode,
+                int specialCharacter =
+                        getLanguageDoublePressCharacter(
                                 keyMapping,
                                 shiftEnabled
                         );
 
-                if (character != -1) {
+                if (specialCharacter != -1) {
 
                     replaceLastCharacter(
                             inputConnection,
-                            character
+                            specialCharacter
                     );
 
                     keyIterationCounter = 0;
@@ -912,6 +878,12 @@ public class KeyboardInputHandler {
 
         /*
          * LONG PRESS
+         *
+         * Long press always switches to the <Alt> sequence
+         * of the current keyboard mapping.
+         *
+         * Therefore Spanish, English and German all use the
+         * same mechanism. Only their XML data differs.
          */
         if (!numericInputMode
                 && !lastAltEnabled
@@ -951,72 +923,83 @@ public class KeyboardInputHandler {
         return false;
     }
 
-    private boolean isSpanishAccentKey(
-            int keyCode) {
-
-        return keyCode == KeyEvent.KEYCODE_A
-                || keyCode == KeyEvent.KEYCODE_E
-                || keyCode == KeyEvent.KEYCODE_I
-                || keyCode == KeyEvent.KEYCODE_O
-                || keyCode == KeyEvent.KEYCODE_U
-                || keyCode == KeyEvent.KEYCODE_N;
-    }
-
-    private boolean isGermanSpecialKey(
-            int keyCode) {
-
-        return keyCode == KeyEvent.KEYCODE_A
-                || keyCode == KeyEvent.KEYCODE_O
-                || keyCode == KeyEvent.KEYCODE_U
-                || keyCode == KeyEvent.KEYCODE_S;
-    }
-
-    private int getGermanDoublePressCharacter(
-            int keyCode,
+    /**
+     * Finds the language-specific character for a double press.
+     *
+     * The important point is that this method does NOT know whether
+     * the keyboard is Spanish, English or German.
+     *
+     * The XML mapping is the source of truth.
+     *
+     * Convention used by the XML files:
+     *
+     *   Alt[0] = normal special character / first Alt character
+     *   Alt[1] = language-specific lowercase character
+     *   Alt[2] = language-specific uppercase character
+     *
+     * The method verifies that Alt[1]/Alt[2] are actually different
+     * from the normal Alt character before using them.
+     */
+    private int getLanguageDoublePressCharacter(
             KeyMapping keyMapping,
             boolean shiftEnabled) {
 
-        char target;
-
-        switch (keyCode) {
-
-            case KeyEvent.KEYCODE_A:
-                target = shiftEnabled ? 'Ä' : 'ä';
-                break;
-
-            case KeyEvent.KEYCODE_O:
-                target = shiftEnabled ? 'Ö' : 'ö';
-                break;
-
-            case KeyEvent.KEYCODE_U:
-                target = shiftEnabled ? 'Ü' : 'ü';
-                break;
-
-            case KeyEvent.KEYCODE_S:
-                target = shiftEnabled ? 'ẞ' : 'ß';
-                break;
-
-            default:
-                return -1;
+        if (keyMapping == null
+                || !keyMapping.hasAltValues()) {
+            return -1;
         }
 
-        for (byte index = 0;
-             index < keyMapping.getAltValueCount();
-             index++) {
+        if (shiftEnabled) {
+
+            if (keyMapping.getAltValueCount() < 3) {
+                return -1;
+            }
 
             int character =
                     keyMapping.getValue(
                             false,
                             true,
-                            index
+                            (byte) 2
                     );
 
-            if (character == target) {
+            if (isLanguageSpecificCharacter(character)) {
+                return character;
+            }
+
+        } else {
+
+            if (keyMapping.getAltValueCount() < 2) {
+                return -1;
+            }
+
+            int character =
+                    keyMapping.getValue(
+                            false,
+                            true,
+                            (byte) 1
+                    );
+
+            if (isLanguageSpecificCharacter(character)) {
                 return character;
             }
         }
 
         return -1;
+    }
+
+    /**
+     * Identifies characters that are intended to be language-specific.
+     *
+     * This prevents normal punctuation, digits and symbols such as
+     * @, &, $, _, /, ?, etc. from becoming double-press characters.
+     *
+     * The actual available characters still come entirely from XML.
+     */
+    private boolean isLanguageSpecificCharacter(
+            int character) {
+
+        return Character.isLetter(character)
+                && !Character.isDigit(character);
     }
 
     private void printNextCharacter(
