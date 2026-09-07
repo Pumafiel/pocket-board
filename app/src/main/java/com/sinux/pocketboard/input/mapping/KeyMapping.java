@@ -1,157 +1,140 @@
-package com.sinux.pocketboard.input.mapping;
+private final KeyMappingValue[] keyMappingValues;
+private final boolean hasAdditionalValues;
 
-public final class KeyMapping {
+private final KeyMappingValue[] keyMappingAltValues;
+private final boolean hasAltValues;
+private final boolean hasAdditionalAltValues;
 
-    private final KeyMappingValue[] keyMappingValues;
-    private final boolean hasAdditionalValues;
+private final int doublePressValue;
+private final int doublePressShiftValue;
 
-    private final KeyMappingValue[] keyMappingAltValues;
-    private final boolean hasAltValues;
-    private final boolean hasAdditionalAltValues;
+public KeyMapping(
+        KeyMappingValue[] keyMappingValues,
+        KeyMappingValue[] keyMappingAltValues,
+        int doublePressValue,
+        int doublePressShiftValue) {
 
-    private final int doublePressValue;
-    private final int doublePressShiftValue;
-
-    public KeyMapping(
-            KeyMappingValue[] keyMappingValues,
-            KeyMappingValue[] keyMappingAltValues,
-            int doublePressValue,
-            int doublePressShiftValue) {
-
-        if (keyMappingValues == null
-                || keyMappingValues.length == 0) {
-
-            throw new IllegalArgumentException(
-                    "KeyMapping must have at least one value"
-            );
-        }
-
-        this.keyMappingValues = keyMappingValues;
-
-        hasAdditionalValues =
-                keyMappingValues.length > 1;
-
-        this.keyMappingAltValues =
-                keyMappingAltValues;
-
-        hasAltValues =
-                keyMappingAltValues != null
-                        && keyMappingAltValues.length > 0;
-
-        hasAdditionalAltValues =
-                hasAltValues
-                        && keyMappingAltValues.length > 1;
-
-        this.doublePressValue =
-                doublePressValue;
-
-        this.doublePressShiftValue =
-                doublePressShiftValue;
+    if (keyMappingValues == null
+            || keyMappingValues.length == 0) {
+        throw new IllegalArgumentException(
+                "KeyMapping must have at least one value"
+        );
     }
 
-    public int getValue(
-            boolean shiftEnabled,
-            boolean altEnabled,
-            byte keyIndex) {
+    this.keyMappingValues = keyMappingValues;
+    this.hasAdditionalValues =
+            keyMappingValues.length > 1;
 
-        if (shiftEnabled) {
+    this.keyMappingAltValues = keyMappingAltValues;
+    this.hasAltValues =
+            keyMappingAltValues != null
+                    && keyMappingAltValues.length > 0;
 
-            if (altEnabled) {
-                return getAltShiftValue(keyIndex);
-            }
+    this.hasAdditionalAltValues =
+            hasAltValues
+                    && keyMappingAltValues.length > 1;
 
+    this.doublePressValue = doublePressValue;
+    this.doublePressShiftValue = doublePressShiftValue;
+}
+
+public int getValue(
+        boolean shiftEnabled,
+        boolean altEnabled,
+        byte keyIndex) {
+
+    if (shiftEnabled) {
+        if (altEnabled) {
+            return getAltShiftValue(keyIndex);
+        } else {
             return getShiftValue(keyIndex);
         }
-
+    } else {
         if (altEnabled) {
             return getAltValue(keyIndex);
+        } else {
+            return getValue(keyIndex);
         }
+    }
+}
 
-        return getValue(keyIndex);
+public boolean hasAdditionalValues(
+        boolean altEnabled) {
+
+    return altEnabled
+            ? hasAdditionalAltValues
+            : hasAdditionalValues;
+}
+
+public boolean hasDoublePressValue() {
+    return doublePressValue != 0
+            || doublePressShiftValue != 0;
+}
+
+public int getDoublePressValue(
+        boolean shiftEnabled) {
+
+    if (shiftEnabled
+            && doublePressShiftValue != 0) {
+        return doublePressShiftValue;
     }
 
-    public boolean hasAdditionalValues(
-            boolean altEnabled) {
+    return doublePressValue;
+}
 
-        return altEnabled
-                ? hasAdditionalAltValues
-                : hasAdditionalValues;
-    }
+private int getValue(byte keyIndex) {
 
-    public int getDoublePressValue(
-            boolean shiftEnabled) {
+    int index =
+            (keyIndex & 0xFF)
+                    % keyMappingValues.length;
 
-        if (shiftEnabled
-                && doublePressShiftValue != 0) {
+    return keyMappingValues[index].getValue();
+}
 
-            return doublePressShiftValue;
-        }
+private int getShiftValue(byte keyIndex) {
 
-        return doublePressValue;
-    }
+    int index =
+            (keyIndex & 0xFF)
+                    % keyMappingValues.length;
 
-    public boolean hasDoublePressValue() {
-        return doublePressValue != 0
-                || doublePressShiftValue != 0;
-    }
+    int shiftValue =
+            keyMappingValues[index].getShiftValue();
 
-    private int getValue(byte keyIndex) {
+    return shiftValue != 0
+            ? shiftValue
+            : getValue(keyIndex);
+}
+
+private int getAltValue(byte keyIndex) {
+
+    if (hasAltValues) {
 
         int index =
                 (keyIndex & 0xFF)
-                        % keyMappingValues.length;
+                        % keyMappingAltValues.length;
 
-        return keyMappingValues[index]
-                .getValue();
+        return keyMappingAltValues[index].getValue();
     }
 
-    private int getShiftValue(byte keyIndex) {
+    return getValue(keyIndex);
+}
+
+private int getAltShiftValue(byte keyIndex) {
+
+    if (hasAltValues) {
 
         int index =
                 (keyIndex & 0xFF)
-                        % keyMappingValues.length;
+                        % keyMappingAltValues.length;
 
         int shiftValue =
-                keyMappingValues[index]
+                keyMappingAltValues[index]
                         .getShiftValue();
 
         return shiftValue != 0
                 ? shiftValue
-                : getValue(keyIndex);
+                : getAltValue(keyIndex);
     }
 
-    private int getAltValue(byte keyIndex) {
-
-        if (hasAltValues) {
-
-            int index =
-                    (keyIndex & 0xFF)
-                            % keyMappingAltValues.length;
-
-            return keyMappingAltValues[index]
-                    .getValue();
-        }
-
-        return getValue(keyIndex);
-    }
-
-    private int getAltShiftValue(byte keyIndex) {
-
-        if (hasAltValues) {
-
-            int index =
-                    (keyIndex & 0xFF)
-                            % keyMappingAltValues.length;
-
-            int shiftValue =
-                    keyMappingAltValues[index]
-                            .getShiftValue();
-
-            return shiftValue != 0
-                    ? shiftValue
-                    : getAltValue(keyIndex);
-        }
-
-        return getShiftValue(keyIndex);
-    }
+    return getShiftValue(keyIndex);
 }
