@@ -252,18 +252,10 @@ public class KeyboardInputHandler {
 
         multipressController.reset();
 
-        if (numericInputMode) {
-
-            keyboardMappingManager
-                    .switchToNumericKeyboardMapping();
-
-        } else {
-
-            keyboardMappingManager
-                    .switchToKeyboardMapping(
-                            inputMethodSubtype
-                    );
-        }
+        keyboardMappingManager
+                .switchToKeyboardMapping(
+                        inputMethodSubtype
+                );
     }
 
     public CharSequence getCurrentComposingText() {
@@ -469,7 +461,18 @@ public class KeyboardInputHandler {
             return true;
         }
 
-        if (event.getUnicodeChar() == 0) {
+        /*
+         * IMPORTANT:
+         *
+         * In numeric input mode the physical keyboard mapping
+         * provides the character (0-9), so the Android KeyEvent
+         * may have unicodeChar == 0.
+         *
+         * Do not reject the event in numeric mode.
+         */
+        if (event.getUnicodeChar() == 0
+                && !numericInputMode) {
+
             return false;
         }
 
@@ -505,7 +508,13 @@ public class KeyboardInputHandler {
             return true;
         }
 
-        if (event.getUnicodeChar() == 0) {
+        /*
+         * Numeric mappings must be allowed to handle physical
+         * keys even when Android reports unicodeChar == 0.
+         */
+        if (event.getUnicodeChar() == 0
+                && !numericInputMode) {
+
             return false;
         }
 
@@ -813,6 +822,7 @@ public class KeyboardInputHandler {
          *
          * ALT values are completely independent.
          */
+
         if (event.getRepeatCount() == 0) {
 
             boolean isMultipress =
@@ -829,6 +839,10 @@ public class KeyboardInputHandler {
 
                 keyIterationCounter = 0;
 
+                /*
+                 * Numeric mode intentionally does NOT use
+                 * language-specific multipress characters.
+                 */
                 if (!numericInputMode
                         && !altEnabled) {
 
@@ -902,8 +916,31 @@ public class KeyboardInputHandler {
                         altEnabled;
             }
 
-            if (!keyIterationModeEnabled
-                    || numericInputMode) {
+            /*
+             * NUMERIC MODE:
+             *
+             * Always print the mapped numeric character directly.
+             *
+             * No multipress.
+             * No cycling.
+             * No double press.
+             * No long-press replacement.
+             */
+            if (numericInputMode) {
+
+                printNextCharacter(
+                        inputConnection,
+                        keyMapping.getValue(
+                                shiftEnabled,
+                                false,
+                                (byte) 0
+                        )
+                );
+
+                return true;
+            }
+
+            if (!keyIterationModeEnabled) {
 
                 printNextCharacter(
                         inputConnection,
@@ -938,8 +975,9 @@ public class KeyboardInputHandler {
          *
          * It does not use Alt[1], Alt[2], etc.
          *
-         * Long press also cancels any pending multipress sequence.
+         * Numeric mode intentionally does not enter this path.
          */
+
         if (!numericInputMode
                 && eventTime - lastKeyDownTime
                 > keyLongPressDuration) {
