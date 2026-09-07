@@ -11,216 +11,192 @@ import java.util.Map;
 
 public class KeyboardMappingParser {
 
-private static final String KEYBOARD_MAPPING_TAG =
-        "KeyboardMapping";
+    private static final String KEYBOARD_MAPPING_TAG = "KeyboardMapping";
+    private static final String KEY_TAG = "Key";
+    private static final String ADD_TAG = "Add";
+    private static final String ALT_TAG = "Alt";
 
-private static final String KEY_TAG = "Key";
-private static final String ADD_TAG = "Add";
-private static final String ALT_TAG = "Alt";
+    private static final String CODE_ATTR = "code";
+    private static final String VALUE_ATTR = "value";
+    private static final String SHIFT_VALUE_ATTR = "shiftValue";
 
-private static final String CODE_ATTR = "code";
-private static final String VALUE_ATTR = "value";
-private static final String SHIFT_VALUE_ATTR =
-        "shiftValue";
+    private final XmlPullParser xpp;
 
-private static final String DOUBLE_PRESS_VALUE_ATTR =
-        "doublePressValue";
+    public KeyboardMappingParser(
+            Context context,
+            String keyMappingFile,
+            String modelName) {
 
-private static final String DOUBLE_PRESS_SHIFT_VALUE_ATTR =
-        "doublePressShiftValue";
+        this(
+                context.getResources().getXml(
+                        context.getResources().getIdentifier(
+                                "keyboard_mapping_"
+                                        + keyMappingFile
+                                        + modelName,
+                                "xml",
+                                context.getPackageName()
+                        )
+                )
+        );
+    }
 
-private final XmlPullParser xpp;
+    public KeyboardMappingParser(XmlPullParser xpp) {
+        this.xpp = xpp;
+    }
 
-public KeyboardMappingParser(
-        Context context,
-        String keyMappingFile,
-        String modelName) {
+    public KeyboardMapping parseMapping() throws Exception {
 
-    this(
-            context.getResources().getXml(
-                    context.getResources().getIdentifier(
-                            "keyboard_mapping_"
-                                    + keyMappingFile
-                                    + modelName,
-                            "xml",
-                            context.getPackageName()
-                    )
-            )
-    );
-}
+        Map<Integer, KeyMapping> keyMappings =
+                new HashMap<>();
 
-public KeyboardMappingParser(XmlPullParser xpp) {
-    this.xpp = xpp;
-}
+        List<KeyMappingValue> currentKeyValues =
+                new ArrayList<>();
 
-public KeyboardMapping parseMapping()
-        throws Exception {
+        List<KeyMappingValue> currentKeyAltValues =
+                new ArrayList<>();
 
-    Map<Integer, KeyMapping> keyMappings =
-            new HashMap<>();
+        int currentKeyCode = 0;
 
-    List<KeyMappingValue> currentKeyValues =
-            new ArrayList<>();
+        while (xpp.getEventType()
+                != XmlPullParser.END_DOCUMENT) {
 
-    List<KeyMappingValue> currentKeyAltValues =
-            new ArrayList<>();
+            switch (xpp.getEventType()) {
 
-    int currentKeyCode = 0;
-    int currentDoublePressValue = 0;
-    int currentDoublePressShiftValue = 0;
+                case XmlPullParser.START_TAG:
 
-    while (xpp.getEventType()
-            != XmlPullParser.END_DOCUMENT) {
+                    if (KEY_TAG.equals(xpp.getName())) {
 
-        switch (xpp.getEventType()) {
+                        currentKeyCode = 0;
 
-            case XmlPullParser.START_TAG:
+                        currentKeyValues.clear();
+                        currentKeyAltValues.clear();
 
-                if (KEY_TAG.equals(xpp.getName())) {
+                        for (int i = 0;
+                             i < xpp.getAttributeCount();
+                             i++) {
 
-                    currentKeyCode = 0;
-                    currentKeyValues.clear();
-                    currentKeyAltValues.clear();
+                            String attributeName =
+                                    xpp.getAttributeName(i);
 
-                    currentDoublePressValue = 0;
-                    currentDoublePressShiftValue = 0;
+                            if (CODE_ATTR.equals(attributeName)) {
 
-                    for (int i = 0;
-                         i < xpp.getAttributeCount();
-                         i++) {
-
-                        String attributeName =
-                                xpp.getAttributeName(i);
-
-                        String attributeValue =
-                                xpp.getAttributeValue(i);
-
-                        if (CODE_ATTR.equals(
-                                attributeName)) {
-
-                            currentKeyCode =
-                                    Integer.parseInt(
-                                            attributeValue
-                                    );
-
-                        } else if (
-                                DOUBLE_PRESS_VALUE_ATTR
-                                        .equals(attributeName)) {
-
-                            currentDoublePressValue =
-                                    attributeValue.codePointAt(0);
-
-                        } else if (
-                                DOUBLE_PRESS_SHIFT_VALUE_ATTR
-                                        .equals(attributeName)) {
-
-                            currentDoublePressShiftValue =
-                                    attributeValue.codePointAt(0);
+                                currentKeyCode =
+                                        Integer.parseInt(
+                                                xpp.getAttributeValue(i)
+                                        );
+                            }
                         }
+
+                        parseAndPutValue(
+                                xpp,
+                                currentKeyValues
+                        );
+
+                    } else if (ADD_TAG.equals(xpp.getName())) {
+
+                        parseAndPutValue(
+                                xpp,
+                                currentKeyValues
+                        );
+
+                    } else if (ALT_TAG.equals(xpp.getName())) {
+
+                        parseAndPutValue(
+                                xpp,
+                                currentKeyAltValues
+                        );
                     }
 
-                    parseAndPutValue(
-                            xpp,
-                            currentKeyValues
-                    );
+                    break;
 
-                } else if (
-                        ADD_TAG.equals(xpp.getName())) {
+                case XmlPullParser.END_TAG:
 
-                    parseAndPutValue(
-                            xpp,
-                            currentKeyValues
-                    );
+                    if (KEYBOARD_MAPPING_TAG.equals(
+                            xpp.getName())) {
 
-                } else if (
-                        ALT_TAG.equals(xpp.getName())) {
+                        return new KeyboardMapping(
+                                keyMappings
+                        );
 
-                    parseAndPutValue(
-                            xpp,
-                            currentKeyAltValues
-                    );
-                }
+                    } else if (KEY_TAG.equals(
+                            xpp.getName())) {
 
-                break;
+                        KeyMappingValue[] values =
+                                currentKeyValues.toArray(
+                                        new KeyMappingValue[0]
+                                );
 
-            case XmlPullParser.END_TAG:
+                        KeyMappingValue[] altValues =
+                                currentKeyAltValues.toArray(
+                                        new KeyMappingValue[0]
+                                );
 
-                if (KEYBOARD_MAPPING_TAG.equals(
-                        xpp.getName())) {
+                        keyMappings.put(
+                                currentKeyCode,
+                                new KeyMapping(
+                                        values,
+                                        altValues
+                                )
+                        );
+                    }
 
-                    return new KeyboardMapping(
-                            keyMappings
-                    );
+                    break;
 
-                } else if (
-                        KEY_TAG.equals(xpp.getName())) {
+                default:
+                    break;
+            }
 
-                    keyMappings.put(
-                            currentKeyCode,
-                            new KeyMapping(
-                                    currentKeyValues.toArray(
-                                            new KeyMappingValue[0]
-                                    ),
-                                    currentKeyAltValues.toArray(
-                                            new KeyMappingValue[0]
-                                    ),
-                                    currentDoublePressValue,
-                                    currentDoublePressShiftValue
-                            )
-                    );
-                }
-
-                break;
-
-            default:
-                break;
+            xpp.next();
         }
 
-        xpp.next();
+        throw new IllegalStateException(
+                "An error occurred during KeyboardMapping parsing"
+        );
     }
 
-    throw new IllegalStateException(
-            "An error occurred during KeyboardMapping parsing"
-    );
-}
+    private static void parseAndPutValue(
+            XmlPullParser xpp,
+            List<KeyMappingValue> target) {
 
-private static void parseAndPutValue(
-        XmlPullParser xpp,
-        List<KeyMappingValue> target) {
+        int value = 0;
+        int shiftValue = 0;
 
-    int value = 0;
-    int shiftValue = 0;
+        for (int i = 0;
+             i < xpp.getAttributeCount();
+             i++) {
 
-    for (int i = 0;
-         i < xpp.getAttributeCount();
-         i++) {
+            String attributeName =
+                    xpp.getAttributeName(i);
 
-        String attributeName =
-                xpp.getAttributeName(i);
+            String attributeValue =
+                    xpp.getAttributeValue(i);
 
-        String attributeValue =
-                xpp.getAttributeValue(i);
+            if (VALUE_ATTR.equals(attributeName)) {
 
-        if (VALUE_ATTR.equals(attributeName)) {
+                if (attributeValue != null
+                        && !attributeValue.isEmpty()) {
 
-            value =
-                    attributeValue.codePointAt(0);
+                    value =
+                            attributeValue.codePointAt(0);
+                }
 
-        } else if (
-                SHIFT_VALUE_ATTR.equals(attributeName)) {
+            } else if (SHIFT_VALUE_ATTR.equals(
+                    attributeName)) {
 
-            shiftValue =
-                    attributeValue.codePointAt(0);
+                if (attributeValue != null
+                        && !attributeValue.isEmpty()) {
+
+                    shiftValue =
+                            attributeValue.codePointAt(0);
+                }
+            }
         }
+
+        target.add(
+                new KeyMappingValue(
+                        value,
+                        shiftValue
+                )
+        );
     }
-
-    target.add(
-            new KeyMappingValue(
-                    value,
-                    shiftValue
-            )
-    );
-}
-
-
 }
