@@ -119,19 +119,6 @@ public class KeyboardInputHandler {
                 new MultipressController();
     }
 
-    /**
-     * Called whenever Android starts/restarts an InputConnection.
-     *
-     * Numeric mode is intentionally determined before composing mode.
-     *
-     * Numeric fields:
-     * - use numeric keyboard mapping
-     * - do not use composing
-     * - do not use multipress
-     * - do not use ALT/SHIFT character variants
-     *
-     * Normal text fields keep the existing PocketBoard behavior.
-     */
     public void onStartInput(
             EditorInfo attribute,
             boolean suggestionsAllowed,
@@ -151,13 +138,6 @@ public class KeyboardInputHandler {
 
         if (numericInputMode) {
 
-            /*
-             * This is critical for payment forms and WebViews.
-             *
-             * Numeric input must be committed directly. Otherwise
-             * composing/restartInput can cause the application to
-             * reject the generated character.
-             */
             composingEnabled = false;
 
             keyboardMappingManager
@@ -212,15 +192,6 @@ public class KeyboardInputHandler {
                 cursorPosition;
     }
 
-    /**
-     * IMPORTANT:
-     *
-     * Do not reset numericInputMode/composingEnabled/rawInputMode here.
-     *
-     * Apps such as payment/banking apps may call restartInput()
-     * after each character. Android can therefore call onFinishInput()
-     * immediately before onStartInput() again.
-     */
     public void onFinishInput() {
 
         textComposer.setLength(0);
@@ -262,6 +233,7 @@ public class KeyboardInputHandler {
                 }
 
                 multipressController.reset();
+                keyIterationCounter = 0;
 
             } else if (newSelStart != newSelEnd
                     && inputConnection != null) {
@@ -279,22 +251,12 @@ public class KeyboardInputHandler {
                 );
     }
 
-    /**
-     * When the current language/subtype changes, preserve the numeric
-     * mapping if the current editor is numeric.
-     *
-     * Otherwise use the normal language mapping.
-     */
     public void onInputMethodSubtypeChanged(
             InputMethodSubtype inputMethodSubtype,
             boolean suggestionsAllowed) {
 
         if (numericInputMode) {
 
-            /*
-             * NEVER switch a numeric editor back to the language
-             * mapping here.
-             */
             composingEnabled = false;
 
             textComposer.setLength(0);
@@ -308,6 +270,9 @@ public class KeyboardInputHandler {
             lastShiftEnabled = false;
             lastAltEnabled = false;
 
+            keyboardMappingManager
+                    .switchToNumericKeyboardMapping();
+
             return;
         }
 
@@ -318,7 +283,6 @@ public class KeyboardInputHandler {
                             .getCurrentInputConnection();
 
             if (inputConnection != null) {
-
                 commitComposingText(
                         inputConnection
                 );
@@ -335,7 +299,6 @@ public class KeyboardInputHandler {
                 );
 
         multipressController.reset();
-
         keyIterationCounter = 0;
 
         lastKeyCode =
@@ -365,7 +328,6 @@ public class KeyboardInputHandler {
 
             textComposer.setLength(0);
             multipressController.reset();
-
             keyIterationCounter = 0;
 
             return;
@@ -468,9 +430,6 @@ public class KeyboardInputHandler {
         keyIterationCounter = 0;
     }
 
-    /**
-     * Handles physical keyboard ACTION_DOWN.
-     */
     public boolean handleKeyDown(
             int keyCode,
             KeyEvent event,
@@ -497,9 +456,6 @@ public class KeyboardInputHandler {
 
             if (numericInputMode) {
 
-                /*
-                 * Numeric fields use direct deletion.
-                 */
                 if (event.getRepeatCount() == 0
                         || eventTime
                         - lastKeyDownTime
@@ -517,6 +473,7 @@ public class KeyboardInputHandler {
                 }
 
                 multipressController.reset();
+                keyIterationCounter = 0;
 
                 return true;
             }
@@ -534,34 +491,31 @@ public class KeyboardInputHandler {
                 lastKeyCode =
                         keyCode;
 
-            } else {
+            } else if (eventTime
+                    - lastKeyDownTime
+                    > keyLongPressDuration) {
 
-                if (eventTime
-                        - lastKeyDownTime
-                        > keyLongPressDuration) {
+                handleBackspace(
+                        inputConnection
+                );
 
-                    handleBackspace(
-                            inputConnection
-                    );
+                boolean hadComposingText =
+                        textComposer.length() > 0;
 
-                    boolean hadComposingText =
-                            textComposer.length() > 0;
+                inputConnection.beginBatchEdit();
 
-                    inputConnection.beginBatchEdit();
+                textComposer.setLength(0);
 
-                    textComposer.setLength(0);
+                inputConnection.commitText(
+                        "",
+                        1
+                );
 
-                    inputConnection.commitText(
-                            "",
-                            1
-                    );
+                inputConnection.endBatchEdit();
 
-                    inputConnection.endBatchEdit();
-
-                    if (hadComposingText) {
-                        lastKeyDownTime =
-                                eventTime;
-                    }
+                if (hadComposingText) {
+                    lastKeyDownTime =
+                            eventTime;
                 }
             }
 
@@ -603,11 +557,6 @@ public class KeyboardInputHandler {
          * =========================================================
          * CHARACTER
          * =========================================================
-         *
-         * Normal text input still uses the Unicode gate.
-         *
-         * Numeric input does NOT, because the physical keyboard
-         * character may be different from the numeric mapping.
          */
 
         if (event.getUnicodeChar() == 0
@@ -638,9 +587,6 @@ public class KeyboardInputHandler {
         return false;
     }
 
-    /**
-     * Handles physical keyboard ACTION_UP.
-     */
     public boolean handleKeyUp(
             int keyCode,
             KeyEvent event) {
@@ -655,10 +601,6 @@ public class KeyboardInputHandler {
             return true;
         }
 
-        /*
-         * Numeric mapping must be based on keyCode and not on
-         * Android's Unicode interpretation of the physical key.
-         */
         if (event.getUnicodeChar() == 0
                 && !numericInputMode) {
 
@@ -695,12 +637,6 @@ public class KeyboardInputHandler {
             return;
         }
 
-        /*
-         * =========================================================
-         * NUMERIC
-         * =========================================================
-         */
-
         if (numericInputMode) {
 
             CharSequence selectedText =
@@ -731,12 +667,6 @@ public class KeyboardInputHandler {
 
             return;
         }
-
-        /*
-         * =========================================================
-         * NORMAL TEXT
-         * =========================================================
-         */
 
         if (composingEnabled) {
 
@@ -992,18 +922,22 @@ public class KeyboardInputHandler {
     }
 
     /**
-     * Character handling is deliberately split into two completely
-     * independent paths:
+     * Mapping is the single source of truth for characters.
      *
-     * NUMERIC:
-     *     mapping -> commitText
+     * Normal:
+     *     value
      *
-     * TEXT:
-     *     mapping -> Add[] / Alt -> composing
+     * Multipress:
+     *     Add[0], Add[1], ...
      *
-     * No language-specific character is hardcoded here.
-     * The XML mapping is the single source of truth for normal,
-     * multipress and ALT values.
+     * SHIFT:
+     *     shiftValue
+     *
+     * ALT / long press:
+     *     Alt value
+     *
+     * ALT + SHIFT:
+     *     Alt shiftValue
      */
     private boolean handleCharacter(
             int keyCode,
@@ -1029,6 +963,7 @@ public class KeyboardInputHandler {
         if (keyMapping == null) {
 
             multipressController.reset();
+            keyIterationCounter = 0;
 
             return false;
         }
@@ -1041,11 +976,6 @@ public class KeyboardInputHandler {
 
         if (numericInputMode) {
 
-            /*
-             * Ignore Android key-repeat events.
-             *
-             * One physical press = one numeric character.
-             */
             if (event.getRepeatCount() != 0) {
                 return true;
             }
@@ -1057,13 +987,6 @@ public class KeyboardInputHandler {
                             (byte) 0
                     );
 
-            /*
-             * Numeric fields accept digits and decimal separators.
-             *
-             * The mapping defines which physical key produces each
-             * value. The handler only enforces the numeric-field
-             * output restriction.
-             */
             if (!isAllowedNumericCharacter(
                     character
             )) {
@@ -1085,100 +1008,117 @@ public class KeyboardInputHandler {
 
         /*
          * =========================================================
-         * NORMAL TEXT MODE
+         * NEW PHYSICAL KEY PRESS
          * =========================================================
          */
 
         if (event.getRepeatCount() == 0) {
 
-            /*
-             * MultipressController detects whether this key is part
-             * of a multipress sequence.
-             *
-             * It does NOT decide which character is produced.
-             *
-             * The active XML mapping defines:
-             *
-             *     value
-             *     Add[0]
-             *     Add[1]
-             *     ...
-             *
-             * The generic KeyMapping path below selects the value.
-             */
-            multipressController.process(
-                    event
-            );
+            boolean continuesMultipress =
+                    multipressController.process(
+                            event
+                    );
 
-            boolean isNewKey =
-                    lastKeyCode != keyCode;
+            boolean sameKey =
+                    lastKeyCode == keyCode;
 
-            boolean isShortPress =
+            boolean shortPress =
                     eventTime - lastKeyDownTime
                             <= keyLongPressDuration;
 
-            boolean keyIterationModeEnabled;
-
             /*
-             * Generic multipress:
-             *
-             * first press:
-             *     value
-             *
-             * second press:
-             *     Add[0]
-             *
-             * third press:
-             *     Add[1]
-             *
-             * etc.
-             *
-             * Everything comes from KeyMapping/XML.
+             * An explicit ALT modifier always selects the ALT
+             * mapping. It must never enter the normal multipress
+             * sequence.
              */
-            if (keyMapping.hasAdditionalValues(
-                    lastAltEnabled
-            )
-                    && !isNewKey
-                    && isShortPress) {
-
-                keyIterationModeEnabled = true;
-
-                keyIterationCounter++;
-
-            } else {
-
-                keyIterationModeEnabled = false;
+            if (altEnabled) {
 
                 keyIterationCounter = 0;
 
                 lastShiftEnabled =
                         shiftEnabled;
 
-                lastAltEnabled =
-                        altEnabled;
-            }
+                lastAltEnabled = true;
 
-            int character =
-                    keyMapping.getValue(
-                            lastShiftEnabled,
-                            lastAltEnabled,
-                            keyIterationCounter
-                    );
-
-            if (keyIterationModeEnabled) {
-
-                replaceLastCharacter(
-                        inputConnection,
-                        character
-                );
-
-            } else {
+                int character =
+                        keyMapping.getValue(
+                                shiftEnabled,
+                                true,
+                                (byte) 0
+                        );
 
                 printNextCharacter(
                         inputConnection,
                         character
                 );
+
+                return true;
             }
+
+            /*
+             * A second/later short press of the same physical key
+             * selects the next XML <Add> entry.
+             */
+            if (continuesMultipress
+                    && sameKey
+                    && shortPress
+                    && keyMapping
+                    .hasAdditionalValues(false)) {
+
+                int additionalIndex =
+                        multipressController
+                                .getAdditionalValueIndex();
+
+                if (additionalIndex >= 0) {
+
+                    keyIterationCounter =
+                            (byte) (
+                                    additionalIndex + 1
+                            );
+
+                    int character =
+                            keyMapping.getAdditionalValue(
+                                    shiftEnabled,
+                                    (byte) (
+                                            additionalIndex + 1
+                                    )
+                            );
+
+                    replaceLastCharacter(
+                            inputConnection,
+                            character
+                    );
+
+                    lastShiftEnabled =
+                            shiftEnabled;
+
+                    lastAltEnabled = false;
+
+                    return true;
+                }
+            }
+
+            /*
+             * New sequence or a key without <Add> values.
+             */
+            keyIterationCounter = 0;
+
+            lastShiftEnabled =
+                    shiftEnabled;
+
+            lastAltEnabled = false;
+
+            int character =
+                    keyMapping.getValue(
+                            shiftEnabled,
+                            false,
+                            (byte) 0
+                    );
+
+            printNextCharacter(
+                    inputConnection,
+                    character
+            );
 
             return true;
         }
@@ -1187,27 +1127,28 @@ public class KeyboardInputHandler {
          * =========================================================
          * LONG PRESS / ALT
          * =========================================================
-         *
-         * ALT is obtained exclusively through KeyMapping.
-         *
-         * No language-specific character is hardcoded here.
          */
+
         if (eventTime - lastKeyDownTime
                 > keyLongPressDuration) {
 
             multipressController
                     .markLongPress();
 
-            lastAltEnabled = true;
             keyIterationCounter = 0;
 
-            replaceLastCharacter(
-                    inputConnection,
+            lastAltEnabled = true;
+
+            int character =
                     keyMapping.getValue(
                             lastShiftEnabled,
                             true,
                             (byte) 0
-                    )
+                    );
+
+            replaceLastCharacter(
+                    inputConnection,
+                    character
             );
 
             lastKeyDownTime =
@@ -1219,6 +1160,11 @@ public class KeyboardInputHandler {
         return false;
     }
 
+    /**
+     * Numeric mappings are filtered by the numeric editor mode.
+     *
+     * The physical mapping itself remains defined in XML.
+     */
     private boolean isAllowedNumericCharacter(
             int character) {
 
@@ -1237,10 +1183,6 @@ public class KeyboardInputHandler {
             return;
         }
 
-        /*
-         * Safety guard. Numeric mode should already have been
-         * handled by handleCharacter().
-         */
         if (numericInputMode) {
 
             if (isAllowedNumericCharacter(
@@ -1312,12 +1254,6 @@ public class KeyboardInputHandler {
         if (inputConnection == null) {
             return;
         }
-
-        /*
-         * This method is only used for normal text multipress/ALT.
-         *
-         * Numeric mode never enters this path.
-         */
 
         if (rawInputMode) {
 
