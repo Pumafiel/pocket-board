@@ -999,7 +999,11 @@ public class KeyboardInputHandler {
      *     mapping -> commitText
      *
      * TEXT:
-     *     multipress -> Add[] -> composing -> ALT/longpress
+     *     mapping -> Add[] / Alt -> composing
+     *
+     * No language-specific character is hardcoded here.
+     * The XML mapping is the single source of truth for normal,
+     * multipress and ALT values.
      */
     private boolean handleCharacter(
             int keyCode,
@@ -1056,10 +1060,9 @@ public class KeyboardInputHandler {
             /*
              * Numeric fields accept digits and decimal separators.
              *
-             * The Titan mapping contains other symbols as well
-             * (/, -, +, *, #, parentheses, etc.). Those are consumed
-             * here but are not inserted into a numeric HTML/payment
-             * field.
+             * The mapping defines which physical key produces each
+             * value. The handler only enforces the numeric-field
+             * output restriction.
              */
             if (!isAllowedNumericCharacter(
                     character
@@ -1088,46 +1091,24 @@ public class KeyboardInputHandler {
 
         if (event.getRepeatCount() == 0) {
 
-            boolean isMultipress =
-                    multipressController.process(
-                            event
-                    );
-
             /*
-             * A second short press can be a language-specific
-             * character such as ñ/á/etc.
+             * MultipressController detects whether this key is part
+             * of a multipress sequence.
              *
-             * If it is not a language-specific mapping, DO NOT
-             * consume the event here. Let the generic Add[] logic
-             * below handle it.
+             * It does NOT decide which character is produced.
+             *
+             * The active XML mapping defines:
+             *
+             *     value
+             *     Add[0]
+             *     Add[1]
+             *     ...
+             *
+             * The generic KeyMapping path below selects the value.
              */
-            if (isMultipress
-                    && !altEnabled) {
-
-                int specialCharacter =
-                        getLanguageDoublePressCharacter(
-                                keyCode,
-                                shiftEnabled
-                        );
-
-                if (specialCharacter != -1) {
-
-                    replaceLastCharacter(
-                            inputConnection,
-                            specialCharacter
-                    );
-
-                    lastShiftEnabled =
-                            shiftEnabled;
-
-                    lastAltEnabled =
-                            false;
-
-                    keyIterationCounter = 0;
-
-                    return true;
-                }
-            }
+            multipressController.process(
+                    event
+            );
 
             boolean isNewKey =
                     lastKeyCode != keyCode;
@@ -1144,13 +1125,15 @@ public class KeyboardInputHandler {
              * first press:
              *     value
              *
-             * second:
+             * second press:
              *     Add[0]
              *
-             * third:
+             * third press:
              *     Add[1]
              *
              * etc.
+             *
+             * Everything comes from KeyMapping/XML.
              */
             if (keyMapping.hasAdditionalValues(
                     lastAltEnabled
@@ -1204,8 +1187,11 @@ public class KeyboardInputHandler {
          * =========================================================
          * LONG PRESS / ALT
          * =========================================================
+         *
+         * ALT is obtained exclusively through KeyMapping.
+         *
+         * No language-specific character is hardcoded here.
          */
-
         if (eventTime - lastKeyDownTime
                 > keyLongPressDuration) {
 
@@ -1241,62 +1227,6 @@ public class KeyboardInputHandler {
                         && character <= '9')
                         || character == '.'
                         || character == ',';
-    }
-
-    /**
-     * Handles language-specific double press characters.
-     *
-     * Example:
-     *
-     *     N N -> ñ
-     *
-     * If the additional value is not a letter, -1 is returned and
-     * the normal Add[] multipress path handles it.
-     */
-    private int getLanguageDoublePressCharacter(
-            int keyCode,
-            boolean shiftEnabled) {
-
-        KeyMapping keyMapping =
-                keyboardMappingManager
-                        .getCurrentMapping()
-                        .getKeyMapping(
-                                keyCode
-                        );
-
-        if (keyMapping == null) {
-            return -1;
-        }
-
-        if (!keyMapping.hasAdditionalValues(
-                false
-        )) {
-
-            return -1;
-        }
-
-        int character =
-                keyMapping.getValue(
-                        shiftEnabled,
-                        false,
-                        (byte) 1
-                );
-
-        if (!isLanguageSpecificCharacter(
-                character
-        )) {
-
-            return -1;
-        }
-
-        return character;
-    }
-
-    private boolean isLanguageSpecificCharacter(
-            int character) {
-
-        return Character.isLetter(character)
-                && !Character.isDigit(character);
     }
 
     private void printNextCharacter(
