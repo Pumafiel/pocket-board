@@ -209,9 +209,29 @@ public class KeyboardInputHandler {
         lastShiftEnabled = false;
         lastAltEnabled = false;
 
-        numericInputMode = false;
-        composingEnabled = false;
-        rawInputMode = false;
+        /*
+         * IMPORTANTE: no forzar numericInputMode / composingEnabled /
+         * rawInputMode a false aca.
+         *
+         * onFinishInput() se llama en CADA reinicio del InputConnection,
+         * no solo al abandonar el campo definitivamente. Muchas apps de
+         * pago/bancos (Mercado Pago, etc.) llaman a
+         * InputMethodManager.restartInput() despues de cada digito para
+         * reformatear el texto (separador de miles en montos, puntos en
+         * CUIL/DNI, agrupacion en numero de tarjeta, puntitos de PIN).
+         *
+         * Eso dispara onFinishInput() seguido de
+         * onStartInput(attribute, restarting=true). Si forzamos estos
+         * flags a false aca, se abre una ventana de carrera: si la
+         * siguiente tecla llega antes de que onStartInput() termine de
+         * recalcularlos, se procesa con el mapeo de letras en vez del
+         * numerico, se comete un caracter no numerico, y el campo (que
+         * solo acepta digitos) lo descarta en silencio.
+         *
+         * onStartInput() ya recalcula estos tres flags correctamente en
+         * cada ciclo segun el EditorInfo actual, asi que no hace falta
+         * forzarlos aca.
+         */
     }
 
     public void onUpdateSelection(
