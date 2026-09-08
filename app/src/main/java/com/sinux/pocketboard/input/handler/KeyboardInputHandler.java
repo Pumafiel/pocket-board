@@ -114,39 +114,34 @@ public class KeyboardInputHandler {
             int cursorPosition) {
 
         rawInputMode =
-                attribute != null
-                        && rawInputEditors.contains(
-                                attribute.packageName
-                        );
+                rawInputEditors.contains(
+                        attribute.packageName
+                );
 
         /*
-         * Numeric editors are handled as direct input.
+         * Keep the original PocketBoard behavior:
          *
-         * This is intentionally separate from the normal
-         * composing/multipress path.
+         * Numeric fields are selected by the editor type, but
+         * composing remains enabled exactly as in the original
+         * implementation.
+         *
+         * The numeric mapping itself determines what the physical
+         * keys produce.
          */
-        numericInputMode =
-                attribute != null
-                        && InputUtils.isNumericEditor(
-                                attribute
-                        );
-
         composingEnabled =
                 suggestionsAllowed
-                        && !rawInputMode
-                        && !numericInputMode;
+                        && !rawInputMode;
 
-        /*
-         * A numeric editor uses the dedicated numeric mapping.
-         *
-         * This is NOT the SYM/SymPad mapping.
-         */
-        if (numericInputMode) {
+        if (InputUtils.isNumericEditor(attribute)) {
+
+            numericInputMode = true;
 
             keyboardMappingManager
                     .switchToNumericKeyboardMapping();
 
         } else {
+
+            numericInputMode = false;
 
             keyboardMappingManager
                     .switchToKeyboardMapping(
@@ -180,8 +175,10 @@ public class KeyboardInputHandler {
 
         keyIterationCounter = 0;
         lastKeyDownTime = 0;
+
         lastKeyCode =
                 KeyEvent.KEYCODE_UNKNOWN;
+
         lastShiftEnabled = false;
         lastAltEnabled = false;
 
@@ -198,14 +195,12 @@ public class KeyboardInputHandler {
 
         keyIterationCounter = 0;
         lastKeyDownTime = 0;
+
         lastKeyCode =
                 KeyEvent.KEYCODE_UNKNOWN;
+
         lastShiftEnabled = false;
         lastAltEnabled = false;
-
-        numericInputMode = false;
-        composingEnabled = false;
-        rawInputMode = false;
     }
 
     public void onUpdateSelection(
@@ -252,18 +247,6 @@ public class KeyboardInputHandler {
             InputMethodSubtype inputMethodSubtype,
             boolean suggestionsAllowed) {
 
-        /*
-         * Numeric mode belongs to the current editor, not to the
-         * selected language/layout.
-         *
-         * Therefore do not replace the numeric mapping when the
-         * keyboard language changes.
-         */
-        if (numericInputMode) {
-            multipressController.reset();
-            return;
-        }
-
         if (composingEnabled) {
 
             InputConnection inputConnection =
@@ -278,6 +261,12 @@ public class KeyboardInputHandler {
             }
         }
 
+        /*
+         * Keep the original subtype behavior.
+         *
+         * The important point is that numeric mode is established
+         * again when a numeric editor starts input.
+         */
         composingEnabled =
                 suggestionsAllowed
                         && !rawInputMode;
@@ -416,10 +405,6 @@ public class KeyboardInputHandler {
             boolean shiftEnabled,
             boolean altEnabled) {
 
-        if (inputConnection == null) {
-            return false;
-        }
-
         long eventTime =
                 event.getEventTime();
 
@@ -427,46 +412,12 @@ public class KeyboardInputHandler {
          * ---------------------------------------------------------
          * BACKSPACE
          * ---------------------------------------------------------
-         *
-         * Numeric fields do not use composing text.
-         * Delete directly through InputConnection.
          */
+
         if (keyCode == KeyEvent.KEYCODE_DEL) {
 
-            multipressController.reset();
-
-            /*
-             * Numeric mode:
-             *
-             * Every real DEL event deletes directly.
-             * We deliberately do not use sendDownUpKeyEvents()
-             * because some numeric applications do not handle
-             * that path consistently.
-             */
-            if (numericInputMode) {
-
-                if (event.getRepeatCount() == 0
-                        || eventTime - lastKeyDownTime
-                        > keyLongPressDuration) {
-
-                    handleBackspace(
-                            inputConnection
-                    );
-
-                    lastKeyDownTime =
-                            eventTime;
-
-                    lastKeyCode =
-                            keyCode;
-                }
-
-                return true;
-            }
-
-            /*
-             * Normal keyboard behavior.
-             */
-            if (event.getRepeatCount() == 0) {
+            if (!composingEnabled
+                    || event.getRepeatCount() == 0) {
 
                 handleBackspace(
                         inputConnection
@@ -478,35 +429,37 @@ public class KeyboardInputHandler {
                 lastKeyCode =
                         keyCode;
 
-            } else if (eventTime
-                    - lastKeyDownTime
-                    > keyLongPressDuration) {
+            } else {
 
-                handleBackspace(
-                        inputConnection
-                );
+                if (eventTime
+                        - lastKeyDownTime
+                        > keyLongPressDuration) {
 
-                boolean hadComposingText =
-                        textComposer.length() > 0;
+                    handleBackspace(
+                            inputConnection
+                    );
 
-                inputConnection.beginBatchEdit();
+                    boolean hadComposingText =
+                            textComposer.length() > 0;
 
-                textComposer.setLength(0);
+                    inputConnection.beginBatchEdit();
 
-                inputConnection.commitText(
-                        "",
-                        1
-                );
+                    textComposer.setLength(0);
 
-                inputConnection.endBatchEdit();
+                    inputConnection.commitText(
+                            "",
+                            1
+                    );
 
-                if (hadComposingText) {
-                    lastKeyDownTime =
-                            eventTime;
+                    inputConnection.endBatchEdit();
+
+                    if (hadComposingText) {
+
+                        lastKeyDownTime =
+                                eventTime;
+                    }
                 }
             }
-
-            notifySuggestions();
 
             return true;
         }
@@ -515,16 +468,9 @@ public class KeyboardInputHandler {
          * ---------------------------------------------------------
          * SPACE
          * ---------------------------------------------------------
-         *
-         * Space is not valid in a numeric field.
          */
+
         if (keyCode == KeyEvent.KEYCODE_SPACE) {
-
-            if (numericInputMode) {
-                return true;
-            }
-
-            multipressController.reset();
 
             handleSpace(
                     inputConnection,
@@ -538,8 +484,6 @@ public class KeyboardInputHandler {
             lastKeyCode =
                     keyCode;
 
-            notifySuggestions();
-
             return true;
         }
 
@@ -548,23 +492,18 @@ public class KeyboardInputHandler {
          * CHARACTER
          * ---------------------------------------------------------
          *
-         * IMPORTANT:
+         * The original implementation checked Unicode here.
          *
-         * We obtain the character from KeyMapping, not from
-         * event.getUnicodeChar().
-         *
-         * This is required because the physical QWERTY key can
-         * represent a different character in our mapping.
-         *
-         * Example in numeric mapping:
-         *
-         *   Q -> 0
-         *   W -> 1
-         *   E -> 2
-         *   ...
-         *   B -> .
-         *   N -> ,
+         * Numeric physical mappings may have unicodeChar == 0,
+         * therefore numeric mode must bypass this gate.
          */
+
+        if (event.getUnicodeChar() == 0
+                && !numericInputMode) {
+
+            return false;
+        }
+
         if (handleCharacter(
                 keyCode,
                 event,
@@ -579,8 +518,6 @@ public class KeyboardInputHandler {
             lastKeyCode =
                     keyCode;
 
-            notifySuggestions();
-
             return true;
         }
 
@@ -591,10 +528,6 @@ public class KeyboardInputHandler {
             int keyCode,
             KeyEvent event) {
 
-        /*
-         * DEL and SPACE have already been completely handled
-         * by handleKeyDown().
-         */
         if (keyCode == KeyEvent.KEYCODE_DEL
                 || keyCode == KeyEvent.KEYCODE_SPACE) {
 
@@ -602,37 +535,12 @@ public class KeyboardInputHandler {
         }
 
         /*
-         * Numeric mode:
-         *
-         * Do not reinterpret the key or use Unicode from the
-         * physical keyboard here.
-         *
-         * If handleKeyDown() consumed the mapped character,
-         * consume the corresponding key-up as well.
-         *
-         * This prevents the original physical key from leaking
-         * a letter/symbol into the target application.
+         * Numeric mapping may be used even when Android reports
+         * unicodeChar == 0 for the physical key.
          */
-        if (numericInputMode) {
+        if (event.getUnicodeChar() == 0
+                && !numericInputMode) {
 
-            KeyMapping keyMapping =
-                    keyboardMappingManager
-                            .getCurrentMapping()
-                            .getKeyMapping(
-                                    keyCode
-                            );
-
-            return keyMapping != null;
-        }
-
-        /*
-         * Normal keyboard behavior.
-         *
-         * Keep the original Unicode check so keys that are not
-         * text characters can continue through the normal IME
-         * path.
-         */
-        if (event.getUnicodeChar() == 0) {
             return false;
         }
 
@@ -646,19 +554,6 @@ public class KeyboardInputHandler {
         return keyMapping != null;
     }
 
-    private void notifySuggestions() {
-
-        if (composingEnabled
-                && pocketBoardIME
-                        .getSuggestionsManager()
-                        != null) {
-
-            pocketBoardIME
-                    .getSuggestionsManager()
-                    .update();
-        }
-    }
-
     private void handleBackspace(
             InputConnection inputConnection) {
 
@@ -667,14 +562,11 @@ public class KeyboardInputHandler {
         }
 
         /*
-         * ---------------------------------------------------------
-         * NUMERIC BACKSPACE
-         * ---------------------------------------------------------
+         * Numeric mode deliberately does NOT send a synthetic
+         * hardware DEL event.
          *
-         * No composing text exists in numeric mode.
-         *
-         * Delete the selected text or the previous Unicode code
-         * point directly from the target application.
+         * Delete directly through InputConnection, just as a
+         * normal text editor expects.
          */
         if (numericInputMode) {
 
@@ -697,6 +589,7 @@ public class KeyboardInputHandler {
                         );
 
                 if (lastCursorPosition > 0) {
+
                     lastCursorPosition--;
                 }
             }
@@ -704,11 +597,6 @@ public class KeyboardInputHandler {
             return;
         }
 
-        /*
-         * ---------------------------------------------------------
-         * NORMAL BACKSPACE
-         * ---------------------------------------------------------
-         */
         if (composingEnabled) {
 
             int composingLength =
@@ -779,7 +667,8 @@ public class KeyboardInputHandler {
         }
 
         if (TextUtils.isEmpty(
-                inputConnection.getSelectedText(0))) {
+                inputConnection.getSelectedText(0)
+        )) {
 
             CharSequence str =
                     inputConnection
@@ -864,6 +753,13 @@ public class KeyboardInputHandler {
             InputConnection inputConnection,
             long eventTime,
             int eventRepeatCount) {
+
+        /*
+         * Do not allow space in numeric editors.
+         */
+        if (numericInputMode) {
+            return;
+        }
 
         if (layoutChangeShortcut) {
 
@@ -967,6 +863,12 @@ public class KeyboardInputHandler {
             return false;
         }
 
+        /*
+         * ---------------------------------------------------------
+         * Get mapping
+         * ---------------------------------------------------------
+         */
+
         KeyMapping keyMapping =
                 keyboardMappingManager
                         .getCurrentMapping()
@@ -975,55 +877,44 @@ public class KeyboardInputHandler {
                         );
 
         if (keyMapping == null) {
+
             multipressController.reset();
+
             return false;
         }
 
         /*
          * ---------------------------------------------------------
-         * NUMERIC INPUT
+         * NUMERIC MODE
          * ---------------------------------------------------------
          *
-         * Numeric mode is completely isolated from:
+         * This follows the original PocketBoard architecture:
          *
-         *   - composing
-         *   - suggestions
-         *   - multipress
-         *   - SHIFT
-         *   - ALT
+         *   physical key
+         *       ↓
+         *   numeric KeyboardMapping
+         *       ↓
+         *   mapped character
+         *       ↓
+         *   printNextCharacter()
          *
-         * The numeric XML mapping may contain characters such as
-         * +, -, /, *, #, (, ), ;, etc.
+         * We only add the required filtering:
          *
-         * They are intentionally filtered here.
-         *
-         * Only these characters can reach the application:
-         *
-         *   0 1 2 3 4 5 6 7 8 9
+         *   0-9
          *   .
          *   ,
+         *
+         * There is NO multipress in numeric mode.
+         * There is NO ALT interpretation in numeric mode.
+         * There is NO SHIFT interpretation in numeric mode.
          */
+
         if (numericInputMode) {
 
-            /*
-             * Android can generate repeated DOWN events when a
-             * physical key is held. A numeric key must only be
-             * inserted once per physical press.
-             */
             if (event.getRepeatCount() != 0) {
                 return true;
             }
 
-            /*
-             * Always use the numeric mapping itself.
-             *
-             * Do NOT use:
-             *
-             *   event.getUnicodeChar()
-             *
-             * because that would give us the physical QWERTY
-             * character instead of the mapped numeric character.
-             */
             int character =
                     keyMapping.getValue(
                             false,
@@ -1031,32 +922,31 @@ public class KeyboardInputHandler {
                             (byte) 0
                     );
 
-            /*
-             * Filter the numeric mapping.
-             */
             if (!isAllowedNumericCharacter(
                     character
             )) {
 
                 /*
-                 * The key was intentionally consumed.
-                 * Nothing is sent to the application.
+                 * The physical key belongs to the numeric mapping,
+                 * but its mapped value is not valid numeric input
+                 * (for example +, -, *, /, #, (, ), ;).
+                 *
+                 * Consume it without sending anything.
                  */
                 return true;
             }
 
             /*
-             * Direct insertion.
+             * Use the original print path rather than creating a
+             * separate numeric InputConnection implementation.
              *
-             * No composing text.
-             * No multipress.
-             * No suggestion pipeline.
+             * This is important because the original keyboard
+             * already knows how the target editor expects committed
+             * text/composing text.
              */
-            inputConnection.commitText(
-                    String.valueOf(
-                            (char) character
-                    ),
-                    1
+            printNextCharacter(
+                    inputConnection,
+                    character
             );
 
             return true;
@@ -1067,8 +957,8 @@ public class KeyboardInputHandler {
          * NORMAL KEYBOARD / MULTIPRESS
          * ---------------------------------------------------------
          *
-         * This path is intentionally kept separate so the
-         * Spanish/German multipress behavior is preserved.
+         * This is intentionally kept compatible with the current
+         * Spanish/German character handling.
          */
 
         if (event.getRepeatCount() == 0) {
@@ -1082,6 +972,14 @@ public class KeyboardInputHandler {
 
                 keyIterationCounter = 0;
 
+                /*
+                 * Double-press language characters are handled only
+                 * in normal keyboard mode.
+                 *
+                 * This preserves characters such as ñ and the
+                 * language-specific accented/special characters
+                 * defined by the mapping.
+                 */
                 if (!altEnabled) {
 
                     int specialCharacter =
@@ -1126,11 +1024,13 @@ public class KeyboardInputHandler {
                     && isShortPress) {
 
                 keyIterationModeEnabled = true;
+
                 keyIterationCounter++;
 
             } else {
 
                 keyIterationModeEnabled = false;
+
                 keyIterationCounter = 0;
 
                 lastShiftEnabled =
@@ -1168,8 +1068,13 @@ public class KeyboardInputHandler {
 
         /*
          * ---------------------------------------------------------
-         * LONG PRESS
+         * LONG PRESS / ALT
          * ---------------------------------------------------------
+         *
+         * Numeric mode never reaches this section.
+         *
+         * Therefore ALT/multipress behavior remains available for
+         * normal Spanish/German keyboard input.
          */
 
         if (eventTime - lastKeyDownTime
@@ -1200,14 +1105,14 @@ public class KeyboardInputHandler {
     }
 
     /**
-     * Numeric fields accept only:
+     * Numeric fields accept exactly:
      *
-     *   0 - 9
+     *   0 1 2 3 4 5 6 7 8 9
      *   .
      *   ,
      *
-     * Everything else in the numeric physical-key mapping is
-     * ignored.
+     * Other characters present in the numeric physical-key mapping
+     * are deliberately ignored.
      */
     private boolean isAllowedNumericCharacter(
             int character) {
@@ -1220,14 +1125,10 @@ public class KeyboardInputHandler {
     }
 
     /**
-     * Returns the language-specific character associated with
-     * a double press of a physical key.
+     * Returns the language-specific character associated with a
+     * double press of a physical key.
      *
-     * This is used ONLY by the normal keyboard path.
-     *
-     * Numeric mode never reaches this method.
-     *
-     * ALT values are deliberately ignored here.
+     * This method is NEVER used in numeric mode.
      */
     private int getLanguageDoublePressCharacter(
             int keyCode,
@@ -1276,7 +1177,57 @@ public class KeyboardInputHandler {
             InputConnection inputConnection,
             int character) {
 
-        if (composingEnabled) {
+        if (inputConnection == null) {
+            return;
+        }
+
+        /*
+         * Numeric mode uses the same output mechanism as the
+         * original implementation.
+         *
+         * For normal keyboard input the existing composing and
+         * punctuation behavior is preserved.
+         */
+        if (numericInputMode) {
+
+            inputConnection.commitText(
+                    new String(
+                            Character.toChars(
+                                    character
+                            )
+                    ),
+                    1
+            );
+
+            return;
+        }
+
+        if (rawInputMode) {
+
+            inputConnection.commitText(
+                    new String(
+                            Character.toChars(
+                                    character
+                            )
+                    ),
+                    1
+            );
+
+            return;
+        }
+
+        if (CharacterUtils
+                .isPunctuationCharacter(
+                        character
+                )) {
+
+            handlePunctuationCharacter(
+                    inputConnection,
+                    character,
+                    false
+            );
+
+        } else if (composingEnabled) {
 
             composeNewCharacter(
                     inputConnection,
@@ -1286,11 +1237,110 @@ public class KeyboardInputHandler {
         } else {
 
             inputConnection.commitText(
-                    String.valueOf(
-                            (char) character
+                    new String(
+                            Character.toChars(
+                                    character
+                            )
                     ),
                     1
             );
+        }
+    }
+
+    private void replaceLastCharacter(
+            InputConnection inputConnection,
+            int character) {
+
+        if (inputConnection == null) {
+            return;
+        }
+
+        if (rawInputMode) {
+
+            handleBackspace(
+                    inputConnection
+            );
+
+            SystemClock.sleep(10);
+
+            printNextCharacter(
+                    inputConnection,
+                    character
+            );
+
+            return;
+        }
+
+        if (CharacterUtils
+                .isPunctuationCharacter(
+                        character
+                )) {
+
+            handlePunctuationCharacter(
+                    inputConnection,
+                    character,
+                    true
+            );
+
+        } else if (composingEnabled) {
+
+            if (textComposer.length() > 0) {
+
+                textComposer.setLength(
+                        textComposer.length()
+                                - CharacterUtils
+                                .getLastCharacterLength(
+                                        textComposer
+                                )
+                );
+
+                composeNewCharacter(
+                        inputConnection,
+                        character
+                );
+
+            } else {
+
+                inputConnection.beginBatchEdit();
+
+                inputConnection
+                        .deleteSurroundingTextInCodePoints(
+                                1,
+                                0
+                        );
+
+                inputConnection.commitText(
+                        new String(
+                                Character.toChars(
+                                        character
+                                )
+                        ),
+                        1
+                );
+
+                findAndComposeLastWord(
+                        inputConnection
+                );
+
+                inputConnection.endBatchEdit();
+            }
+
+        } else {
+
+            inputConnection.beginBatchEdit();
+
+            inputConnection
+                    .deleteSurroundingTextInCodePoints(
+                            1,
+                            0
+                    );
+
+            printNextCharacter(
+                    inputConnection,
+                    character
+            );
+
+            inputConnection.endBatchEdit();
         }
     }
 
@@ -1302,84 +1352,107 @@ public class KeyboardInputHandler {
             return;
         }
 
-        textComposer.append(
-                (char) character
+        textComposer.appendCodePoint(
+                character
         );
 
         inputConnection.setComposingText(
                 textComposer,
                 1
         );
+
+        /*
+         * Preserve the original behavior:
+         * punctuation and characters outside the normal word
+         * stream finish composing immediately.
+         */
+        if (!Character.isLetterOrDigit(
+                character
+        )
+                && !nonLetterOrDigitExclusions.contains(
+                new String(
+                        Character.toChars(
+                                character
+                        )
+                )
+        )) {
+
+            commitComposingText(
+                    inputConnection
+            );
+        }
     }
 
-    private void replaceLastCharacter(
+    private void handlePunctuationCharacter(
             InputConnection inputConnection,
-            int character) {
+            int character,
+            boolean removeLastCharacter) {
 
-        if (inputConnection == null) {
-            return;
+        inputConnection.beginBatchEdit();
+
+        if (composingEnabled) {
+
+            commitComposingText(
+                    inputConnection
+            );
         }
 
-        if (textComposer.length() > 0) {
+        if (removeLastCharacter) {
 
-            textComposer.setLength(
-                    textComposer.length()
-                            - CharacterUtils
-                            .getLastCharacterLength(
-                                    textComposer
-                            )
-            );
-
-            textComposer.append(
-                    (char) character
-            );
-
-            inputConnection.setComposingText(
-                    textComposer,
-                    1
-            );
-
-            return;
+            inputConnection
+                    .deleteSurroundingTextInCodePoints(
+                            1,
+                            0
+                    );
         }
 
-        CharSequence beforeCursor =
+        CharSequence lastChars =
                 inputConnection
                         .getTextBeforeCursor(
-                                2,
+                                3,
                                 0
                         );
 
-        if (!TextUtils.isEmpty(beforeCursor)) {
-
-            int lastCharacterLength =
-                    CharacterUtils
-                            .getLastCharacterLength(
-                                    beforeCursor
-                            );
+        if (CharacterUtils
+                .isLetterOrDigitAndSpace(
+                        lastChars
+                )) {
 
             inputConnection
                     .deleteSurroundingText(
-                            lastCharacterLength,
+                            1,
                             0
                     );
 
             inputConnection.commitText(
-                    String.valueOf(
-                            (char) character
+                    new String(
+                            Character.toChars(
+                                    character
+                            )
+                    ) + " ",
+                    1
+            );
+
+        } else {
+
+            inputConnection.commitText(
+                    new String(
+                            Character.toChars(
+                                    character
+                            )
                     ),
                     1
             );
         }
+
+        inputConnection.endBatchEdit();
     }
 
     private void commitComposingText(
             InputConnection inputConnection) {
 
-        if (inputConnection == null) {
-            return;
-        }
-
-        if (textComposer.length() > 0) {
+        if (inputConnection != null
+                && textComposer.length() > 0) {
 
             inputConnection.commitText(
                     textComposer,
@@ -1392,33 +1465,150 @@ public class KeyboardInputHandler {
 
     private boolean handleDictAndAutocorrection() {
 
-        if (!composingEnabled
-                || textComposer.length() == 0) {
-
+        if (!composingEnabled) {
             return false;
         }
 
-        if (dictShortcuts
-                && handleDictShortcut()) {
+        if (dictShortcuts) {
 
-            return true;
+            CharSequence dictSuggestion =
+                    pocketBoardIME
+                            .getSuggestionsManager()
+                            .getCurrentDictSuggestion();
+
+            if (dictSuggestion != null) {
+
+                applySuggestion(
+                        dictSuggestion,
+                        pocketBoardIME
+                                .getCurrentInputConnection(),
+                        false
+                );
+
+                return true;
+            }
         }
 
-        if (autocorrection
-                && handleAutocorrection()) {
+        if (autocorrection) {
 
-            return true;
+            CharSequence recommendedSuggestion =
+                    pocketBoardIME
+                            .getSuggestionsManager()
+                            .getCurrentSpellcheckerRecommendedSuggestion();
+
+            if (recommendedSuggestion != null) {
+
+                applySuggestion(
+                        recommendedSuggestion,
+                        pocketBoardIME
+                                .getCurrentInputConnection(),
+                        false
+                );
+
+                return true;
+            }
         }
 
         return false;
     }
 
-    private boolean handleDictShortcut() {
-        return false;
-    }
+    private void handleSpace(
+            InputConnection inputConnection,
+            long eventTime,
+            int eventRepeatCount) {
 
-    private boolean handleAutocorrection() {
-        return false;
+        if (numericInputMode) {
+            return;
+        }
+
+        if (layoutChangeShortcut) {
+
+            if (eventRepeatCount ==
+                    layoutChangeShortcutEventRepeatCount) {
+
+                handleBackspace(
+                        inputConnection
+                );
+
+                pocketBoardIME
+                        .switchToNextInputMethod(
+                                true
+                        );
+
+                return;
+
+            } else if (eventRepeatCount > 0) {
+
+                return;
+            }
+        }
+
+        if (doubleSpacePeriod
+                && eventTime - lastKeyDownTime
+                <= keyLongPressDuration) {
+
+            if (composingEnabled) {
+
+                if (!handleDictAndAutocorrection()) {
+
+                    commitComposingText(
+                            inputConnection
+                    );
+                }
+            }
+
+            CharSequence lastChars =
+                    inputConnection
+                            .getTextBeforeCursor(
+                                    3,
+                                    0
+                            );
+
+            if (CharacterUtils
+                    .isLetterOrDigitAndSpace(
+                            lastChars
+                    )) {
+
+                inputConnection.beginBatchEdit();
+
+                inputConnection
+                        .deleteSurroundingText(
+                                1,
+                                0
+                        );
+
+                inputConnection.commitText(
+                        ". ",
+                        1
+                );
+
+                inputConnection.endBatchEdit();
+
+            } else {
+
+                inputConnection.commitText(
+                        " ",
+                        1
+                );
+            }
+
+        } else {
+
+            if (composingEnabled) {
+
+                if (!handleDictAndAutocorrection()) {
+
+                    commitComposingText(
+                            inputConnection
+                    );
+                }
+            }
+
+            inputConnection.commitText(
+                    " ",
+                    1
+            );
+        }
     }
 
     private void handleEnter(
