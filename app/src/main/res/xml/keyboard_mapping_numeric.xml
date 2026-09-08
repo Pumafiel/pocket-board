@@ -1,50 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <KeyboardMapping>
-    <!-- Q -->
+
+    <!-- Q -> 0 -->
     <Key code="45" value="0" />
-    <!-- W -->
+
+    <!-- W -> 1 -->
     <Key code="51" value="1" />
-    <!-- E -->
+
+    <!-- E -> 2 -->
     <Key code="33" value="2" />
-    <!-- R -->
+
+    <!-- R -> 3 -->
     <Key code="46" value="3" />
-    <!-- T -->
-    <Key code="48" value="(" />
-    <!-- Y -->
-    <Key code="53" value=")" />
-    <!-- U -->
-    <Key code="49" value="-" />
-    <!-- O -->
-    <Key code="43" value="/" />
-    <!-- P -->
-    <Key code="44" value=";" />
 
-    <!-- S -->
+    <!-- S -> 4 -->
     <Key code="47" value="4" />
-    <!-- D -->
-    <Key code="32" value="5" />
-    <!-- F -->
-    <Key code="34" value="6" />
-    <!-- G -->
-    <Key code="35" value="*" />
-    <!-- H -->
-    <Key code="36" value="#" />
-    <!-- J -->
-    <Key code="38" value="+" />
 
-    <!-- X -->
+    <!-- D -> 5 -->
+    <Key code="32" value="5" />
+
+    <!-- F -> 6 -->
+    <Key code="34" value="6" />
+
+    <!-- X -> 7 -->
     <Key code="52" value="7" />
-    <!-- C -->
+
+    <!-- C -> 8 -->
     <Key code="31" value="8" />
-    <!-- V -->
+
+    <!-- V -> 9 -->
     <Key code="50" value="9" />
+
     <!-- SPACE -->
     <Key code="62" value=" " />
-    <!-- B -->
+
+    <!-- B -> decimal point -->
     <Key code="30" value="." />
-    <!-- N -->
-    <Key code="42" value=",">
-        <Add value="N" />
-        <Alt value="N" />
-    </Key>
+
+    <!-- N -> comma -->
+    <Key code="42" value="," />
+
 </KeyboardMapping>
