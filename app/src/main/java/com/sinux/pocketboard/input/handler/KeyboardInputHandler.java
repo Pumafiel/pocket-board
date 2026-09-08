@@ -118,14 +118,6 @@ public class KeyboardInputHandler {
                         attribute.packageName
                 );
 
-        /*
-         * Numeric editors are handled as direct input.
-         *
-         * We deliberately disable composing in numeric fields.
-         * Otherwise digits from the numeric mapping can enter
-         * the composing/suggestion pipeline and some applications
-         * will not receive them correctly.
-         */
         numericInputMode =
                 InputUtils.isNumericEditor(
                         attribute
@@ -258,10 +250,11 @@ public class KeyboardInputHandler {
         }
 
         /*
-         * Do not change numericInputMode here.
+         * Numeric mode belongs to the current editor.
          *
-         * The current editor determines whether we are in
-         * numeric mode. onStartInput() establishes that state.
+         * Do not replace the numeric mapping with the language
+         * mapping when the keyboard layout/subtype changes while
+         * a numeric field is active.
          */
         if (!numericInputMode) {
 
@@ -409,8 +402,8 @@ public class KeyboardInputHandler {
         /*
          * BACKSPACE
          *
-         * Numeric fields use the same normal deletion path,
-         * but without composing.
+         * Numeric fields use the same deletion mechanism as the
+         * normal non-composing keyboard path.
          */
         if (keyCode == KeyEvent.KEYCODE_DEL) {
 
@@ -468,7 +461,7 @@ public class KeyboardInputHandler {
         /*
          * SPACE
          *
-         * Space is not a valid numeric-field character.
+         * Space is not accepted in numeric fields.
          */
         if (keyCode == KeyEvent.KEYCODE_SPACE) {
 
@@ -496,16 +489,10 @@ public class KeyboardInputHandler {
         }
 
         /*
-         * IMPORTANT:
+         * Do not use event.getUnicodeChar() as a gate.
          *
-         * Do NOT use event.getUnicodeChar() as the gate here.
-         *
-         * On the physical keyboard, the event can represent the
-         * physical QWERTY character while our KeyboardMapping
-         * says that this key means "0", "1", ".", etc.
-         *
-         * This was one of the reasons numeric input could end up
-         * being rejected before reaching the mapping.
+         * The physical keyboard character and the character
+         * defined by KeyboardMapping can be different.
          */
         if (handleCharacter(
                 keyCode,
@@ -540,8 +527,8 @@ public class KeyboardInputHandler {
         }
 
         /*
-         * Numeric mode must use the mapping rather than the
-         * physical key Unicode value.
+         * In numeric mode the mapping determines whether this
+         * physical key belongs to the numeric keyboard.
          */
         if (numericInputMode) {
 
@@ -552,20 +539,7 @@ public class KeyboardInputHandler {
                                     keyCode
                             );
 
-            if (keyMapping == null) {
-                return false;
-            }
-
-            int character =
-                    keyMapping.getValue(
-                            false,
-                            false,
-                            (byte) 0
-                    );
-
-            return isAllowedNumericCharacter(
-                    character
-            );
+            return keyMapping != null;
         }
 
         if (event.getUnicodeChar() == 0) {
@@ -603,9 +577,12 @@ public class KeyboardInputHandler {
         }
 
         /*
-         * Numeric input has no composing text.
+         * Numeric mode has no composing text.
          *
-         * Delete directly from the InputConnection.
+         * Delete the character immediately before the cursor.
+         * Use the same mechanism as the normal keyboard path,
+         * because it has better compatibility with applications
+         * than deleteSurroundingTextInCodePoints().
          */
         if (numericInputMode) {
 
@@ -620,13 +597,35 @@ public class KeyboardInputHandler {
 
             } else {
 
-                inputConnection.deleteSurroundingTextInCodePoints(
-                        1,
-                        0
-                );
+                CharSequence beforeCursor =
+                        inputConnection
+                                .getTextBeforeCursor(
+                                        2,
+                                        0
+                                );
 
-                if (lastCursorPosition > 0) {
-                    lastCursorPosition--;
+                if (!TextUtils.isEmpty(
+                        beforeCursor
+                )) {
+
+                    int characterLength =
+                            CharacterUtils
+                                    .getLastCharacterLength(
+                                            beforeCursor
+                                    );
+
+                    inputConnection
+                            .deleteSurroundingText(
+                                    characterLength,
+                                    0
+                            );
+
+                    lastCursorPosition =
+                            Math.max(
+                                    0,
+                                    lastCursorPosition
+                                            - characterLength
+                            );
                 }
             }
 
@@ -726,8 +725,12 @@ public class KeyboardInputHandler {
                                 0
                         );
 
-                lastCursorPosition -=
-                        beforeLength;
+                lastCursorPosition =
+                        Math.max(
+                                0,
+                                lastCursorPosition
+                                        - beforeLength
+                        );
             }
 
         } else {
@@ -908,20 +911,20 @@ public class KeyboardInputHandler {
          * NUMERIC INPUT
          * ---------------------------------------------------------
          *
-         * Numeric mode is deliberately isolated from the normal
-         * keyboard/multipress logic.
+         * Numeric fields use the numeric KeyboardMapping.
          *
-         * The numeric mapping may contain other symbols because
-         * the resource is also a physical-key mapping. We only
-         * accept:
+         * Accepted characters:
          *
          *   0 - 9
          *   .
          *   ,
          *
-         * Nothing else reaches the application.
+         * All other characters from the numeric mapping are
+         * deliberately ignored.
          *
-         * Shift and ALT are ignored.
+         * No multipress.
+         * No ALT.
+         * No SHIFT.
          */
         if (numericInputMode) {
 
@@ -1087,21 +1090,11 @@ public class KeyboardInputHandler {
         return false;
     }
 
-    /**
-     * Numeric fields accept only:
-     *
-     *   0 - 9
-     *   .
-     *   ,
-     *
-     * The numeric mapping can contain additional physical-key
-     * characters, but those characters are intentionally ignored.
-     */
     private boolean isAllowedNumericCharacter(
             int character) {
 
-        return character >= '0'
-                && character <= '9'
+        return (character >= '0'
+                && character <= '9')
                 || character == '.'
                 || character == ',';
     }
