@@ -158,6 +158,7 @@ public class DictionaryManager {
          * - transposición
          * - repetición accidental
          * - teclas vecinas
+         * - reglas lingüísticas específicas
          *
          * Después CorrectionEngine decide cuáles son mejores.
          */
@@ -631,7 +632,34 @@ public class DictionaryManager {
 
         /*
          * --------------------------------------------------------
-         * 1. Variantes por eliminación
+         * 1. REGLAS LINGÜÍSTICAS ESPECÍFICAS
+         * --------------------------------------------------------
+         *
+         * Se ejecutan antes que las transformaciones generales.
+         *
+         * Para español argentino:
+         *
+         *     manana -> mañana
+         *
+         * La ñ es una letra diferente de n.
+         *
+         * IMPORTANTE:
+         *
+         * No se inventan palabras.
+         * La variante solamente entra si existe exactamente
+         * en el diccionario.
+         */
+
+        addLanguageSpecificCandidates(
+                input,
+                language,
+                index,
+                candidates
+        );
+
+        /*
+         * --------------------------------------------------------
+         * 2. Variantes por eliminación
          * --------------------------------------------------------
          *
          * manana -> maana
@@ -648,7 +676,7 @@ public class DictionaryManager {
 
         /*
          * --------------------------------------------------------
-         * 2. Variantes por inserción
+         * 3. Variantes por inserción
          * --------------------------------------------------------
          *
          * maanana -> manana
@@ -665,11 +693,10 @@ public class DictionaryManager {
 
         /*
          * --------------------------------------------------------
-         * 3. Transposiciones
+         * 4. Transposiciones
          * --------------------------------------------------------
          *
          * manana -> maanna
-         *
          * qeu -> que
          */
 
@@ -681,7 +708,7 @@ public class DictionaryManager {
 
         /*
          * --------------------------------------------------------
-         * 4. Sustituciones
+         * 5. Sustituciones
          * --------------------------------------------------------
          *
          * Se prueban letras normales y letras físicamente
@@ -697,7 +724,7 @@ public class DictionaryManager {
 
         /*
          * --------------------------------------------------------
-         * 5. Repeticiones accidentales
+         * 6. Repeticiones accidentales
          * --------------------------------------------------------
          *
          * helllo -> hello
@@ -712,12 +739,16 @@ public class DictionaryManager {
 
         /*
          * --------------------------------------------------------
-         * 6. Variantes sin diacríticos
+         * 7. Variantes con diacríticos
          * --------------------------------------------------------
          *
-         * manana -> mañana
+         * LanguageRules genera las variantes lingüísticas.
          *
-         * Esta búsqueda depende del idioma.
+         * Esto NO significa que una palabra sin tilde sea
+         * automáticamente equivalente a una palabra con tilde.
+         *
+         * La variante debe existir en el diccionario y después
+         * CorrectionEngine decide su score.
          */
 
         addDiacriticCandidates(
@@ -730,6 +761,9 @@ public class DictionaryManager {
         /*
          * El conjunto está deliberadamente limitado para impedir
          * que una corrección bloquee el hilo del teclado.
+         *
+         * Las reglas lingüísticas prioritarias ya fueron agregadas
+         * antes de llegar a este límite.
          */
 
         if (candidates.size()
@@ -749,6 +783,104 @@ public class DictionaryManager {
         return new ArrayList<>(
                 candidates
         );
+    }
+
+
+    /*
+     * ============================================================
+     * LANGUAGE-SPECIFIC RULES
+     * ============================================================
+     */
+
+    private void addLanguageSpecificCandidates(
+            String input,
+            String language,
+            DictionaryIndex index,
+            Set<String> candidates) {
+
+        if (input == null ||
+                input.isEmpty() ||
+                index == null) {
+
+            return;
+        }
+
+        /*
+         * --------------------------------------------------------
+         * ESPAÑOL ARGENTINO
+         * --------------------------------------------------------
+         *
+         * n <-> ñ
+         *
+         * Esto es deliberadamente independiente de la eliminación
+         * de diacríticos.
+         *
+         * La ñ no es una n con un simple diacrítico: es una letra
+         * distinta del alfabeto español.
+         *
+         * Ejemplo:
+         *
+         *     manana -> mañana
+         *
+         * Solamente se agrega si "mañana" existe en el diccionario.
+         */
+
+        if ("es-AR".equals(language)) {
+
+            for (int i = 0;
+                 i < input.length();
+                 i++) {
+
+                char current =
+                        input.charAt(
+                                i
+                        );
+
+                char replacement;
+
+                if (current == 'n') {
+
+                    replacement = 'ñ';
+
+                } else if (current == 'ñ') {
+
+                    replacement = 'n';
+
+                } else {
+
+                    continue;
+                }
+
+                String variant =
+                        replaceCharacter(
+                                input,
+                                i,
+                                replacement
+                        );
+
+                /*
+                 * Nunca inventamos candidatos.
+                 *
+                 * La variante solamente entra si existe
+                 * exactamente en el diccionario.
+                 */
+
+                if (index.contains(
+                        variant
+                )) {
+
+                    candidates.add(
+                            variant
+                    );
+                }
+
+                if (candidates.size()
+                        >= MAX_CORRECTION_CANDIDATES) {
+
+                    return;
+                }
+            }
+        }
     }
 
 
@@ -812,7 +944,7 @@ public class DictionaryManager {
          *
          * Buscamos palabras del diccionario que difieren por una
          * eliminación. Para eso aprovechamos los buckets por
-         * longitud y prefijo.
+         * longitud.
          */
 
         List<String> lengthCandidates =
@@ -965,7 +1097,6 @@ public class DictionaryManager {
          *
          * Esto cubre errores frecuentes como:
          *
-         *     manana -> mamana
          *     holq -> hola
          */
 
@@ -1014,7 +1145,7 @@ public class DictionaryManager {
         /*
          * Después buscamos candidatos de igual longitud.
          *
-         * El CorrectionEngine se encargará de penalizar las
+         * CorrectionEngine se encargará de penalizar las
          * sustituciones que no sean plausibles.
          */
 
