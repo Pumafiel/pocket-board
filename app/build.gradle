@@ -14,16 +14,14 @@ android {
         applicationId "com.sinux.pocketboard"
         minSdk 28
         targetSdk 36
-
-        versionCode 9
-        versionName "1.2.0"
+        versionCode 8
+        versionName "1.1.6"
     }
 
     buildTypes {
         release {
             minifyEnabled true
             shrinkResources true
-
             proguardFiles getDefaultProguardFile(
                     'proguard-android-optimize.txt'
             ), 'proguard-rules.pro'
@@ -53,24 +51,20 @@ dependencies {
 
 /*
  * ============================================================
- * POCKETBOARD DICTIONARIES
- * ============================================================
+ * POCKETBOARD HUNSPELL DICTIONARIES
  *
  * Source:
  *
  * https://github.com/wooorm/dictionaries
  *
- * We keep the Hunspell dictionary information instead of
- * reducing it to a plain word list.
+ * We keep BOTH files:
  *
- * This allows DictionaryManager to use:
+ *     *.dic  -> words + Hunspell flags
+ *     *.aff  -> Hunspell rules
  *
- * - dictionary words
- * - Hunspell flags
- * - word frequency/ranking information when available
- * - language-specific spelling information
- *
- * The generated files are compact UTF-8 assets.
+ * The previous build converted .dic files into plain .txt
+ * files and discarded the flags. That information is now
+ * preserved for the new DictionaryManager.
  * ============================================================
  */
 
@@ -80,56 +74,40 @@ def dictionariesOutputDir =
 def dictionariesVersion = "main"
 
 def dictionarySources = [
-        "es-AR": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
-        "en"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
-        "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
+        "es-AR": [
+                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
+                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.aff"
+        ],
+        "en": [
+                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
+                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.aff"
+        ],
+        "de": [
+                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic",
+                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.aff"
+        ]
 ]
 
 
-/*
- * Download the original Hunspell dictionaries unchanged.
- *
- * Keeping the original .dic data is important:
- *
- *     casa/S
- *     abandonar/RED
- *
- * The part after '/' contains Hunspell information and must
- * not be discarded at build time.
- */
-def downloadDictionary = {
+def downloadFile = {
     String language,
-    String dictionaryUrlString ->
-
-    File outputFile = new File(
-            dictionariesOutputDir,
-            "${language}.dic"
-    )
-
-    /*
-     * Do not download again when the generated asset already
-     * exists. Delete the file manually when forcing an update.
-     */
-    if (outputFile.exists() &&
-            outputFile.length() > 0) {
-
-        println(
-                "PocketBoard dictionary already exists: " +
-                        outputFile.name
-        )
-
-        return
-    }
-
-    println(
-            "Downloading PocketBoard dictionary: " +
-                    language
-    )
+    String type,
+    String urlString ->
 
     dictionariesOutputDir.mkdirs()
 
+    File outputFile = new File(
+            dictionariesOutputDir,
+            "${language}.${type}"
+    )
+
+    println(
+            "Downloading PocketBoard ${type}: " +
+                    language
+    )
+
     def connection =
-            new URL(dictionaryUrlString).openConnection()
+            new URL(urlString).openConnection()
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
@@ -148,6 +126,8 @@ def downloadDictionary = {
             throw new GradleException(
                     "Could not download " +
                             language +
+                            " ." +
+                            type +
                             " dictionary. HTTP " +
                             responseCode
             )
@@ -157,11 +137,13 @@ def downloadDictionary = {
 
             connection.getInputStream().withCloseable { input ->
 
-                byte[] buffer = new byte[8192]
+                byte[] buffer =
+                        new byte[8192]
+
                 int count
 
                 while (
-                        (count = input.read(buffer)) != -1
+                        (count = input.read(buffer)) >= 0
                 ) {
 
                     output.write(
@@ -173,9 +155,20 @@ def downloadDictionary = {
             }
         }
 
+        if (outputFile.length() == 0) {
+
+            throw new GradleException(
+                    "Downloaded empty dictionary: " +
+                            outputFile.absolutePath
+            )
+        }
+
         println(
-                "PocketBoard dictionary generated: " +
-                        outputFile.absolutePath
+                "PocketBoard dictionary saved: " +
+                        outputFile.name +
+                        " (" +
+                        outputFile.length() +
+                        " bytes)"
         )
 
     } finally {
@@ -194,14 +187,92 @@ tasks.register(
 
     doLast {
 
+        /*
+         * Remove the old generated TXT dictionaries.
+         *
+         * They contained only plain words and had already
+         * discarded the Hunspell flags.
+         */
+        [
+                "es-AR.txt",
+                "en.txt",
+                "de.txt"
+        ].each { name ->
+
+            File oldFile =
+                    new File(
+                            dictionariesOutputDir,
+                            name
+                    )
+
+            if (oldFile.exists()) {
+
+                println(
+                        "Removing obsolete dictionary: " +
+                                oldFile.name
+                )
+
+                oldFile.delete()
+            }
+        }
+
+
         dictionarySources.each {
             String language,
-            String dictionaryUrl ->
+            Map<String, String> sources ->
 
-            downloadDictionary(
-                    language,
-                    dictionaryUrl
-            )
+            File dicFile =
+                    new File(
+                            dictionariesOutputDir,
+                            "${language}.dic"
+                    )
+
+            File affFile =
+                    new File(
+                            dictionariesOutputDir,
+                            "${language}.aff"
+                    )
+
+            /*
+             * Download .dic only when missing.
+             */
+            if (!dicFile.exists() ||
+                    dicFile.length() == 0) {
+
+                downloadFile(
+                        language,
+                        "dic",
+                        sources.dic
+                )
+
+            } else {
+
+                println(
+                        "PocketBoard dictionary already exists: " +
+                                dicFile.name
+                )
+            }
+
+
+            /*
+             * Download .aff only when missing.
+             */
+            if (!affFile.exists() ||
+                    affFile.length() == 0) {
+
+                downloadFile(
+                        language,
+                        "aff",
+                        sources.aff
+                )
+
+            } else {
+
+                println(
+                        "PocketBoard rules already exist: " +
+                                affFile.name
+                )
+            }
         }
     }
 }
