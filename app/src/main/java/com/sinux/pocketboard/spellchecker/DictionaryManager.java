@@ -8,12 +8,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -21,20 +20,16 @@ import java.util.Set;
 
 public class DictionaryManager {
 
-    private static final int MAX_WORDS = 100000;
-    private static final int MAX_PREFIX = 20;
-    private static final int MAX_SPELLING = 10;
+    private static final int MAX_DICTIONARY_WORDS = 100000;
+    private static final int MAX_PREFIX_RESULTS = 20;
 
     private final Context context;
 
-    private final Map<String, List<String>> dictionaries =
+    private final Map<String, Dictionary> dictionaries =
             new HashMap<>();
 
-    private final Map<String, Set<String>> flags =
-            new HashMap<>();
-
-    private final Set<String> loaded =
-            new HashSet<>();
+    private final Set<String> loadedLanguages =
+            new LinkedHashSet<>();
 
     public DictionaryManager(Context context) {
         this.context = context.getApplicationContext();
@@ -45,367 +40,309 @@ public class DictionaryManager {
             String languageTag,
             int maxResults) {
 
-        if (TextUtils.isEmpty(word) || maxResults <= 0)
+        if (TextUtils.isEmpty(word) || maxResults <= 0) {
             return Collections.emptyList();
-
-        String language = normalizeLanguage(languageTag);
-        loadDictionary(language);
-
-        List<String> dictionary = dictionaries.get(language);
-
-        if (dictionary == null || dictionary.isEmpty())
-            return Collections.emptyList();
-
-        String input = word.toLowerCase(Locale.ROOT);
-
-        List<ScoredWord> scored = new ArrayList<>();
-
-        for (String candidate : dictionary) {
-
-            if (!candidate.startsWith(input))
-                continue;
-
-            int score = prefixScore(input, candidate);
-
-            scored.add(
-                    new ScoredWord(candidate, score)
-            );
-
-            if (scored.size() >= MAX_PREFIX)
-                break;
         }
 
-        scored.sort(
-                Comparator.comparingInt(
-                        ScoredWord::getScore
-                ).thenComparing(
-                        ScoredWord::getWord
-                )
-        );
+        String language =
+                normalizeLanguage(languageTag);
 
-        List<String> result =
-                new ArrayList<>();
+        Dictionary dictionary =
+                getDictionary(language);
 
-        for (ScoredWord item : scored) {
+        if (dictionary == null ||
+                dictionary.isEmpty()) {
 
-            result.add(
-                    applyCapitalization(
-                            item.word,
-                            word
-                    )
-            );
-
-            if (result.size() >= maxResults)
-                return result;
+            return Collections.emptyList();
         }
 
-        if (result.size() < maxResults) {
+        String normalized =
+                word.toLowerCase(Locale.ROOT);
+
+        Set<String> results =
+                new LinkedHashSet<>();
+
+        int prefixLimit =
+                Math.min(
+                        maxResults,
+                        MAX_PREFIX_RESULTS
+                );
+
+        for (int i = 0;
+             i < dictionary.size() &&
+                     results.size() < prefixLimit;
+             i++) {
+
+            String candidate =
+                    dictionary.get(i);
+
+            if (candidate.startsWith(normalized)) {
+                results.add(candidate);
+            }
+        }
+
+        if (results.size() < maxResults) {
 
             int maxDistance =
-                    maximumDistance(input);
+                    getMaximumDistance(normalized);
 
-            scored.clear();
-
-            for (String candidate : dictionary) {
-
-                if (candidate.startsWith(input))
-                    continue;
-
-                int lengthDifference =
-                        Math.abs(
-                                candidate.length()
-                                        - input.length()
-                        );
-
-                if (lengthDifference > maxDistance)
-                    continue;
-
-                int distance =
-                        weightedDistance(
-                                input,
-                                candidate
-                        );
-
-                if (distance > maxDistance * 3)
-                    continue;
-
-                int score =
-                        distanceScore(
-                                input,
-                                candidate,
-                                distance
-                        );
-
-                scored.add(
-                        new ScoredWord(
-                                candidate,
-                                score
-                        )
-                );
-            }
-
-            scored.sort(
-                    Comparator.comparingInt(
-                            ScoredWord::getScore
-                    ).thenComparing(
-                            ScoredWord::getWord
-                    )
-            );
-
-            int limit =
-                    Math.min(
-                            MAX_SPELLING,
-                            maxResults - result.size()
-                    );
+            List<ScoredWord> scored =
+                    new ArrayList<>();
 
             for (int i = 0;
-                 i < scored.size() && i < limit;
+                 i < dictionary.size();
                  i++) {
 
                 String candidate =
-                        scored.get(i).word;
+                        dictionary.get(i);
 
-                if (result.contains(
-                        applyCapitalization(
-                                candidate,
-                                word
-                        ))) {
+                if (results.contains(candidate)) {
                     continue;
                 }
 
-                result.add(
-                        applyCapitalization(
-                                candidate,
-                                word
-                        )
+                if (Math.abs(
+                        candidate.length()
+                                - normalized.length()
+                ) > maxDistance) {
+
+                    continue;
+                }
+
+                int distance =
+                        levenshteinDistance(
+                                normalized,
+                                candidate
+                        );
+
+                if (distance <= maxDistance) {
+
+                    scored.add(
+                            new ScoredWord(
+                                    candidate,
+                                    distance
+                            )
+                    );
+                }
+            }
+
+            scored.sort(
+                    Comparator
+                            .comparingInt(
+                                    ScoredWord::getDistance
+                            )
+                            .thenComparing(
+                                    ScoredWord::getWord
+                            )
+            );
+
+            for (ScoredWord item : scored) {
+
+                results.add(
+                        item.getWord()
                 );
+
+                if (results.size() >= maxResults) {
+                    break;
+                }
             }
         }
 
-        return result;
+        List<String> output =
+                new ArrayList<>(results);
+
+        for (int i = 0; i < output.size(); i++) {
+
+            output.set(
+                    i,
+                    applyCapitalization(
+                            output.get(i),
+                            word
+                    )
+            );
+        }
+
+        return output;
     }
 
     public synchronized boolean contains(
             String word,
             String languageTag) {
 
-        if (TextUtils.isEmpty(word))
+        if (TextUtils.isEmpty(word)) {
             return false;
+        }
 
         String language =
                 normalizeLanguage(languageTag);
 
-        loadDictionary(language);
+        Dictionary dictionary =
+                getDictionary(language);
 
-        List<String> dictionary =
-                dictionaries.get(language);
+        if (dictionary == null ||
+                dictionary.isEmpty()) {
 
-        if (dictionary == null)
             return false;
+        }
 
-        String target =
-                word.toLowerCase(Locale.ROOT);
-
-        return Collections.binarySearch(
-                dictionary,
-                target
-        ) >= 0;
+        return dictionary.contains(
+                word.toLowerCase(Locale.ROOT)
+        );
     }
 
-    private void loadDictionary(
+    private Dictionary getDictionary(
             String language) {
 
-        if (loaded.contains(language))
-            return;
+        Dictionary dictionary =
+                dictionaries.get(language);
 
-        loaded.add(language);
+        if (dictionary != null) {
+            return dictionary;
+        }
+
+        if (loadedLanguages.contains(language)) {
+            return null;
+        }
+
+        loadedLanguages.add(language);
+
+        dictionary =
+                loadDictionary(language);
+
+        dictionaries.put(
+                language,
+                dictionary
+        );
+
+        return dictionary;
+    }
+
+    private Dictionary loadDictionary(
+            String language) {
 
         List<String> words =
                 new ArrayList<>();
 
-        Set<String> wordFlags =
-                new HashSet<>();
-
-        String asset =
+        String assetName =
                 "dictionaries/" +
-                        assetName(language);
+                        getAssetName(language);
 
-        try (
-                InputStream input =
-                        context.getAssets().open(asset);
-
-                BufferedReader reader =
-                        new BufferedReader(
-                                new InputStreamReader(
-                                        input,
-                                        StandardCharsets.UTF_8
-                                )
-                        )
-        ) {
+        try (InputStream inputStream =
+                     context.getAssets().open(
+                             assetName
+                     );
+             BufferedReader reader =
+                     new BufferedReader(
+                             new InputStreamReader(
+                                     inputStream,
+                                     StandardCharsets.UTF_8
+                             )
+                     )) {
 
             String line;
-            boolean firstLine = true;
 
-            while (
-                    (line = reader.readLine()) != null
-            ) {
+            while ((line = reader.readLine()) != null) {
 
                 line = line.trim();
 
-                if (line.isEmpty())
+                if (TextUtils.isEmpty(line) ||
+                        line.startsWith("#")) {
+
                     continue;
-
-                if (line.startsWith("#"))
-                    continue;
-
-                if (firstLine) {
-
-                    firstLine = false;
-
-                    if (isNumber(line))
-                        continue;
                 }
 
-                String word = line;
+                int separator =
+                        line.indexOf('\t');
 
-                int slash =
-                        line.indexOf('/');
-
-                if (slash >= 0) {
-
-                    word =
+                if (separator > 0) {
+                    line =
                             line.substring(
                                     0,
-                                    slash
+                                    separator
                             );
-
-                    String wordFlag =
-                            line.substring(
-                                    slash + 1
-                            );
-
-                    if (!wordFlag.isEmpty())
-                        wordFlags.add(
-                                wordFlag
-                        );
                 }
 
-                word =
-                        word.trim()
+                separator =
+                        line.indexOf(' ');
+
+                if (separator > 0) {
+                    line =
+                            line.substring(
+                                    0,
+                                    separator
+                            );
+                }
+
+                line =
+                        line.trim()
                                 .toLowerCase(
                                         Locale.ROOT
                                 );
 
-                if (!isValidWord(word))
-                    continue;
+                if (isValidWord(line)) {
+                    words.add(line);
+                }
 
-                words.add(word);
+                if (words.size()
+                        >= MAX_DICTIONARY_WORDS) {
 
-                if (words.size() >= MAX_WORDS)
                     break;
+                }
             }
 
         } catch (IOException ignored) {
+            // Dictionary unavailable.
         }
 
-        words =
-                new ArrayList<>(
-                        new HashSet<>(words)
-                );
+        if (words.isEmpty()) {
+            return new Dictionary(
+                    Collections.emptyList()
+            );
+        }
 
         Collections.sort(words);
 
-        dictionaries.put(
-                language,
-                words
-        );
+        List<String> unique =
+                new ArrayList<>(
+                        words.size()
+                );
 
-        flags.put(
-                language,
-                wordFlags
-        );
+        String previous = null;
 
-        /*
-         * Load the .aff file as well.
-         *
-         * It is intentionally not interpreted here yet.
-         * Keeping it in assets allows the dictionary data to
-         * remain complete without adding a large Hunspell
-         * implementation to the application.
-         */
-        loadAffixFile(language);
-    }
+        for (String word : words) {
 
-    private void loadAffixFile(
-            String language) {
+            if (!word.equals(previous)) {
 
-        String asset =
-                "dictionaries/" +
-                        affixName(language);
-
-        try (
-                InputStream input =
-                        context.getAssets().open(asset);
-
-                BufferedReader reader =
-                        new BufferedReader(
-                                new InputStreamReader(
-                                        input,
-                                        StandardCharsets.UTF_8
-                                )
-                        )
-        ) {
-
-            while (reader.readLine() != null) {
-                /*
-                 * The .aff data is intentionally kept in the
-                 * application assets. Future scoring can use
-                 * its rules without changing the dictionary
-                 * storage format.
-                 */
+                unique.add(word);
+                previous = word;
             }
-
-        } catch (IOException ignored) {
         }
+
+        return new Dictionary(unique);
     }
 
-    private String assetName(
+    private String getAssetName(
             String language) {
 
         switch (language) {
 
             case "es-AR":
-                return "es-AR.dic";
+                return "es-AR.txt";
 
             case "de":
-                return "de.dic";
+                return "de.txt";
 
+            case "en":
             default:
-                return "en.dic";
-        }
-    }
-
-    private String affixName(
-            String language) {
-
-        switch (language) {
-
-            case "es-AR":
-                return "es-AR.aff";
-
-            case "de":
-                return "de.aff";
-
-            default:
-                return "en.aff";
+                return "en.txt";
         }
     }
 
     private String normalizeLanguage(
             String languageTag) {
 
-        if (TextUtils.isEmpty(languageTag))
+        if (TextUtils.isEmpty(languageTag)) {
             return "en";
+        }
 
         Locale locale =
                 Locale.forLanguageTag(
@@ -418,11 +355,17 @@ public class DictionaryManager {
         String language =
                 locale.getLanguage();
 
-        if ("es".equals(language))
+        if ("es".equals(language)) {
             return "es-AR";
+        }
 
-        if ("de".equals(language))
+        if ("de".equals(language)) {
             return "de";
+        }
+
+        if ("en".equals(language)) {
+            return "en";
+        }
 
         return "en";
     }
@@ -430,9 +373,11 @@ public class DictionaryManager {
     private boolean isValidWord(
             String word) {
 
-        if (word.isEmpty() ||
-                word.length() > 64)
+        if (word.length() < 1 ||
+                word.length() > 64) {
+
             return false;
+        }
 
         for (int i = 0;
              i < word.length();
@@ -444,6 +389,7 @@ public class DictionaryManager {
             if (Character.isLetter(c) ||
                     c == '\'' ||
                     c == '-') {
+
                 continue;
             }
 
@@ -453,234 +399,91 @@ public class DictionaryManager {
         return true;
     }
 
-    private boolean isNumber(
-            String value) {
-
-        if (value.isEmpty())
-            return false;
-
-        for (int i = 0;
-             i < value.length();
-             i++) {
-
-            if (!Character.isDigit(
-                    value.charAt(i)
-            )) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private int prefixScore(
-            String input,
-            String candidate) {
-
-        int score = 0;
-
-        int remaining =
-                candidate.length()
-                        - input.length();
-
-        score += remaining;
-
-        /*
-         * Prefer a candidate that is almost exactly
-         * what the user has already typed.
-         */
-        if (remaining == 0)
-            score -= 100;
-
-        if (remaining == 1)
-            score -= 20;
-
-        if (remaining == 2)
-            score -= 10;
-
-        return score;
-    }
-
-    private int distanceScore(
-            String input,
-            String candidate,
-            int distance) {
-
-        int score =
-                distance * 10;
-
-        /*
-         * Same normalized spelling but different
-         * accents should be very close.
-         */
-        if (normalizeForComparison(input)
-                .equals(
-                        normalizeForComparison(
-                                candidate
-                        )
-                )) {
-            score -= 8;
-        }
-
-        /*
-         * Reward similar length.
-         */
-        score +=
-                Math.abs(
-                        input.length()
-                                - candidate.length()
-                );
-
-        /*
-         * Common Spanish ñ/n substitution.
-         */
-        if (isSpanishLanguage(candidate) &&
-                replacesNWithNtilde(
-                        input,
-                        candidate
-                )) {
-            score -= 4;
-        }
-
-        return score;
-    }
-
-    private boolean isSpanishLanguage(
-            String word) {
-
-        return word.indexOf('ñ') >= 0 ||
-                word.indexOf('á') >= 0 ||
-                word.indexOf('é') >= 0 ||
-                word.indexOf('í') >= 0 ||
-                word.indexOf('ó') >= 0 ||
-                word.indexOf('ú') >= 0 ||
-                word.indexOf('ü') >= 0;
-    }
-
-    private boolean replacesNWithNtilde(
-            String a,
-            String b) {
-
-        if (a.length() != b.length())
-            return false;
-
-        int differences = 0;
-
-        for (int i = 0;
-             i < a.length();
-             i++) {
-
-            char x = a.charAt(i);
-            char y = b.charAt(i);
-
-            if (x == y)
-                continue;
-
-            if ((x == 'n' && y == 'ñ') ||
-                    (x == 'ñ' && y == 'n')) {
-
-                differences++;
-                continue;
-            }
-
-            return false;
-        }
-
-        return differences == 1;
-    }
-
-    private String normalizeForComparison(
-            String value) {
-
-        String normalized =
-                Normalizer.normalize(
-                        value,
-                        Normalizer.Form.NFD
-                );
-
-        return normalized
-                .replaceAll(
-                        "\\p{M}",
-                        ""
-                );
-    }
-
-    private int maximumDistance(
+    private int getMaximumDistance(
             String word) {
 
         int length =
                 word.length();
 
-        if (length <= 3)
+        if (length <= 3) {
             return 1;
+        }
 
-        if (length <= 6)
+        if (length <= 6) {
             return 2;
+        }
 
-        if (length <= 10)
+        if (length <= 10) {
             return 3;
+        }
 
         return 4;
     }
 
-    private int weightedDistance(
-            String a,
-            String b) {
+    private int levenshteinDistance(
+            String first,
+            String second) {
 
-        if (a.equals(b))
+        if (first.equals(second)) {
             return 0;
+        }
 
-        if (a.isEmpty())
-            return b.length() * 3;
+        if (first.isEmpty()) {
+            return second.length();
+        }
 
-        if (b.isEmpty())
-            return a.length() * 3;
+        if (second.isEmpty()) {
+            return first.length();
+        }
+
+        if (first.length() < second.length()) {
+
+            String temp = first;
+            first = second;
+            second = temp;
+        }
 
         int[] previous =
-                new int[b.length() + 1];
+                new int[second.length() + 1];
 
         int[] current =
-                new int[b.length() + 1];
+                new int[second.length() + 1];
 
-        for (int i = 0;
-             i <= b.length();
-             i++) {
+        for (int j = 0;
+             j <= second.length();
+             j++) {
 
-            previous[i] =
-                    i * 3;
+            previous[j] = j;
         }
 
         for (int i = 1;
-             i <= a.length();
+             i <= first.length();
              i++) {
 
-            current[0] =
-                    i * 3;
+            current[0] = i;
 
-            char ca =
-                    a.charAt(i - 1);
+            char firstChar =
+                    first.charAt(i - 1);
 
             for (int j = 1;
-                 j <= b.length();
+                 j <= second.length();
                  j++) {
 
-                char cb =
-                        b.charAt(j - 1);
+                char secondChar =
+                        second.charAt(j - 1);
 
-                int substitution =
-                        substitutionCost(
-                                ca,
-                                cb
-                        );
+                int cost =
+                        firstChar == secondChar
+                                ? 0
+                                : 1;
 
                 current[j] =
                         Math.min(
                                 Math.min(
-                                        current[j - 1] + 3,
-                                        previous[j] + 3
+                                        current[j - 1] + 1,
+                                        previous[j] + 1
                                 ),
-                                previous[j - 1]
-                                        + substitution
+                                previous[j - 1] + cost
                         );
             }
 
@@ -694,101 +497,25 @@ public class DictionaryManager {
                     temp;
         }
 
-        return previous[b.length()];
-    }
-
-    private int substitutionCost(
-            char a,
-            char b) {
-
-        if (a == b)
-            return 0;
-
-        /*
-         * Accent difference.
-         */
-        if (stripAccent(a) ==
-                stripAccent(b)) {
-            return 1;
-        }
-
-        /*
-         * Spanish ñ/n.
-         */
-        if ((a == 'n' && b == 'ñ') ||
-                (a == 'ñ' && b == 'n')) {
-            return 1;
-        }
-
-        /*
-         * Common nearby keyboard substitutions.
-         */
-        if (nearKeyboard(a, b))
-            return 1;
-
-        return 3;
-    }
-
-    private char stripAccent(
-            char c) {
-
-        String value =
-                Normalizer.normalize(
-                        String.valueOf(c),
-                        Normalizer.Form.NFD
-                );
-
-        for (int i = 0;
-             i < value.length();
-             i++) {
-
-            char x =
-                    value.charAt(i);
-
-            if (Character.isLetter(x))
-                return x;
-        }
-
-        return c;
-    }
-
-    private boolean nearKeyboard(
-            char a,
-            char b) {
-
-        String[] rows = {
-                "qwertyuiop",
-                "asdfghjklñ",
-                "zxcvbnm"
-        };
-
-        for (String row : rows) {
-
-            int ia =
-                    row.indexOf(a);
-
-            int ib =
-                    row.indexOf(b);
-
-            if (ia < 0 || ib < 0)
-                continue;
-
-            return Math.abs(
-                    ia - ib
-            ) <= 1;
-        }
-
-        return false;
+        return previous[
+                second.length()
+        ];
     }
 
     private String applyCapitalization(
             String suggestion,
             String original) {
 
-        if (TextUtils.isEmpty(original))
+        if (TextUtils.isEmpty(original)) {
             return suggestion;
+        }
 
         boolean allUpper = true;
+
+        boolean firstUpper =
+                Character.isUpperCase(
+                        original.charAt(0)
+                );
 
         for (int i = 0;
              i < original.length();
@@ -805,42 +532,53 @@ public class DictionaryManager {
             }
         }
 
-        if (allUpper)
+        if (allUpper) {
+
             return suggestion.toUpperCase(
                     Locale.ROOT
             );
+        }
 
-        if (Character.isUpperCase(
-                original.charAt(0)
-        )) {
-
-            return Character.toUpperCase(
-                    suggestion.charAt(0)
-            ) + suggestion.substring(1);
+        if (firstUpper) {
+            return capitalizeFirstLetter(
+                    suggestion
+            );
         }
 
         return suggestion;
     }
 
-    private static class ScoredWord {
+    private String capitalizeFirstLetter(
+            String text) {
 
-        final String word;
-        final int score;
+        if (TextUtils.isEmpty(text)) {
+            return text;
+        }
+
+        return Character.toUpperCase(
+                text.charAt(0)
+        ) + text.substring(1);
+    }
+
+    private static final class ScoredWord {
+
+        private final String word;
+        private final int distance;
 
         ScoredWord(
                 String word,
-                int score) {
+                int distance) {
 
             this.word = word;
-            this.score = score;
+            this.distance = distance;
         }
 
         String getWord() {
             return word;
         }
 
-        int getScore() {
-            return score;
+        int getDistance() {
+            return distance;
         }
     }
 }
