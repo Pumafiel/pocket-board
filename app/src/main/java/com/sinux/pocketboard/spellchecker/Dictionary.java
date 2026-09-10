@@ -1,15 +1,25 @@
 package com.sinux.pocketboard.spellchecker;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.Arrays;
 
 public final class Dictionary {
 
     private final String[] words;
+    private final String[] flags;
 
-    public Dictionary(List<String> words) {
-        this.words = words.toArray(new String[0]);
+    public Dictionary(
+            String[] words,
+            String[] flags) {
+
+        this.words =
+                words != null
+                        ? words
+                        : new String[0];
+
+        this.flags =
+                flags != null
+                        ? flags
+                        : new String[0];
     }
 
     public boolean isEmpty() {
@@ -24,24 +34,32 @@ public final class Dictionary {
         return words[index];
     }
 
+    public String getFlags(int index) {
+        if (index < 0 ||
+                index >= flags.length) {
+
+            return "";
+        }
+
+        return flags[index];
+    }
+
     public boolean contains(String word) {
         return word != null
-                && java.util.Arrays.binarySearch(
+                && Arrays.binarySearch(
+                        words,
+                        word
+                ) >= 0;
+    }
+
+    public int indexOf(String word) {
+        if (word == null) {
+            return -1;
+        }
+
+        return Arrays.binarySearch(
                 words,
                 word
-        ) >= 0;
-    }
-
-    public List<String> getWords() {
-        List<String> result =
-                new ArrayList<>(words.length);
-
-        Collections.addAll(result, words);
-
-        return result;
-    }
-
-    public String[] getArray() {
-        return words.clone();
+        );
     }
 }
