@@ -6,8 +6,11 @@
     <!-- Permissions to answer/cancel calls using SHIFT/ALT keys -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <uses-permission android:name="android.permission.READ_USER_DICTIONARY" />
+
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <queries>
@@ -29,10 +32,12 @@
             android:name=".preferences.PreferencesActivity"
             android:label="@string/ime_settings"
             android:exported="true">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+
         </activity>
 
         <activity
@@ -47,30 +52,34 @@
             android:permission="android.permission.BIND_INPUT_METHOD"
             android:directBootAware="true"
             android:exported="false">
+
             <intent-filter>
                 <action android:name="android.view.InputMethod" />
             </intent-filter>
+
             <meta-data
                 android:name="android.view.im"
                 android:resource="@xml/method" />
+
         </service>
 
         <!-- PocketBoard spell checker -->
-<service
-    android:name=".spellchecker.PocketBoardSpellCheckerService"
-    android:exported="true"
-    android:label="@string/ime_name"
-    android:permission="android.permission.BIND_TEXT_SERVICE">
+        <service
+            android:name=".spellchecker.PocketBoardSpellCheckerService"
+            android:label="@string/ime_name"
+            android:permission="android.permission.BIND_TEXT_SERVICE"
+            android:exported="true">
 
-    <intent-filter>
-        <action android:name="android.service.textservice.SpellCheckerService" />
-    </intent-filter>
+            <intent-filter>
+                <action
+                    android:name="android.service.textservice.SpellCheckerService" />
+            </intent-filter>
 
-    <meta-data
-        android:name="android.view.textservice.scs"
-        android:resource="@xml/spellchecker" />
-</service>
+            <meta-data
+                android:name="android.view.textservice.scs"
+                android:resource="@xml/spellchecker" />
 
+        </service>
 
     </application>
 
