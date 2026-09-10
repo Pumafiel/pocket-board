@@ -9,30 +9,32 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 public class DictionaryManager {
 
-    private static final int MAX_DICTIONARY_WORDS = 100000;
-    private static final int MAX_PREFIX_RESULTS = 20;
+    private static final String FORMAT_HEADER =
+            "#POCKETBOARD-DICT-1";
+
+    private static final int MAX_DICTIONARY_WORDS =
+            250000;
+
+    private static final int MAX_PREFIX_RESULTS =
+            20;
 
     private final Context context;
 
     private final Map<String, Dictionary> dictionaries =
             new HashMap<>();
 
-    private final Set<String> loadedLanguages =
-            new LinkedHashSet<>();
-
     public DictionaryManager(Context context) {
-        this.context = context.getApplicationContext();
+        this.context =
+                context.getApplicationContext();
     }
 
     public synchronized List<String> getSuggestions(
@@ -40,8 +42,10 @@ public class DictionaryManager {
             String languageTag,
             int maxResults) {
 
-        if (TextUtils.isEmpty(word) || maxResults <= 0) {
-            return Collections.emptyList();
+        if (TextUtils.isEmpty(word) ||
+                maxResults <= 0) {
+
+            return new ArrayList<>();
         }
 
         String language =
@@ -53,14 +57,14 @@ public class DictionaryManager {
         if (dictionary == null ||
                 dictionary.isEmpty()) {
 
-            return Collections.emptyList();
+            return new ArrayList<>();
         }
 
-        String normalized =
+        String normalizedWord =
                 word.toLowerCase(Locale.ROOT);
 
-        Set<String> results =
-                new LinkedHashSet<>();
+        List<String> results =
+                new ArrayList<>();
 
         int prefixLimit =
                 Math.min(
@@ -68,23 +72,44 @@ public class DictionaryManager {
                         MAX_PREFIX_RESULTS
                 );
 
-        for (int i = 0;
-             i < dictionary.size() &&
-                     results.size() < prefixLimit;
-             i++) {
+        /*
+         * Prefix suggestions.
+         *
+         * The dictionary is alphabetically sorted, so use
+         * binary search to jump close to the requested prefix
+         * instead of scanning from the beginning.
+         */
+        int index =
+                findPrefixStart(
+                        dictionary,
+                        normalizedWord
+                );
+
+        while (index < dictionary.size() &&
+                results.size() < prefixLimit) {
 
             String candidate =
-                    dictionary.get(i);
+                    dictionary.get(index);
 
-            if (candidate.startsWith(normalized)) {
-                results.add(candidate);
+            if (!candidate.startsWith(
+                    normalizedWord
+            )) {
+                break;
             }
+
+            results.add(candidate);
+            index++;
         }
 
+        /*
+         * Spelling suggestions.
+         */
         if (results.size() < maxResults) {
 
             int maxDistance =
-                    getMaximumDistance(normalized);
+                    getMaximumDistance(
+                            normalizedWord
+                    );
 
             List<ScoredWord> scored =
                     new ArrayList<>();
@@ -102,7 +127,7 @@ public class DictionaryManager {
 
                 if (Math.abs(
                         candidate.length()
-                                - normalized.length()
+                                - normalizedWord.length()
                 ) > maxDistance) {
 
                     continue;
@@ -110,7 +135,7 @@ public class DictionaryManager {
 
                 int distance =
                         levenshteinDistance(
-                                normalized,
+                                normalizedWord,
                                 candidate
                         );
 
@@ -135,11 +160,16 @@ public class DictionaryManager {
                             )
             );
 
-            for (ScoredWord item : scored) {
+            for (ScoredWord scoredWord : scored) {
 
-                results.add(
-                        item.getWord()
-                );
+                if (!results.contains(
+                        scoredWord.getWord()
+                )) {
+
+                    results.add(
+                            scoredWord.getWord()
+                    );
+                }
 
                 if (results.size() >= maxResults) {
                     break;
@@ -147,21 +177,23 @@ public class DictionaryManager {
             }
         }
 
-        List<String> output =
-                new ArrayList<>(results);
+        /*
+         * Preserve capitalization typed by the user.
+         */
+        for (int i = 0;
+             i < results.size();
+             i++) {
 
-        for (int i = 0; i < output.size(); i++) {
-
-            output.set(
+            results.set(
                     i,
                     applyCapitalization(
-                            output.get(i),
+                            results.get(i),
                             word
                     )
             );
         }
 
-        return output;
+        return results;
     }
 
     public synchronized boolean contains(
@@ -172,11 +204,12 @@ public class DictionaryManager {
             return false;
         }
 
-        String language =
-                normalizeLanguage(languageTag);
-
         Dictionary dictionary =
-                getDictionary(language);
+                getDictionary(
+                        normalizeLanguage(
+                                languageTag
+                        )
+                );
 
         if (dictionary == null ||
                 dictionary.isEmpty()) {
@@ -199,12 +232,6 @@ public class DictionaryManager {
             return dictionary;
         }
 
-        if (loadedLanguages.contains(language)) {
-            return null;
-        }
-
-        loadedLanguages.add(language);
-
         dictionary =
                 loadDictionary(language);
 
@@ -219,12 +246,15 @@ public class DictionaryManager {
     private Dictionary loadDictionary(
             String language) {
 
-        List<String> words =
-                new ArrayList<>();
-
         String assetName =
                 "dictionaries/" +
                         getAssetName(language);
+
+        List<String> words =
+                new ArrayList<>();
+
+        List<String> flags =
+                new ArrayList<>();
 
         try (InputStream inputStream =
                      context.getAssets().open(
@@ -238,13 +268,18 @@ public class DictionaryManager {
                              )
                      )) {
 
+            String header =
+                    reader.readLine();
+
+            if (!FORMAT_HEADER.equals(header)) {
+                return emptyDictionary();
+            }
+
             String line;
 
             while ((line = reader.readLine()) != null) {
 
-                line = line.trim();
-
-                if (TextUtils.isEmpty(line) ||
+                if (line.isEmpty() ||
                         line.startsWith("#")) {
 
                     continue;
@@ -253,34 +288,40 @@ public class DictionaryManager {
                 int separator =
                         line.indexOf('\t');
 
-                if (separator > 0) {
-                    line =
+                String word;
+                String wordFlags;
+
+                if (separator >= 0) {
+
+                    word =
                             line.substring(
                                     0,
                                     separator
                             );
-                }
 
-                separator =
-                        line.indexOf(' ');
-
-                if (separator > 0) {
-                    line =
+                    wordFlags =
                             line.substring(
-                                    0,
-                                    separator
+                                    separator + 1
                             );
+
+                } else {
+
+                    word = line;
+                    wordFlags = "";
                 }
 
-                line =
-                        line.trim()
+                word =
+                        word.trim()
                                 .toLowerCase(
                                         Locale.ROOT
                                 );
 
-                if (isValidWord(line)) {
-                    words.add(line);
+                if (!isValidWord(word)) {
+                    continue;
                 }
+
+                words.add(word);
+                flags.add(wordFlags.trim());
 
                 if (words.size()
                         >= MAX_DICTIONARY_WORDS) {
@@ -290,34 +331,88 @@ public class DictionaryManager {
             }
 
         } catch (IOException ignored) {
-            // Dictionary unavailable.
+
+            return emptyDictionary();
         }
 
         if (words.isEmpty()) {
-            return new Dictionary(
-                    Collections.emptyList()
-            );
+            return emptyDictionary();
         }
 
-        Collections.sort(words);
-
-        List<String> unique =
-                new ArrayList<>(
-                        words.size()
+        /*
+         * The build already sorts and removes duplicates.
+         * We still sort here defensively so Dictionary always
+         * satisfies the binary-search contract.
+         */
+        String[] wordArray =
+                words.toArray(
+                        new String[0]
                 );
 
-        String previous = null;
+        String[] flagArray =
+                flags.toArray(
+                        new String[0]
+                );
 
-        for (String word : words) {
+        sortEntries(
+                wordArray,
+                flagArray
+        );
 
-            if (!word.equals(previous)) {
+        return new Dictionary(
+                wordArray,
+                flagArray
+        );
+    }
 
-                unique.add(word);
-                previous = word;
-            }
+    private void sortEntries(
+            String[] words,
+            String[] flags) {
+
+        Integer[] indexes =
+                new Integer[words.length];
+
+        for (int i = 0;
+             i < indexes.length;
+             i++) {
+
+            indexes[i] = i;
         }
 
-        return new Dictionary(unique);
+        Arrays.sort(
+                indexes,
+                Comparator.comparing(
+                        i -> words[i]
+                )
+        );
+
+        String[] sortedWords =
+                words.clone();
+
+        String[] sortedFlags =
+                flags.clone();
+
+        for (int i = 0;
+             i < indexes.length;
+             i++) {
+
+            int source =
+                    indexes[i];
+
+            words[i] =
+                    sortedWords[source];
+
+            flags[i] =
+                    sortedFlags[source];
+        }
+    }
+
+    private Dictionary emptyDictionary() {
+
+        return new Dictionary(
+                new String[0],
+                new String[0]
+        );
     }
 
     private String getAssetName(
@@ -326,14 +421,14 @@ public class DictionaryManager {
         switch (language) {
 
             case "es-AR":
-                return "es-AR.txt";
+                return "es-AR.dict";
 
             case "de":
-                return "de.txt";
+                return "de.dict";
 
             case "en":
             default:
-                return "en.txt";
+                return "en.dict";
         }
     }
 
@@ -397,6 +492,31 @@ public class DictionaryManager {
         }
 
         return true;
+    }
+
+    private int findPrefixStart(
+            Dictionary dictionary,
+            String prefix) {
+
+        int low = 0;
+        int high = dictionary.size();
+
+        while (low < high) {
+
+            int mid =
+                    (low + high) >>> 1;
+
+            String candidate =
+                    dictionary.get(mid);
+
+            if (candidate.compareTo(prefix) < 0) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        return low;
     }
 
     private int getMaximumDistance(
@@ -469,11 +589,9 @@ public class DictionaryManager {
                  j <= second.length();
                  j++) {
 
-                char secondChar =
-                        second.charAt(j - 1);
-
                 int cost =
-                        firstChar == secondChar
+                        firstChar ==
+                                second.charAt(j - 1)
                                 ? 0
                                 : 1;
 
@@ -540,24 +658,17 @@ public class DictionaryManager {
         }
 
         if (firstUpper) {
-            return capitalizeFirstLetter(
-                    suggestion
-            );
+
+            if (suggestion.isEmpty()) {
+                return suggestion;
+            }
+
+            return Character.toUpperCase(
+                    suggestion.charAt(0)
+            ) + suggestion.substring(1);
         }
 
         return suggestion;
-    }
-
-    private String capitalizeFirstLetter(
-            String text) {
-
-        if (TextUtils.isEmpty(text)) {
-            return text;
-        }
-
-        return Character.toUpperCase(
-                text.charAt(0)
-        ) + text.substring(1);
     }
 
     private static final class ScoredWord {
