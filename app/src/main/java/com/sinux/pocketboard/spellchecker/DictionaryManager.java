@@ -64,7 +64,9 @@ public class DictionaryManager {
                 word.toLowerCase(Locale.ROOT);
 
         List<String> results =
-                new ArrayList<>();
+                new ArrayList<>(
+                        Math.min(maxResults, 20)
+                );
 
         int prefixLimit =
                 Math.min(
@@ -72,13 +74,6 @@ public class DictionaryManager {
                         MAX_PREFIX_RESULTS
                 );
 
-        /*
-         * Prefix suggestions.
-         *
-         * The dictionary is alphabetically sorted, so use
-         * binary search to jump close to the requested prefix
-         * instead of scanning from the beginning.
-         */
         int index =
                 findPrefixStart(
                         dictionary,
@@ -101,9 +96,6 @@ public class DictionaryManager {
             index++;
         }
 
-        /*
-         * Spelling suggestions.
-         */
         if (results.size() < maxResults) {
 
             int maxDistance =
@@ -121,14 +113,18 @@ public class DictionaryManager {
                 String candidate =
                         dictionary.get(i);
 
-                if (results.contains(candidate)) {
+                if (candidate.startsWith(
+                        normalizedWord
+                )) {
                     continue;
                 }
 
-                if (Math.abs(
+                int lengthDifference =
                         candidate.length()
-                                - normalizedWord.length()
-                ) > maxDistance) {
+                                - normalizedWord.length();
+
+                if (lengthDifference > maxDistance ||
+                        lengthDifference < -maxDistance) {
 
                     continue;
                 }
@@ -136,7 +132,8 @@ public class DictionaryManager {
                 int distance =
                         levenshteinDistance(
                                 normalizedWord,
-                                candidate
+                                candidate,
+                                maxDistance
                         );
 
                 if (distance <= maxDistance) {
@@ -162,12 +159,15 @@ public class DictionaryManager {
 
             for (ScoredWord scoredWord : scored) {
 
+                String suggestion =
+                        scoredWord.getWord();
+
                 if (!results.contains(
-                        scoredWord.getWord()
+                        suggestion
                 )) {
 
                     results.add(
-                            scoredWord.getWord()
+                            suggestion
                     );
                 }
 
@@ -177,9 +177,6 @@ public class DictionaryManager {
             }
         }
 
-        /*
-         * Preserve capitalization typed by the user.
-         */
         for (int i = 0;
              i < results.size();
              i++) {
@@ -339,11 +336,6 @@ public class DictionaryManager {
             return emptyDictionary();
         }
 
-        /*
-         * The build already sorts and removes duplicates.
-         * We still sort here defensively so Dictionary always
-         * satisfies the binary-search contract.
-         */
         String[] wordArray =
                 words.toArray(
                         new String[0]
@@ -542,7 +534,8 @@ public class DictionaryManager {
 
     private int levenshteinDistance(
             String first,
-            String second) {
+            String second,
+            int maximumDistance) {
 
         if (first.equals(second)) {
             return 0;
@@ -556,6 +549,13 @@ public class DictionaryManager {
             return first.length();
         }
 
+        if (Math.abs(
+                first.length() - second.length()
+        ) > maximumDistance) {
+
+            return maximumDistance + 1;
+        }
+
         if (first.length() < second.length()) {
 
             String temp = first;
@@ -563,14 +563,17 @@ public class DictionaryManager {
             second = temp;
         }
 
+        int secondLength =
+                second.length();
+
         int[] previous =
-                new int[second.length() + 1];
+                new int[secondLength + 1];
 
         int[] current =
-                new int[second.length() + 1];
+                new int[secondLength + 1];
 
         for (int j = 0;
-             j <= second.length();
+             j <= secondLength;
              j++) {
 
             previous[j] = j;
@@ -582,11 +585,14 @@ public class DictionaryManager {
 
             current[0] = i;
 
+            int rowMinimum =
+                    current[0];
+
             char firstChar =
                     first.charAt(i - 1);
 
             for (int j = 1;
-                 j <= second.length();
+                 j <= secondLength;
                  j++) {
 
                 int cost =
@@ -595,7 +601,7 @@ public class DictionaryManager {
                                 ? 0
                                 : 1;
 
-                current[j] =
+                int value =
                         Math.min(
                                 Math.min(
                                         current[j - 1] + 1,
@@ -603,6 +609,16 @@ public class DictionaryManager {
                                 ),
                                 previous[j - 1] + cost
                         );
+
+                current[j] = value;
+
+                if (value < rowMinimum) {
+                    rowMinimum = value;
+                }
+            }
+
+            if (rowMinimum > maximumDistance) {
+                return maximumDistance + 1;
             }
 
             int[] temp =
@@ -616,7 +632,7 @@ public class DictionaryManager {
         }
 
         return previous[
-                second.length()
+                secondLength
         ];
     }
 
