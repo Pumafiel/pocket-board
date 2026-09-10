@@ -3,60 +3,94 @@ package com.sinux.pocketboard.spellchecker;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 public final class CorrectionEngine {
 
     private static final int DEFAULT_MAX_RESULTS = 3;
 
-    private static final int MAX_CANDIDATE_DISTANCE = 6;
+    /*
+     * Este límite no significa que toda palabra con una distancia
+     * superior sea imposible. Es solamente un límite de seguridad
+     * para evitar sugerencias absurdamente alejadas.
+     */
+    private static final int MAX_CANDIDATE_DISTANCE = 8;
 
-    private static final int PREFIX_BONUS = 3;
-
+    /*
+     * El score más bajo es el mejor.
+     */
     private static final int EXACT_BONUS = 1000;
 
-    private static final int LENGTH_PENALTY = 2;
-
-    private static final int REPETITION_PENALTY = 1;
-
-    private static final int DIACRITIC_PENALTY = 1;
-
-    private static final int TRANSPOSITION_PENALTY = 1;
-
-    private static final int KEYBOARD_NEIGHBOR_PENALTY = 1;
-
-    private static final int KEYBOARD_DIAGONAL_PENALTY = 2;
+    /*
+     * Costos base.
+     *
+     * Son pesos relativos, no probabilidades absolutas.
+     */
+    private static final int INSERTION_PENALTY = 3;
+    private static final int DELETION_PENALTY = 3;
 
     private static final int NORMAL_SUBSTITUTION_PENALTY = 4;
 
-    private static final int INSERTION_PENALTY = 3;
+    private static final int KEYBOARD_NEIGHBOR_PENALTY = 1;
+    private static final int KEYBOARD_DIAGONAL_PENALTY = 2;
+    private static final int KEYBOARD_FAR_PENALTY = 4;
 
-    private static final int DELETION_PENALTY = 3;
+    private static final int TRANSPOSITION_PENALTY = 1;
 
-    private static final int UNKNOWN_PENALTY = 5;
+    /*
+     * Error muy frecuente:
+     *
+     *     helllo -> hello
+     *
+     * Una repetición accidental debe costar menos que una
+     * eliminación arbitraria.
+     */
+    private static final int REPETITION_PENALTY = 1;
 
-    private final KeyboardErrorModel keyboardErrorModel;
+    /*
+     * Diferencia de longitud utilizada solamente como señal
+     * secundaria. La distancia principal ya contempla inserciones
+     * y eliminaciones.
+     */
+    private static final int LENGTH_PENALTY = 1;
+
+    /*
+     * Prefijo:
+     *
+     *     ca -> casa
+     *
+     * es una suggestion válida y frecuente.
+     *
+     * No debe, sin embargo, dominar una corrección claramente mejor.
+     */
+    private static final int PREFIX_BONUS = 2;
+
+    /*
+     * Una transformación lingüística válida no debe convertir dos
+     * palabras distintas en equivalentes.
+     *
+     * El costo bajo se aplica solamente cuando la diferencia concreta
+     * de caracteres es realmente una diferencia lingüística.
+     */
+    private static final int LANGUAGE_DIACRITIC_COST = 1;
+    private static final int LANGUAGE_N_TILDE_COST = 1;
+    private static final int LANGUAGE_GERMAN_COST = 1;
+
+    /*
+     * ------------------------------------------------------------
+     * CONSTRUCTOR
+     * ------------------------------------------------------------
+     */
 
     public CorrectionEngine() {
-
-        keyboardErrorModel =
-                createKeyboardErrorModel();
-    }
-
-    private KeyboardErrorModel createKeyboardErrorModel() {
-
         /*
-         * KeyboardErrorModel actualmente expone una API estática.
+         * KeyboardErrorModel utiliza actualmente una API estática.
          *
-         * Mantenemos esta instancia para dejar preparado el motor
-         * para futuras variantes de layout.
+         * No necesitamos crear ni almacenar una instancia.
          */
-        return null;
     }
 
     /*
@@ -72,7 +106,7 @@ public final class CorrectionEngine {
             int maxResults) {
 
         if (input == null ||
-                input.isEmpty() ||
+                input.trim().isEmpty() ||
                 candidates == null ||
                 candidates.isEmpty() ||
                 maxResults <= 0) {
@@ -81,9 +115,11 @@ public final class CorrectionEngine {
         }
 
         String normalizedInput =
-                normalize(
-                        input
-                );
+                normalize(input);
+
+        if (normalizedInput.isEmpty()) {
+            return new ArrayList<>();
+        }
 
         String language =
                 LanguageRules.normalizeLanguage(
@@ -93,27 +129,31 @@ public final class CorrectionEngine {
         int resultLimit =
                 Math.max(
                         1,
-                        maxResults
+                        Math.min(
+                                maxResults,
+                                DEFAULT_MAX_RESULTS
+                        )
                 );
 
         List<ScoredCandidate> scoredCandidates =
                 new ArrayList<>();
 
+        /*
+         * Evitamos duplicados normalizados.
+         */
         Set<String> seen =
                 new HashSet<>();
 
         for (String candidate : candidates) {
 
             if (candidate == null ||
-                    candidate.isEmpty()) {
+                    candidate.trim().isEmpty()) {
 
                 continue;
             }
 
             String normalizedCandidate =
-                    normalize(
-                            candidate
-                    );
+                    normalize(candidate);
 
             if (normalizedCandidate.isEmpty()) {
                 continue;
@@ -131,6 +171,16 @@ public final class CorrectionEngine {
                             normalizedCandidate,
                             language
                     );
+
+            /*
+             * No agregamos candidatos que estén claramente
+             * fuera del rango útil.
+             */
+            if (score >
+                    MAX_CANDIDATE_DISTANCE) {
+
+                continue;
+            }
 
             scoredCandidates.add(
                     new ScoredCandidate(
@@ -156,9 +206,7 @@ public final class CorrectionEngine {
         for (ScoredCandidate candidate :
                 scoredCandidates) {
 
-            if (results.size()
-                    >= resultLimit) {
-
+            if (results.size() >= resultLimit) {
                 break;
             }
 
@@ -170,10 +218,9 @@ public final class CorrectionEngine {
         return results;
     }
 
-
     /*
      * ------------------------------------------------------------
-     * SCORING
+     * SCORE DE UNA PALABRA
      * ------------------------------------------------------------
      */
 
@@ -189,19 +236,12 @@ public final class CorrectionEngine {
         }
 
         String first =
-                normalize(
-                        input
-                );
+                normalize(input);
 
         String second =
-                normalize(
-                        candidate
-                );
+                normalize(candidate);
 
-        if (first.equals(
-                second
-        )) {
-
+        if (first.equals(second)) {
             return -EXACT_BONUS;
         }
 
@@ -228,78 +268,84 @@ public final class CorrectionEngine {
 
         /*
          * --------------------------------------------------------
-         * Prefix bonus
+         * PREFIJO
          * --------------------------------------------------------
          *
-         * Si el candidato conserva el comienzo escrito por el
-         * usuario, es una señal bastante fuerte de que puede ser
-         * la palabra deseada.
+         * Solamente damos una pequeña ventaja.
+         *
+         * Nunca debe superar una corrección lingüística claramente
+         * mejor.
          */
-
-        if (second.startsWith(
-                first
-        )) {
+        if (second.startsWith(first) &&
+                first.length() < second.length()) {
 
             score -= PREFIX_BONUS;
         }
 
         /*
          * --------------------------------------------------------
-         * Diferencia de longitud
+         * LONGITUD
          * --------------------------------------------------------
+         *
+         * Es una señal secundaria.
          */
-
-        score +=
+        int lengthDifference =
                 Math.abs(
                         first.length()
                                 - second.length()
-                ) * LENGTH_PENALTY;
+                );
 
-        /*
-         * --------------------------------------------------------
-         * Repeticiones
-         * --------------------------------------------------------
-         */
+        if (lengthDifference > 0) {
 
-        if (hasAccidentalRepetition(
-                first,
-                second
-        )) {
-
-            score -= REPETITION_PENALTY;
+            score +=
+                    lengthDifference
+                            * LENGTH_PENALTY;
         }
 
         /*
          * --------------------------------------------------------
-         * Diacríticos
+         * ESTRUCTURA
          * --------------------------------------------------------
+         *
+         * Cuando la mayoría de la palabra se conserva, damos una
+         * pequeña ventaja. Esto ayuda a diferenciar palabras que
+         * tienen la misma cantidad de errores pero estructuras
+         * distintas.
          */
-
-        if (LanguageRules.equivalentIgnoringDiacritics(
-                first,
-                second,
-                language
-        )) {
-
-            score -= DIACRITIC_PENALTY;
-        }
+        score -=
+                getCommonPrefixBonus(
+                        first,
+                        second
+                );
 
         /*
-         * Nunca permitir un score menor que el exacto.
+         * Nunca permitimos que una corrección termine siendo mejor
+         * que una coincidencia exacta.
          */
-        return score;
+        return Math.max(
+                -EXACT_BONUS + 1,
+                score
+        );
     }
-
 
     /*
      * ------------------------------------------------------------
      * DAMERAU-LEVENSHTEIN PONDERADO
      * ------------------------------------------------------------
      *
-     * A diferencia del Levenshtein tradicional, esta versión
-     * contempla transposiciones.
+     * Incluye:
      *
-     * Además cada operación tiene un costo diferente.
+     * - sustituciones;
+     * - teclas vecinas;
+     * - diagonales;
+     * - inserciones;
+     * - eliminaciones;
+     * - repeticiones;
+     * - transposiciones;
+     * - reglas lingüísticas.
+     *
+     * Todas las operaciones forman parte de la misma matriz de
+     * distancia.
      */
 
     private int weightedDamerauLevenshtein(
@@ -307,29 +353,19 @@ public final class CorrectionEngine {
             String second,
             String languageTag) {
 
-        if (first.equals(
-                second
-        )) {
-
+        if (first.equals(second)) {
             return 0;
         }
 
         if (first.isEmpty()) {
-
             return second.length()
                     * INSERTION_PENALTY;
         }
 
         if (second.isEmpty()) {
-
             return first.length()
                     * DELETION_PENALTY;
         }
-
-        /*
-         * Limitamos la cantidad de memoria a dos filas principales
-         * más una fila anterior para detectar transposiciones.
-         */
 
         int firstLength =
                 first.length();
@@ -337,6 +373,15 @@ public final class CorrectionEngine {
         int secondLength =
                 second.length();
 
+        /*
+         * Tres filas:
+         *
+         * previousPrevious
+         * previous
+         * current
+         *
+         * son suficientes para las transposiciones adyacentes.
+         */
         int[] previousPrevious =
                 new int[secondLength + 1];
 
@@ -364,7 +409,7 @@ public final class CorrectionEngine {
             current[0] =
                     i * DELETION_PENALTY;
 
-            char firstChar =
+            char typedChar =
                     first.charAt(
                             i - 1
                     );
@@ -373,19 +418,21 @@ public final class CorrectionEngine {
                  j <= secondLength;
                  j++) {
 
-                char secondChar =
+                char candidateChar =
                         second.charAt(
                                 j - 1
                         );
 
                 /*
-                 * Sustitución.
+                 * ------------------------------------------------
+                 * SUSTITUCIÓN
+                 * ------------------------------------------------
                  */
 
                 int substitutionCost;
 
-                if (firstChar ==
-                        secondChar) {
+                if (typedChar ==
+                        candidateChar) {
 
                     substitutionCost = 0;
 
@@ -393,8 +440,8 @@ public final class CorrectionEngine {
 
                     substitutionCost =
                             getSubstitutionCost(
-                                    firstChar,
-                                    secondChar,
+                                    typedChar,
+                                    candidateChar,
                                     languageTag
                             );
                 }
@@ -404,20 +451,39 @@ public final class CorrectionEngine {
                                 + substitutionCost;
 
                 /*
-                 * Inserción.
+                 * ------------------------------------------------
+                 * INSERCIÓN
+                 * ------------------------------------------------
+                 *
+                 * El candidato tiene un carácter que el usuario
+                 * no escribió.
                  */
-
                 int insertion =
                         current[j - 1]
-                                + INSERTION_PENALTY;
+                                + getInsertionCost(
+                                candidateChar,
+                                languageTag
+                        );
 
                 /*
-                 * Eliminación.
+                 * ------------------------------------------------
+                 * ELIMINACIÓN
+                 * ------------------------------------------------
+                 *
+                 * El usuario escribió un carácter que no aparece
+                 * en el candidato.
                  */
+                int deletionCost =
+                        getDeletionCost(
+                                typedChar,
+                                first,
+                                i - 1,
+                                languageTag
+                        );
 
                 int deletion =
                         previous[j]
-                                + DELETION_PENALTY;
+                                + deletionCost;
 
                 int best =
                         Math.min(
@@ -430,40 +496,35 @@ public final class CorrectionEngine {
 
                 /*
                  * ------------------------------------------------
-                 * Transposición
+                 * TRANSPOSICIÓN
                  * ------------------------------------------------
                  *
-                 * Ejemplo:
-                 *
+                 *     teh -> the
                  *     qeu -> que
-                 *
-                 *     t h e
-                 *     t e h
                  */
-
                 if (i > 1 &&
                         j > 1) {
 
-                    char previousFirst =
+                    char previousTyped =
                             first.charAt(
                                     i - 2
                             );
 
-                    char previousSecond =
+                    char previousCandidate =
                             second.charAt(
                                     j - 2
                             );
 
-                    if (firstChar ==
-                            previousSecond &&
-                            previousFirst ==
-                                    secondChar) {
+                    if (typedChar ==
+                            previousCandidate &&
+                            previousTyped ==
+                                    candidateChar) {
 
                         int transposition =
                                 previousPrevious[j - 2]
                                         + getTranspositionCost(
-                                        previousFirst,
-                                        firstChar,
+                                        previousTyped,
+                                        typedChar,
                                         languageTag
                                 );
 
@@ -479,7 +540,7 @@ public final class CorrectionEngine {
                         best;
             }
 
-            int[] temp =
+            int[] temporary =
                     previousPrevious;
 
             previousPrevious =
@@ -489,7 +550,7 @@ public final class CorrectionEngine {
                     current;
 
             current =
-                    temp;
+                    temporary;
         }
 
         return previous[
@@ -497,11 +558,19 @@ public final class CorrectionEngine {
         ];
     }
 
-
     /*
      * ------------------------------------------------------------
-     * COSTO DE SUSTITUCIÓN
+     * SUSTITUCIÓN
      * ------------------------------------------------------------
+     *
+     * Orden de prioridad:
+     *
+     * 1. carácter exacto;
+     * 2. regla lingüística;
+     * 3. vecino de teclado;
+     * 4. diagonal;
+     * 5. tecla alejada;
+     * 6. sustitución normal.
      */
 
     private int getSubstitutionCost(
@@ -509,10 +578,19 @@ public final class CorrectionEngine {
             char candidate,
             String languageTag) {
 
-        /*
-         * Diferencia lingüística.
-         */
+        if (typed == candidate) {
+            return 0;
+        }
 
+        /*
+         * Primero idioma.
+         *
+         * Esto es importante para:
+         *
+         *     manana -> mañana
+         *
+         * La ñ no es una vocal acentuada.
+         */
         int languageCost =
                 LanguageRules.getCharacterSubstitutionCost(
                         typed,
@@ -520,14 +598,65 @@ public final class CorrectionEngine {
                         languageTag
                 );
 
+        if (LanguageRules.isSpanishLanguage(
+                languageTag
+        ) &&
+                LanguageRules.isSpanishNPair(
+                        typed,
+                        candidate
+                )) {
+
+            return LANGUAGE_N_TILDE_COST;
+        }
+
+        if (LanguageRules.isGermanLanguage(
+                languageTag
+        ) &&
+                (
+                        LanguageRules.isGermanUmlautPair(
+                                typed,
+                                candidate
+                        ) ||
+                        LanguageRules.isGermanSharpSPair(
+                                typed,
+                                candidate
+                        )
+                )) {
+
+            return LANGUAGE_GERMAN_COST;
+        }
+
+        /*
+         * Diacríticos reales.
+         *
+         * Como -> cómo NO es equivalencia exacta.
+         *
+         * Simplemente representa una posible sustitución de
+         * carácter de costo bajo.
+         */
+        if (LanguageRules.isLikelyAccentError(
+                typed,
+                candidate,
+                languageTag
+        )) {
+
+            return LANGUAGE_DIACRITIC_COST;
+        }
+
+        /*
+         * Si LanguageRules conoce otra transformación de bajo costo,
+         * la conservamos.
+         */
         if (languageCost <=
-                DIACRITIC_PENALTY) {
+                LANGUAGE_DIACRITIC_COST) {
 
             return languageCost;
         }
 
         /*
-         * Error producido por teclado.
+         * --------------------------------------------------------
+         * TECLADO
+         * --------------------------------------------------------
          */
 
         int keyboardCost =
@@ -549,17 +678,77 @@ public final class CorrectionEngine {
             return KEYBOARD_DIAGONAL_PENALTY;
         }
 
-        /*
-         * Sustitución normal.
-         */
+        if (keyboardCost <=
+                KEYBOARD_FAR_PENALTY) {
+
+            return KEYBOARD_FAR_PENALTY;
+        }
 
         return NORMAL_SUBSTITUTION_PENALTY;
     }
 
+    /*
+     * ------------------------------------------------------------
+     * INSERCIÓN
+     * ------------------------------------------------------------
+     */
+
+    private int getInsertionCost(
+            char character,
+            String languageTag) {
+
+        /*
+         * La inserción de una vocal acentuada frente a su variante
+         * sin acento puede ser una transformación razonable, pero
+         * no podemos decidirla aisladamente sin contexto.
+         *
+         * Por eso mantenemos el costo base.
+         */
+        return INSERTION_PENALTY;
+    }
 
     /*
      * ------------------------------------------------------------
-     * TRANSPOSE
+     * ELIMINACIÓN
+     * ------------------------------------------------------------
+     */
+
+    private int getDeletionCost(
+            char character,
+            String input,
+            int index,
+            String languageTag) {
+
+        /*
+         * Repetición accidental:
+         *
+         *     helllo -> hello
+         *     maaana -> maana
+         *
+         * Si el carácter eliminado está pegado a otro igual,
+         * consideramos que probablemente fue una pulsación doble.
+         */
+        if (index > 0 &&
+                input.charAt(index - 1)
+                        == character) {
+
+            return REPETITION_PENALTY;
+        }
+
+        if (index + 1 <
+                input.length() &&
+                input.charAt(index + 1)
+                        == character) {
+
+            return REPETITION_PENALTY;
+        }
+
+        return DELETION_PENALTY;
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * TRANSPOSICIÓN
      * ------------------------------------------------------------
      */
 
@@ -575,8 +764,12 @@ public final class CorrectionEngine {
                         languageTag
                 );
 
+        /*
+         * Una transposición de teclas cercanas es especialmente
+         * probable al escribir rápido.
+         */
         if (keyboardCost <=
-                KEYBOARD_NEIGHBOR_PENALTY) {
+                KEYBOARD_DIAGONAL_PENALTY) {
 
             return TRANSPOSITION_PENALTY;
         }
@@ -584,114 +777,70 @@ public final class CorrectionEngine {
         return TRANSPOSITION_PENALTY + 1;
     }
 
-
     /*
      * ------------------------------------------------------------
-     * REPETICIONES
+     * BONUS DE PREFIJO / ESTRUCTURA
      * ------------------------------------------------------------
-     *
-     * Detecta una letra adicional en el texto escrito.
-     *
-     * Ejemplos:
-     *
-     *     helllo -> hello
-     *     mañanaaa -> mañana
      */
 
-    private boolean hasAccidentalRepetition(
+    private int getCommonPrefixBonus(
             String first,
             String second) {
 
-        if (first.length() <=
-                second.length()) {
+        if (first.isEmpty() ||
+                second.isEmpty()) {
 
-            return false;
+            return 0;
         }
 
-        int firstIndex = 0;
-        int secondIndex = 0;
+        int commonLength =
+                0;
 
-        boolean repetitionDetected =
-                false;
+        int maximum =
+                Math.min(
+                        first.length(),
+                        second.length()
+                );
 
-        while (firstIndex <
-                first.length() &&
-                secondIndex <
-                        second.length()) {
+        while (commonLength <
+                maximum &&
+                first.charAt(commonLength)
+                        == second.charAt(commonLength)) {
 
-            char firstChar =
-                    first.charAt(
-                            firstIndex
-                    );
-
-            char secondChar =
-                    second.charAt(
-                            secondIndex
-                    );
-
-            if (firstChar ==
-                    secondChar) {
-
-                firstIndex++;
-                secondIndex++;
-
-                continue;
-            }
-
-            /*
-             * Si el carácter actual se repite inmediatamente,
-             * tratamos la segunda aparición como posible error.
-             */
-
-            if (firstIndex + 1 <
-                    first.length() &&
-                    first.charAt(
-                            firstIndex + 1
-                    ) == firstChar) {
-
-                firstIndex++;
-
-                repetitionDetected =
-                        true;
-
-                continue;
-            }
-
-            return false;
+            commonLength++;
         }
 
-        if (secondIndex ==
-                second.length()) {
-
-            while (firstIndex <
-                    first.length()) {
-
-                if (firstIndex + 1 >=
-                        first.length() ||
-                        first.charAt(
-                                firstIndex
-                        ) != first.charAt(
-                                firstIndex + 1
-                        )) {
-
-                    return false;
-                }
-
-                repetitionDetected =
-                        true;
-
-                firstIndex += 2;
-            }
+        /*
+         * No queremos que una palabra simplemente larga gane
+         * demasiados puntos por compartir prefijo.
+         *
+         * Máximo bonus = 2.
+         */
+        if (commonLength >= 4) {
+            return 2;
         }
 
-        return repetitionDetected;
+        if (commonLength >= 2) {
+            return 1;
+        }
+
+        return 0;
     }
-
 
     /*
      * ------------------------------------------------------------
      * NORMALIZACIÓN
      * ------------------------------------------------------------
+     *
+     * IMPORTANTE:
+     *
+     * Aquí NO quitamos diacríticos.
+     *
+     *     como != cómo
+     *     manana != mañana
+     *
+     * La normalización solamente homogeniza mayúsculas/minúsculas
+     * y espacios exteriores.
      */
 
     private String normalize(
@@ -708,7 +857,6 @@ public final class CorrectionEngine {
                 );
     }
 
-
     /*
      * ------------------------------------------------------------
      * RESULTADO
@@ -718,7 +866,6 @@ public final class CorrectionEngine {
     private static final class ScoredCandidate {
 
         private final String word;
-
         private final int score;
 
         private ScoredCandidate(
@@ -729,7 +876,6 @@ public final class CorrectionEngine {
             this.score = score;
         }
     }
-
 
     private static final class CandidateComparator
             implements Comparator<ScoredCandidate> {
