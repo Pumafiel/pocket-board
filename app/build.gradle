@@ -2,15 +2,6 @@ import javax.xml.XMLConstants
 import javax.xml.transform.stream.StreamSource
 import javax.xml.validation.SchemaFactory
 
-import java.io.BufferedReader
-import java.io.File
-import java.io.FilenameFilter
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-import java.nio.charset.StandardCharsets
-import java.util.Locale
-
 plugins {
     id 'com.android.application'
 }
@@ -23,14 +14,16 @@ android {
         applicationId "com.sinux.pocketboard"
         minSdk 28
         targetSdk 36
-        versionCode 8
-        versionName "1.1.6"
+
+        versionCode 9
+        versionName "1.2.0"
     }
 
     buildTypes {
         release {
             minifyEnabled true
             shrinkResources true
+
             proguardFiles getDefaultProguardFile(
                     'proguard-android-optimize.txt'
             ), 'proguard-rules.pro'
@@ -61,111 +54,82 @@ dependencies {
 /*
  * ============================================================
  * POCKETBOARD DICTIONARIES
+ * ============================================================
  *
  * Source:
  *
  * https://github.com/wooorm/dictionaries
  *
- * The original Hunspell .dic and .aff information is processed
- * during the build.
+ * We keep the Hunspell dictionary information instead of
+ * reducing it to a plain word list.
  *
- * IMPORTANT:
+ * This allows DictionaryManager to use:
  *
- * We do NOT convert the dictionary into a plain word list.
+ * - dictionary words
+ * - Hunspell flags
+ * - word frequency/ranking information when available
+ * - language-specific spelling information
  *
- * The .dic flags are preserved because they identify the
- * Hunspell rules associated with each dictionary entry.
- *
- * The useful correction information from .aff is extracted
- * into a compact rules file.
- *
- * The generated files are:
- *
- *     <language>.dict
- *     <language>.rules
- *
- * .dict format:
- *
- *     word<TAB>flags
- *
- * Example:
- *
- *     casa/S
- *     comer/...
- *
- * .rules contains compact information such as:
- *
- *     TRY
- *     REP
- *     MAP
- *
- * Full PFX/SFX rule expansion will be handled by the build
- * compiler in the next stage.
+ * The generated files are compact UTF-8 assets.
  * ============================================================
  */
 
 def dictionariesOutputDir =
         file("${projectDir}/src/main/assets/dictionaries")
 
-def dictionariesCacheDir =
-        file("${buildDir}/pocketboard-dictionaries")
-
-/*
- * Keep the source revision configurable.
- *
- * "main" is used for now so the dictionaries remain current.
- */
 def dictionariesVersion = "main"
 
 def dictionarySources = [
-        "es-AR": [
-                dic: "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
-                aff: "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.aff"
-        ],
-        "en": [
-                dic: "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
-                aff: "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.aff"
-        ],
-        "de": [
-                dic: "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic",
-                aff: "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.aff"
-        ]
+        "es-AR": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
+        "en"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
+        "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
 ]
 
 
 /*
- * ============================================================
- * DOWNLOAD HELPER
- * ============================================================
+ * Download the original Hunspell dictionaries unchanged.
+ *
+ * Keeping the original .dic data is important:
+ *
+ *     casa/S
+ *     abandonar/RED
+ *
+ * The part after '/' contains Hunspell information and must
+ * not be discarded at build time.
  */
+def downloadDictionary = {
+    String language,
+    String dictionaryUrlString ->
 
-def downloadFile = {
-    String urlString,
-    File destination,
-    String description ->
+    File outputFile = new File(
+            dictionariesOutputDir,
+            "${language}.dic"
+    )
 
-    if (destination.exists() &&
-            destination.length() > 0) {
+    /*
+     * Do not download again when the generated asset already
+     * exists. Delete the file manually when forcing an update.
+     */
+    if (outputFile.exists() &&
+            outputFile.length() > 0) {
 
         println(
-                "PocketBoard dictionary source already cached: " +
-                        description
+                "PocketBoard dictionary already exists: " +
+                        outputFile.name
         )
 
         return
     }
 
-    destination.parentFile.mkdirs()
-
     println(
-            "Downloading PocketBoard dictionary source: " +
-                    description
+            "Downloading PocketBoard dictionary: " +
+                    language
     )
 
-    HttpURLConnection connection =
-            (HttpURLConnection) new URL(
-                    urlString
-            ).openConnection()
+    dictionariesOutputDir.mkdirs()
+
+    def connection =
+            new URL(dictionaryUrlString).openConnection()
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
@@ -173,485 +137,52 @@ def downloadFile = {
             "User-Agent",
             "PocketBoard-Build"
     )
-    connection.setInstanceFollowRedirects(true)
 
     try {
 
         int responseCode =
                 connection.getResponseCode()
 
-        if (responseCode != HttpURLConnection.HTTP_OK) {
+        if (responseCode != 200) {
 
             throw new GradleException(
                     "Could not download " +
-                            description +
-                            ". HTTP " +
+                            language +
+                            " dictionary. HTTP " +
                             responseCode
             )
         }
 
-        connection.getInputStream().withStream { input ->
+        outputFile.withOutputStream { output ->
 
-            destination.withOutputStream { output ->
+            connection.getInputStream().withCloseable { input ->
 
-                byte[] buffer =
-                        new byte[8192]
-
-                int bytesRead
+                byte[] buffer = new byte[8192]
+                int count
 
                 while (
-                        (bytesRead = input.read(buffer)) >= 0
+                        (count = input.read(buffer)) != -1
                 ) {
 
                     output.write(
                             buffer,
                             0,
-                            bytesRead
+                            count
                     )
                 }
             }
         }
+
+        println(
+                "PocketBoard dictionary generated: " +
+                        outputFile.absolutePath
+        )
 
     } finally {
         connection.disconnect()
     }
-
-    if (!destination.exists() ||
-            destination.length() == 0) {
-
-        throw new GradleException(
-                "Downloaded file is empty: " +
-                        description
-        )
-    }
 }
 
-
-/*
- * ============================================================
- * HUNSPELL .DIC PROCESSOR
- * ============================================================
- *
- * We preserve the dictionary flags instead of deleting them.
- *
- * Original:
- *
- *     casa/S
- *
- * Generated:
- *
- *     casa<TAB>S
- *
- * This allows the next build stage to use the flags to expand
- * or rank dictionary entries.
- * ============================================================
- */
-
-def processDictionary = {
-    String language,
-    File dicFile,
-    File outputFile ->
-
-    println(
-            "Processing PocketBoard dictionary: " +
-                    language
-    )
-
-    outputFile.parentFile.mkdirs()
-
-    int processedEntries = 0
-    int skippedEntries = 0
-
-    dicFile.withReader(
-            StandardCharsets.UTF_8.name()
-    ) { reader ->
-
-        outputFile.withWriter(
-                StandardCharsets.UTF_8.name()
-        ) { writer ->
-
-            String line
-            boolean firstLine = true
-
-            while (
-                    (line = reader.readLine()) != null
-            ) {
-
-                line = line.trim()
-
-                if (line.isEmpty()) {
-                    continue
-                }
-
-                /*
-                 * First .dic line contains the number of entries.
-                 */
-                if (firstLine) {
-
-                    firstLine = false
-                    continue
-                }
-
-                /*
-                 * Remove comments.
-                 */
-                if (line.startsWith("#")) {
-                    continue
-                }
-
-                String word = line
-                String flags = ""
-
-                int slash =
-                        line.indexOf('/')
-
-                if (slash >= 0) {
-
-                    word =
-                            line.substring(
-                                    0,
-                                    slash
-                            )
-
-                    flags =
-                            line.substring(
-                                    slash + 1
-                            )
-                }
-
-                word = word.trim()
-                flags = flags.trim()
-
-                if (word.isEmpty()) {
-                    skippedEntries++
-                    continue
-                }
-
-                /*
-                 * Do not accept entries containing whitespace.
-                 */
-                boolean valid = true
-
-                for (
-                        int i = 0;
-                        i < word.length();
-                        i++
-                ) {
-
-                    char c =
-                            word.charAt(i)
-
-                    if (Character.isLetter(c) ||
-                            c == '\'' ||
-                            c == '-') {
-
-                        continue
-                    }
-
-                    valid = false
-                    break
-                }
-
-                if (!valid) {
-                    skippedEntries++
-                    continue
-                }
-
-                /*
-                 * Locale.ROOT is important here.
-                 *
-                 * It prevents device locale from changing the
-                 * dictionary contents.
-                 */
-                word =
-                        word.toLowerCase(
-                                Locale.ROOT
-                        )
-
-                /*
-                 * Compact format:
-                 *
-                 * word<TAB>flags
-                 *
-                 * Entries without flags contain only the word.
-                 */
-                writer.write(word)
-
-                if (!flags.isEmpty()) {
-
-                    writer.write('\t')
-                    writer.write(flags)
-                }
-
-                writer.newLine()
-
-                processedEntries++
-            }
-        }
-    }
-
-    println(
-            "PocketBoard dictionary processed: " +
-                    language +
-                    " (" +
-                    processedEntries +
-                    " entries, " +
-                    skippedEntries +
-                    " skipped)"
-    )
-}
-
-
-/*
- * ============================================================
- * HUNSPELL .AFF PROCESSOR
- * ============================================================
- *
- * We currently preserve the information that is directly useful
- * for spelling suggestions:
- *
- *     TRY
- *     REP
- *     MAP
- *
- * Other Hunspell directives are deliberately not thrown away
- * conceptually: they remain available in the downloaded .aff
- * cache and will be processed by the build compiler in the next
- * stage.
- *
- * Keeping the extracted rules compact avoids putting a full
- * Hunspell interpreter inside the Android application.
- * ============================================================
- */
-
-def processAffixFile = {
-    String language,
-    File affFile,
-    File outputFile ->
-
-    println(
-            "Processing PocketBoard dictionary rules: " +
-                    language
-    )
-
-    outputFile.parentFile.mkdirs()
-
-    List<String> tryCharacters =
-            new ArrayList<>()
-
-    List<String> replacementRules =
-            new ArrayList<>()
-
-    List<String> characterMaps =
-            new ArrayList<>()
-
-    String currentSection = ""
-
-    affFile.withReader(
-            StandardCharsets.UTF_8.name()
-    ) { reader ->
-
-        String line
-
-        while (
-                (line = reader.readLine()) != null
-        ) {
-
-            line = line.trim()
-
-            if (line.isEmpty() ||
-                    line.startsWith("#")) {
-
-                continue
-            }
-
-            String[] parts =
-                    line.split(
-                            "\\s+"
-                    )
-
-            if (parts.length == 0) {
-                continue
-            }
-
-            String directive =
-                    parts[0]
-
-            /*
-             * TRY
-             *
-             * Character order is useful when ranking
-             * spelling corrections.
-             */
-            if ("TRY".equals(directive) &&
-                    parts.length >= 2) {
-
-                tryCharacters.clear()
-
-                String characters =
-                        parts[1]
-
-                for (
-                        int i = 0;
-                        i < characters.length();
-                        i++
-                ) {
-
-                    String character =
-                            String.valueOf(
-                                    characters.charAt(i)
-                            )
-
-                    if (!tryCharacters.contains(
-                            character
-                    )) {
-
-                        tryCharacters.add(
-                                character
-                        )
-                    }
-                }
-
-                currentSection = "TRY"
-
-                continue
-            }
-
-            /*
-             * REP count.
-             *
-             * Example:
-             *
-             * REP 20
-             */
-            if ("REP".equals(directive) &&
-                    parts.length >= 2) {
-
-                currentSection = "REP"
-
-                continue
-            }
-
-            /*
-             * REP replacement.
-             *
-             * Example:
-             *
-             * REP f ph
-             *
-             * Means that f/ph substitutions are useful when
-             * searching for likely corrections.
-             */
-            if ("REP".equals(currentSection) &&
-                    parts.length >= 3) {
-
-                replacementRules.add(
-                        parts[1] +
-                                "\t" +
-                                parts[2]
-                )
-
-                continue
-            }
-
-            /*
-             * MAP count.
-             */
-            if ("MAP".equals(directive) &&
-                    parts.length >= 2) {
-
-                currentSection = "MAP"
-
-                continue
-            }
-
-            /*
-             * MAP character groups.
-             *
-             * These represent characters that may be confused
-             * during spelling correction.
-             */
-            if ("MAP".equals(currentSection) &&
-                    parts.length >= 2) {
-
-                characterMaps.add(
-                        parts[1]
-                )
-            }
-        }
-    }
-
-    outputFile.withWriter(
-            StandardCharsets.UTF_8.name()
-    ) { writer ->
-
-        /*
-         * File format version.
-         */
-        writer.write("PBD-RULES-1")
-        writer.newLine()
-
-        /*
-         * TRY characters.
-         */
-        writer.write("TRY")
-
-        for (String character : tryCharacters) {
-
-            writer.write('\t')
-            writer.write(character)
-        }
-
-        writer.newLine()
-
-        /*
-         * REP rules.
-         */
-        writer.write(
-                "REP\t" +
-                        replacementRules.size()
-        )
-        writer.newLine()
-
-        for (String rule : replacementRules) {
-
-            writer.write(rule)
-            writer.newLine()
-        }
-
-        /*
-         * MAP groups.
-         */
-        writer.write(
-                "MAP\t" +
-                        characterMaps.size()
-        )
-        writer.newLine()
-
-        for (String map : characterMaps) {
-
-            writer.write(map)
-            writer.newLine()
-        }
-    }
-
-    println(
-            "PocketBoard dictionary rules generated: " +
-                    outputFile.absolutePath +
-                    " (" +
-                    replacementRules.size() +
-                    " REP, " +
-                    characterMaps.size() +
-                    " MAP)"
-    )
-}
-
-
-/*
- * ============================================================
- * DICTIONARY BUILD TASK
- * ============================================================
- */
 
 tasks.register(
         "downloadPocketBoardDictionaries"
@@ -663,59 +194,13 @@ tasks.register(
 
     doLast {
 
-        dictionariesOutputDir.mkdirs()
-        dictionariesCacheDir.mkdirs()
-
         dictionarySources.each {
             String language,
-            Map<String, String> sources ->
+            String dictionaryUrl ->
 
-            File cachedDic =
-                    new File(
-                            dictionariesCacheDir,
-                            "${language}.dic"
-                    )
-
-            File cachedAff =
-                    new File(
-                            dictionariesCacheDir,
-                            "${language}.aff"
-                    )
-
-            downloadFile(
-                    sources.dic,
-                    cachedDic,
-                    "${language}.dic"
-            )
-
-            downloadFile(
-                    sources.aff,
-                    cachedAff,
-                    "${language}.aff"
-            )
-
-            File generatedDictionary =
-                    new File(
-                            dictionariesOutputDir,
-                            "${language}.dict"
-                    )
-
-            File generatedRules =
-                    new File(
-                            dictionariesOutputDir,
-                            "${language}.rules"
-                    )
-
-            processDictionary(
+            downloadDictionary(
                     language,
-                    cachedDic,
-                    generatedDictionary
-            )
-
-            processAffixFile(
-                    language,
-                    cachedAff,
-                    generatedRules
+                    dictionaryUrl
             )
         }
     }
@@ -723,14 +208,8 @@ tasks.register(
 
 
 /*
- * ============================================================
- * IMPORTANT
- * ============================================================
- *
  * Dictionaries must exist before Android processes assets.
- * ============================================================
  */
-
 tasks.named("preBuild") {
 
     dependsOn(
