@@ -5,17 +5,17 @@
     android:settingsActivity="com.sinux.pocketboard.preferences.PreferencesActivity">
 
     <subtype
-        android:label="PocketBoard — Español"
+        android:label="@string/input_subtype_es_AR"
         android:languageTag="es-AR"
         android:subtypeLocale="es_AR" />
 
     <subtype
-        android:label="PocketBoard — English"
+        android:label="@string/input_subtype_en_US"
         android:languageTag="en-US"
         android:subtypeLocale="en_US" />
 
     <subtype
-        android:label="PocketBoard — Deutsch"
+        android:label="@string/input_subtype_de_DE"
         android:languageTag="de-DE"
         android:subtypeLocale="de_DE" />
 
