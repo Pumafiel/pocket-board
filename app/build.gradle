@@ -51,20 +51,27 @@ dependencies {
 
 /*
  * ============================================================
- * POCKETBOARD HUNSPELL DICTIONARIES
+ * POCKETBOARD DICTIONARIES
  *
  * Source:
  *
  * https://github.com/wooorm/dictionaries
  *
- * We keep BOTH files:
+ * We intentionally keep the Hunspell flags.
  *
- *     *.dic  -> words + Hunspell flags
- *     *.aff  -> Hunspell rules
+ * Old format:
  *
- * The previous build converted .dic files into plain .txt
- * files and discarded the flags. That information is now
- * preserved for the new DictionaryManager.
+ *     casa
+ *     casas
+ *     casamiento
+ *
+ * New format:
+ *
+ *     casa<TAB>...
+ *
+ * The flags are preserved so DictionaryManager can use the
+ * linguistic information later instead of throwing it away
+ * during the build.
  * ============================================================
  */
 
@@ -74,43 +81,112 @@ def dictionariesOutputDir =
 def dictionariesVersion = "main"
 
 def dictionarySources = [
-        "es-AR": [
-                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
-                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.aff"
-        ],
-        "en": [
-                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
-                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.aff"
-        ],
-        "de": [
-                "dic": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic",
-                "aff": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.aff"
-        ]
+        "es-AR": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
+        "en"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
+        "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
 ]
 
 
-def downloadFile = {
-    String language,
-    String type,
-    String urlString ->
+/*
+ * Maximum number of raw entries kept from each dictionary.
+ *
+ * This is deliberately higher than the old 100000-word limit.
+ * The resulting compressed APK remains reasonable while
+ * preserving much more of the source dictionary.
+ */
+def maxDictionaryEntries = 250000
 
-    dictionariesOutputDir.mkdirs()
+
+def isValidDictionaryWord = { String word ->
+
+    if (word == null ||
+            word.isEmpty() ||
+            word.length() > 64) {
+
+        return false
+    }
+
+    for (int i = 0; i < word.length(); i++) {
+
+        char c = word.charAt(i)
+
+        if (Character.isLetter(c) ||
+                c == '\'' ||
+                c == '-') {
+
+            continue
+        }
+
+        return false
+    }
+
+    return true
+}
+
+
+def normalizeDictionaryWord = { String word ->
+
+    return word
+            .trim()
+            .toLowerCase(Locale.ROOT)
+}
+
+
+/*
+ * Converts a Hunspell .dic file into a compact PocketBoard
+ * dictionary.
+ *
+ * Format:
+ *
+ *     word<TAB>flags
+ *
+ * Example:
+ *
+ *     casa<TAB>ABCD
+ *
+ * Entries without flags are also valid:
+ *
+ *     hola<TAB>
+ */
+def downloadAndConvertDictionary = {
+    String language,
+    String dictionaryUrlString ->
 
     File outputFile = new File(
             dictionariesOutputDir,
-            "${language}.${type}"
+            "${language}.dict"
     )
 
+    /*
+     * Do not regenerate an existing dictionary.
+     *
+     * Delete the generated .dict manually when the upstream
+     * dictionary needs to be refreshed.
+     */
+    if (outputFile.exists() &&
+            outputFile.length() > 0) {
+
+        println(
+                "PocketBoard dictionary already exists: " +
+                        outputFile.name
+        )
+
+        return
+    }
+
     println(
-            "Downloading PocketBoard ${type}: " +
+            "Downloading PocketBoard dictionary: " +
                     language
     )
 
+    dictionariesOutputDir.mkdirs()
+
     def connection =
-            new URL(urlString).openConnection()
+            new URL(dictionaryUrlString).openConnection()
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
+
     connection.setRequestProperty(
             "User-Agent",
             "PocketBoard-Build"
@@ -126,50 +202,175 @@ def downloadFile = {
             throw new GradleException(
                     "Could not download " +
                             language +
-                            " ." +
-                            type +
                             " dictionary. HTTP " +
                             responseCode
             )
         }
 
-        outputFile.withOutputStream { output ->
+        BufferedReader reader =
+                new BufferedReader(
+                        new InputStreamReader(
+                                connection.getInputStream(),
+                                "UTF-8"
+                        )
+                )
 
-            connection.getInputStream().withCloseable { input ->
+        try {
 
-                byte[] buffer =
-                        new byte[8192]
+            /*
+             * LinkedHashMap removes duplicate words while
+             * preserving the first useful entry.
+             */
+            def entries =
+                    new LinkedHashMap<String, String>()
 
-                int count
+            boolean firstLine = true
 
-                while (
-                        (count = input.read(buffer)) >= 0
-                ) {
+            String line
 
-                    output.write(
-                            buffer,
-                            0,
-                            count
+            while (
+                    (line = reader.readLine()) != null
+            ) {
+
+                line = line.trim()
+
+                if (line.isEmpty()) {
+                    continue
+                }
+
+                /*
+                 * First Hunspell line is the entry count.
+                 */
+                if (firstLine) {
+
+                    firstLine = false
+                    continue
+                }
+
+                /*
+                 * Ignore comments.
+                 */
+                if (line.startsWith("#")) {
+                    continue
+                }
+
+                /*
+                 * Hunspell entries normally have:
+                 *
+                 *     word/FLAGS
+                 *
+                 * Keep both parts.
+                 */
+                String word = line
+                String flags = ""
+
+                int slash =
+                        line.indexOf('/')
+
+                if (slash >= 0) {
+
+                    word =
+                            line.substring(
+                                    0,
+                                    slash
+                            )
+
+                    if (slash + 1 < line.length()) {
+
+                        flags =
+                                line.substring(
+                                        slash + 1
+                                )
+                    }
+                }
+
+                word =
+                        normalizeDictionaryWord(
+                                word
+                        )
+
+                flags =
+                        flags.trim()
+
+                if (!isValidDictionaryWord(word)) {
+                    continue
+                }
+
+                /*
+                 * The dictionary should contain only the compact
+                 * information needed by the runtime.
+                 *
+                 * Hunspell affix rules themselves are not copied
+                 * here. The flags are retained because they identify
+                 * the linguistic classes of each entry.
+                 */
+                if (!entries.containsKey(word)) {
+
+                    entries.put(
+                            word,
+                            flags
                     )
                 }
+
+                if (entries.size() >= maxDictionaryEntries) {
+                    break
+                }
             }
-        }
 
-        if (outputFile.length() == 0) {
+            /*
+             * Sort words alphabetically.
+             *
+             * This makes prefix lookup deterministic and allows
+             * DictionaryManager to use binary search/indexing.
+             */
+            def sortedWords =
+                    new ArrayList<String>(
+                            entries.keySet()
+                    )
 
-            throw new GradleException(
-                    "Downloaded empty dictionary: " +
-                            outputFile.absolutePath
+            Collections.sort(
+                    sortedWords
             )
-        }
 
-        println(
-                "PocketBoard dictionary saved: " +
-                        outputFile.name +
-                        " (" +
-                        outputFile.length() +
-                        " bytes)"
-        )
+            outputFile.withWriter(
+                    "UTF-8"
+            ) { writer ->
+
+                /*
+                 * Header.
+                 *
+                 * Version allows DictionaryManager to reject
+                 * incompatible future formats cleanly.
+                 */
+                writer.write(
+                        "#POCKETBOARD-DICT-1"
+                )
+
+                writer.newLine()
+
+                for (String word : sortedWords) {
+
+                    String flags =
+                            entries.get(word)
+
+                    writer.write(word)
+                    writer.write('\t')
+                    writer.write(flags)
+                    writer.newLine()
+                }
+            }
+
+            println(
+                    "PocketBoard dictionary generated: " +
+                            outputFile.absolutePath +
+                            " (" +
+                            sortedWords.size() +
+                            " entries)"
+            )
+
+        } finally {
+            reader.close()
+        }
 
     } finally {
         connection.disconnect()
@@ -187,92 +388,14 @@ tasks.register(
 
     doLast {
 
-        /*
-         * Remove the old generated TXT dictionaries.
-         *
-         * They contained only plain words and had already
-         * discarded the Hunspell flags.
-         */
-        [
-                "es-AR.txt",
-                "en.txt",
-                "de.txt"
-        ].each { name ->
-
-            File oldFile =
-                    new File(
-                            dictionariesOutputDir,
-                            name
-                    )
-
-            if (oldFile.exists()) {
-
-                println(
-                        "Removing obsolete dictionary: " +
-                                oldFile.name
-                )
-
-                oldFile.delete()
-            }
-        }
-
-
         dictionarySources.each {
             String language,
-            Map<String, String> sources ->
+            String dictionaryUrl ->
 
-            File dicFile =
-                    new File(
-                            dictionariesOutputDir,
-                            "${language}.dic"
-                    )
-
-            File affFile =
-                    new File(
-                            dictionariesOutputDir,
-                            "${language}.aff"
-                    )
-
-            /*
-             * Download .dic only when missing.
-             */
-            if (!dicFile.exists() ||
-                    dicFile.length() == 0) {
-
-                downloadFile(
-                        language,
-                        "dic",
-                        sources.dic
-                )
-
-            } else {
-
-                println(
-                        "PocketBoard dictionary already exists: " +
-                                dicFile.name
-                )
-            }
-
-
-            /*
-             * Download .aff only when missing.
-             */
-            if (!affFile.exists() ||
-                    affFile.length() == 0) {
-
-                downloadFile(
-                        language,
-                        "aff",
-                        sources.aff
-                )
-
-            } else {
-
-                println(
-                        "PocketBoard rules already exist: " +
-                                affFile.name
-                )
-            }
+            downloadAndConvertDictionary(
+                    language,
+                    dictionaryUrl
+            )
         }
     }
 }
