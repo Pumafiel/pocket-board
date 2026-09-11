@@ -54,12 +54,15 @@ jobs:
           echo "unmunch:"
           command -v unmunch
 
-      - name: Prepare dictionary generator
+      - name: Prepare build scripts
         shell: bash
         run: |
           set -euo pipefail
 
+          chmod +x ./gradlew
           chmod +x scripts/generate-dictionaries.sh
+
+          test -x ./gradlew
           test -x scripts/generate-dictionaries.sh
 
       - name: Build release and debug APK
