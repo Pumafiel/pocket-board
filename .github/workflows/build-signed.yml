@@ -1,210 +1,162 @@
-name: Build Signed APK
+name: PocketBoard Build
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
+
+permissions:
+contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+build:
+name: Build Pocketboard-E
+runs-on: ubuntu-24.04
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+steps:
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+  # -------------------------------------------------------
+  # Checkout
+  # -------------------------------------------------------
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+  # -------------------------------------------------------
+  # Java 17
+  # -------------------------------------------------------
 
-      - name: Download dictionaries
-        run: |
-          set -e
+  - name: Set up JDK 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-          mkdir -p app/src/main/assets/dictionaries
+  # -------------------------------------------------------
+  # Gradle
+  # -------------------------------------------------------
 
-          echo "Installing dictionary packages..."
+  - name: Setup Gradle
+    uses: gradle/actions/setup-gradle@v4
 
-          npm install --no-save \
-            dictionary-es-ar@2.0.0 \
-            dictionary-en \
-            dictionary-de
+  # -------------------------------------------------------
+  # Hunspell tools
+  # -------------------------------------------------------
 
-          echo ""
-          echo "=== Installed dictionaries ==="
+  - name: Install Hunspell tools
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          ls -lh node_modules/dictionary-es-ar/index.dic
-          ls -lh node_modules/dictionary-en/index.dic
-          ls -lh node_modules/dictionary-de/index.dic
+      sudo apt-get update
 
-          echo ""
-          echo "Converting dictionaries..."
+      sudo apt-get install -y \
+        hunspell-tools \
+        curl
 
-          python3 <<'PY'
-          from pathlib import Path
+      echo ""
+      echo "Hunspell tools:"
+      command -v unmunch
 
-          dictionaries = {
-              "es-AR": Path("node_modules/dictionary-es-ar/index.dic"),
-              "en": Path("node_modules/dictionary-en/index.dic"),
-              "de": Path("node_modules/dictionary-de/index.dic"),
-          }
+  # -------------------------------------------------------
+  # Prepare build scripts
+  # -------------------------------------------------------
 
-          output_dir = Path("app/src/main/assets/dictionaries")
-          output_dir.mkdir(parents=True, exist_ok=True)
+  - name: Prepare build scripts
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          for language, source in dictionaries.items():
-              output = output_dir / f"{language}.txt"
+      chmod +x ./gradlew
+      chmod +x scripts/generate-dictionaries.sh
 
-              print(f"Processing {language}...")
+      test -x ./gradlew
+      test -x scripts/generate-dictionaries.sh
 
-              raw = source.read_bytes()
-              text = raw.decode("utf-8-sig", errors="replace")
+  # -------------------------------------------------------
+  # Generate dictionaries
+  # -------------------------------------------------------
 
-              words = set()
+  - name: Generate PocketBoard dictionaries
+    shell: bash
+    run: |
+      set -euo pipefail
 
-              for index, line in enumerate(text.splitlines()):
+      ./gradlew \
+        --no-daemon \
+        generatePocketBoardDictionaries
 
-                  line = line.strip()
+  # -------------------------------------------------------
+  # Validate dictionaries
+  # -------------------------------------------------------
 
-                  if not line:
-                      continue
+  - name: Validate PocketBoard dictionaries
+    shell: bash
+    run: |
+      set -euo pipefail
 
-                  if index == 0:
-                      continue
+      ./gradlew \
+        --no-daemon \
+        validatePocketBoardDictionaries
 
-                  if line.startswith("##"):
-                      continue
+  # -------------------------------------------------------
+  # Validate keyboard mappings
+  # -------------------------------------------------------
 
-                  word = line.split("/", 1)[0].strip()
+  - name: Validate keyboard mappings
+    shell: bash
+    run: |
+      set -euo pipefail
 
-                  if not word:
-                      continue
+      ./gradlew \
+        --no-daemon \
+        validateKeyboardMappings
 
-                  if any(
-                      word.startswith(prefix)
-                      for prefix in (
-                          "Copyright",
-                          "GPL",
-                          "License:",
-                          "There should",
-                          "This is the dictionary",
-                          "Version:",
-                          "derived from",
-                          "for igerman",
-                          "of this dictionary",
-                          "Modified versions",
-                      )
-                  ):
-                      continue
+  # -------------------------------------------------------
+  # Dictionary report
+  # -------------------------------------------------------
 
-                  if any(character.isspace() for character in word):
-                      continue
+  - name: Dictionary report
+    shell: bash
+    run: |
+      set -euo pipefail
 
-                  if not all(
-                      character.isalpha()
-                      or character in "'-"
-                      for character in word
-                  ):
-                      continue
+      echo "=========================================="
+      echo "PocketBoard dictionaries"
+      echo "=========================================="
 
-                  words.add(word.lower())
+      for file in app/src/main/assets/dictionaries/*.dict
+      do
+        echo ""
+        echo "FILE: ${file}"
 
-              with output.open(
-                  "w",
-                  encoding="utf-8",
-                  newline="\n"
-              ) as file:
-                  for word in sorted(words):
-                      file.write(word + "\n")
+        echo "SIZE:"
+        du -h "${file}"
 
-              print(
-                  f"Generated {output}: {len(words)} words"
-              )
-          PY
+        echo "WORDS:"
+        tail -n +2 "${file}" | wc -l
+      done
 
-          echo ""
-          echo "=== Dictionary sizes ==="
+  # -------------------------------------------------------
+  # Build release APK
+  # -------------------------------------------------------
 
-          wc -l \
-            app/src/main/assets/dictionaries/es-AR.txt \
-            app/src/main/assets/dictionaries/en.txt \
-            app/src/main/assets/dictionaries/de.txt
+  - name: Build release APK
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          echo ""
-          echo "=== Dictionary files ==="
+      ./gradlew \
+        --no-daemon \
+        assembleRelease
 
-          ls -lh app/src/main/assets/dictionaries/
+  # -------------------------------------------------------
+  # Build debug APK
+  # -------------------------------------------------------
 
-          echo ""
-          echo "=== Spanish Argentina sample ==="
+  - name: Build debug APK
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          head -n 10 \
-            app/src/main/assets/dictionaries/es-AR.txt
-
-          echo ""
-          echo "=== English sample ==="
-
-          head -n 10 \
-            app/src/main/assets/dictionaries/en.txt
-
-          echo ""
-          echo "=== German sample ==="
-
-          head -n 10 \
-            app/src/main/assets/dictionaries/de.txt
-
-      - name: Build APK
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleRelease
-
-      - name: Generate signing key
-        run: |
-          keytool -genkeypair \
-            -keystore release.keystore \
-            -alias pocketboard \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass pocketboard \
-            -keypass pocketboard \
-            -dname "CN=PocketBoard"
-
-      - name: Sign APK
-        run: |
-          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-
-          "$BUILD_TOOLS/zipalign" -f 4 \
-            app/build/outputs/apk/release/app-release-unsigned.apk \
-            aligned.apk
-
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks release.keystore \
-            --ks-key-alias pocketboard \
-            --ks-pass pass:pocketboard \
-            --key-pass pass:pocketboard \
-            --out PocketBoard.apk \
-            aligned.apk
-
-      - name: Verify APK signature
-        run: |
-          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-
-          "$BUILD_TOOLS/apksigner" verify \
-            --verbose \
-            PocketBoard.apk
-
-      - name: Upload signed APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PocketBoard-Signed
-          path: PocketBoard.apk
-          if-no-files-found: error
+      ./gradlew \
+        --no-daemon \
+        assembleDebug
