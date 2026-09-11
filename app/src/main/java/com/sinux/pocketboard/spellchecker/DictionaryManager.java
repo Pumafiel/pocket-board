@@ -2,6 +2,7 @@ package com.sinux.pocketboard.spellchecker;
 
 import android.content.Context;
 import android.text.TextUtils;
+import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -12,7 +13,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -21,8 +21,11 @@ import java.util.Set;
 
 public class DictionaryManager {
 
-    private static final String FORMAT_HEADER =
-            "#POCKETBOARD-DICT-1";
+    private static final String TAG =
+            "PocketBoardDictionary";
+
+    private static final String FORMAT_HEADER_PREFIX =
+            "# PocketBoard dictionary: ";
 
     private static final int MAX_DICTIONARY_WORDS =
             250000;
@@ -141,6 +144,7 @@ public class DictionaryManager {
         )) {
 
             if (!prefixResults.isEmpty()) {
+
                 return applyCapitalization(
                         prefixResults,
                         word
@@ -168,6 +172,7 @@ public class DictionaryManager {
                 if (!candidate.equals(
                         normalizedWord
                 )) {
+
                     alternatives.add(
                             candidate
                     );
@@ -307,11 +312,57 @@ public class DictionaryManager {
                     reader.readLine();
 
             /*
-             * The build task creates this exact header.
+             * The dictionary generator writes:
+             *
+             *     # PocketBoard dictionary: es-AR
+             *     # PocketBoard dictionary: en-en
+             *     # PocketBoard dictionary: de-de
+             *
+             * The runtime language is normalized to:
+             *
+             *     es-AR
+             *     en
+             *     de
+             *
+             * while the generated asset keeps the source
+             * dictionary identifier:
+             *
+             *     es-AR
+             *     en-en
+             *     de-de
+             *
+             * Therefore the expected header is derived from
+             * the asset name rather than from the normalized
+             * runtime language.
              */
-            if (!FORMAT_HEADER.equals(
+
+            String expectedDictionaryId =
+                    getDictionaryId(
+                            language
+                    );
+
+            String expectedHeader =
+                    FORMAT_HEADER_PREFIX +
+                            expectedDictionaryId;
+
+            if (!expectedHeader.equals(
                     header
             )) {
+
+                Log.e(
+                        TAG,
+                        "Invalid dictionary header. " +
+                                "language=" +
+                                language +
+                                ", asset=" +
+                                assetName +
+                                ", expected='" +
+                                expectedHeader +
+                                "', actual='" +
+                                header +
+                                "'"
+                );
+
                 return emptyDictionary();
             }
 
@@ -323,6 +374,7 @@ public class DictionaryManager {
 
                 if (line.isEmpty() ||
                         line.startsWith("#")) {
+
                     continue;
                 }
 
@@ -359,26 +411,52 @@ public class DictionaryManager {
                 if (!isValidWord(
                         word
                 )) {
+
                     continue;
                 }
 
-                words.add(word);
+                words.add(
+                        word
+                );
+
                 flags.add(
                         wordFlags.trim()
                 );
 
                 if (words.size() >=
                         MAX_DICTIONARY_WORDS) {
+
                     break;
                 }
             }
 
-        } catch (IOException ignored) {
+        } catch (IOException exception) {
+
+            Log.e(
+                    TAG,
+                    "Could not load dictionary. " +
+                            "language=" +
+                            language +
+                            ", asset=" +
+                            assetName,
+                    exception
+            );
 
             return emptyDictionary();
         }
 
         if (words.isEmpty()) {
+
+            Log.e(
+                    TAG,
+                    "Dictionary loaded but contains " +
+                            "no valid words. " +
+                            "language=" +
+                            language +
+                            ", asset=" +
+                            assetName
+            );
+
             return emptyDictionary();
         }
 
@@ -400,10 +478,42 @@ public class DictionaryManager {
         /*
          * Remove duplicate words after sorting.
          */
-        return compactDictionary(
-                wordArray,
-                flagArray
+
+        Dictionary dictionary =
+                compactDictionary(
+                        wordArray,
+                        flagArray
+                );
+
+        Log.i(
+                TAG,
+                "Dictionary loaded successfully. " +
+                        "language=" +
+                        language +
+                        ", asset=" +
+                        assetName +
+                        ", words=" +
+                        dictionary.size()
         );
+
+        return dictionary;
+    }
+
+    private String getDictionaryId(
+            String language) {
+
+        switch (language) {
+
+            case "es-AR":
+                return "es-AR";
+
+            case "de":
+                return "de-de";
+
+            case "en":
+            default:
+                return "en-en";
+        }
     }
 
     private void sortEntries(
@@ -476,6 +586,7 @@ public class DictionaryManager {
             if (current.equals(
                     previous
             )) {
+
                 continue;
             }
 
@@ -552,6 +663,7 @@ public class DictionaryManager {
             if (!candidate.startsWith(
                     prefix
             )) {
+
                 break;
             }
 
@@ -568,6 +680,7 @@ public class DictionaryManager {
             String prefix) {
 
         int low = 0;
+
         int high =
                 dictionary.size();
 
@@ -699,6 +812,7 @@ public class DictionaryManager {
 
             if (candidates.size() >=
                     MAX_CORRECTION_CANDIDATES) {
+
                 return;
             }
         }
@@ -706,6 +820,7 @@ public class DictionaryManager {
         /*
          * Spanish n <-> ñ.
          */
+
         if ("es-AR".equals(
                 language
         )) {
@@ -719,6 +834,7 @@ public class DictionaryManager {
 
                 if (current != 'n' &&
                         current != 'ñ') {
+
                     continue;
                 }
 
@@ -766,6 +882,7 @@ public class DictionaryManager {
 
             if (candidates.size() >=
                     MAX_CORRECTION_CANDIDATES) {
+
                 return;
             }
         }
@@ -811,6 +928,7 @@ public class DictionaryManager {
 
                 if (candidates.size() >=
                         MAX_CORRECTION_CANDIDATES) {
+
                     return;
                 }
             }
@@ -828,6 +946,7 @@ public class DictionaryManager {
 
             if (input.charAt(i) ==
                     input.charAt(i + 1)) {
+
                 continue;
             }
 
@@ -851,6 +970,7 @@ public class DictionaryManager {
 
             if (candidates.size() >=
                     MAX_CORRECTION_CANDIDATES) {
+
                 return;
             }
         }
@@ -877,6 +997,7 @@ public class DictionaryManager {
             /*
              * First try physical keyboard neighbors.
              */
+
             for (int i = 0;
                  i < alphabet.length();
                  i++) {
@@ -886,6 +1007,7 @@ public class DictionaryManager {
 
                 if (replacement ==
                         original) {
+
                     continue;
                 }
 
@@ -915,6 +1037,7 @@ public class DictionaryManager {
             /*
              * Then language-specific substitutions.
              */
+
             for (int i = 0;
                  i < alphabet.length();
                  i++) {
@@ -924,6 +1047,7 @@ public class DictionaryManager {
 
                 if (replacement ==
                         original) {
+
                     continue;
                 }
 
@@ -952,6 +1076,7 @@ public class DictionaryManager {
 
             if (candidates.size() >=
                     MAX_CORRECTION_CANDIDATES) {
+
                 return;
             }
         }
@@ -965,12 +1090,14 @@ public class DictionaryManager {
         /*
          * helllo -> hello
          */
+
         for (int i = 0;
              i < input.length() - 1;
              i++) {
 
             if (input.charAt(i) !=
                     input.charAt(i + 1)) {
+
                 continue;
             }
 
@@ -998,6 +1125,7 @@ public class DictionaryManager {
 
         if (candidate == null ||
                 candidate.isEmpty()) {
+
             return;
         }
 
@@ -1026,6 +1154,7 @@ public class DictionaryManager {
         if ("es-AR".equals(
                 language
         )) {
+
             return ALPHABET +
                     SPANISH_EXTRA;
         }
@@ -1033,6 +1162,7 @@ public class DictionaryManager {
         if ("de".equals(
                 language
         )) {
+
             return ALPHABET +
                     GERMAN_EXTRA;
         }
@@ -1067,6 +1197,7 @@ public class DictionaryManager {
 
         if (suggestions == null ||
                 suggestions.isEmpty()) {
+
             return results;
         }
 
@@ -1114,6 +1245,7 @@ public class DictionaryManager {
         }
 
         if (allUpper) {
+
             return suggestion.toUpperCase(
                     Locale.ROOT
             );
@@ -1175,6 +1307,7 @@ public class DictionaryManager {
             if (Character.isLetter(c) ||
                     c == '\'' ||
                     c == '-') {
+
                 continue;
             }
 
@@ -1193,11 +1326,87 @@ public class DictionaryManager {
                 return "es-AR.dict";
 
             case "de":
-                return "de.dict";
+                return "de-de.dict";
 
             case "en":
             default:
-                return "en.dict";
+                return "en-en.dict";
+        }
+    }
+
+    /*
+     * ============================================================
+     * INTERNAL DICTIONARY
+     * ============================================================
+     */
+
+    private static final class Dictionary {
+
+        private final String[] words;
+        private final String[] flags;
+
+        Dictionary(
+                String[] words,
+                String[] flags) {
+
+            this.words = words;
+            this.flags = flags;
+        }
+
+        int size() {
+            return words.length;
+        }
+
+        boolean isEmpty() {
+            return words.length == 0;
+        }
+
+        String get(int index) {
+            return words[index];
+        }
+
+        boolean contains(
+                String word) {
+
+            if (word == null ||
+                    words.length == 0) {
+
+                return false;
+            }
+
+            int low = 0;
+            int high = words.length - 1;
+
+            while (low <= high) {
+
+                int middle =
+                        (low + high) >>> 1;
+
+                int comparison =
+                        words[middle]
+                                .compareTo(
+                                        word
+                                );
+
+                if (comparison < 0) {
+
+                    low =
+                            middle + 1;
+
+                } else if (
+                        comparison > 0
+                ) {
+
+                    high =
+                            middle - 1;
+
+                } else {
+
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }
