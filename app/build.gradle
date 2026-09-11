@@ -48,30 +48,25 @@ dependencies {
     testImplementation 'net.sf.kxml:kxml2:2.3.0'
 }
 
-
 /*
  * ============================================================
  * POCKETBOARD DICTIONARIES
  *
  * Source:
- *
  * https://github.com/wooorm/dictionaries
  *
- * We intentionally keep the Hunspell flags.
+ * The downloaded Hunspell dictionaries are converted to:
  *
- * Old format:
+ *     #POCKETBOARD-DICT-1
+ *     word
+ *     word
+ *     ...
  *
- *     casa
- *     casas
- *     casamiento
+ * Runtime files:
  *
- * New format:
- *
- *     casa<TAB>...
- *
- * The flags are preserved so DictionaryManager can use the
- * linguistic information later instead of throwing it away
- * during the build.
+ *     es-AR.dict
+ *     en.dict
+ *     de.dict
  * ============================================================
  */
 
@@ -86,68 +81,6 @@ def dictionarySources = [
         "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
 ]
 
-
-/*
- * Maximum number of raw entries kept from each dictionary.
- *
- * This is deliberately higher than the old 100000-word limit.
- * The resulting compressed APK remains reasonable while
- * preserving much more of the source dictionary.
- */
-def maxDictionaryEntries = 250000
-
-
-def isValidDictionaryWord = { String word ->
-
-    if (word == null ||
-            word.isEmpty() ||
-            word.length() > 64) {
-
-        return false
-    }
-
-    for (int i = 0; i < word.length(); i++) {
-
-        char c = word.charAt(i)
-
-        if (Character.isLetter(c) ||
-                c == '\'' ||
-                c == '-') {
-
-            continue
-        }
-
-        return false
-    }
-
-    return true
-}
-
-
-def normalizeDictionaryWord = { String word ->
-
-    return word
-            .trim()
-            .toLowerCase(Locale.ROOT)
-}
-
-
-/*
- * Converts a Hunspell .dic file into a compact PocketBoard
- * dictionary.
- *
- * Format:
- *
- *     word<TAB>flags
- *
- * Example:
- *
- *     casa<TAB>ABCD
- *
- * Entries without flags are also valid:
- *
- *     hola<TAB>
- */
 def downloadAndConvertDictionary = {
     String language,
     String dictionaryUrlString ->
@@ -157,25 +90,8 @@ def downloadAndConvertDictionary = {
             "${language}.dict"
     )
 
-    /*
-     * Do not regenerate an existing dictionary.
-     *
-     * Delete the generated .dict manually when the upstream
-     * dictionary needs to be refreshed.
-     */
-    if (outputFile.exists() &&
-            outputFile.length() > 0) {
-
-        println(
-                "PocketBoard dictionary already exists: " +
-                        outputFile.name
-        )
-
-        return
-    }
-
     println(
-            "Downloading PocketBoard dictionary: " +
+            "Preparing PocketBoard dictionary: " +
                     language
     )
 
@@ -186,19 +102,16 @@ def downloadAndConvertDictionary = {
 
     connection.setConnectTimeout(30000)
     connection.setReadTimeout(120000)
-
     connection.setRequestProperty(
             "User-Agent",
             "PocketBoard-Build"
     )
 
     try {
-
         int responseCode =
                 connection.getResponseCode()
 
         if (responseCode != 200) {
-
             throw new GradleException(
                     "Could not download " +
                             language +
@@ -206,6 +119,9 @@ def downloadAndConvertDictionary = {
                             responseCode
             )
         }
+
+        TreeSet<String> words =
+                new TreeSet<>()
 
         BufferedReader reader =
                 new BufferedReader(
@@ -216,14 +132,6 @@ def downloadAndConvertDictionary = {
                 )
 
         try {
-
-            /*
-             * LinkedHashMap removes duplicate words while
-             * preserving the first useful entry.
-             */
-            def entries =
-                    new LinkedHashMap<String, String>()
-
             boolean firstLine = true
 
             String line
@@ -231,6 +139,38 @@ def downloadAndConvertDictionary = {
             while (
                     (line = reader.readLine()) != null
             ) {
+                line = line.trim()
+
+                if (line.isEmpty()) {
+                    continue
+                }
+
+                /*
+                 * Hunspell first line contains the entry count.
+                 */
+                if (firstLine) {
+                    firstLine = false
+                    continue
+                }
+
+                /*
+                 * Remove Hunspell flags.
+                 *
+                 * Examples:
+                 *
+                 * casa/S
+                 * abandonar/RED
+                 */
+                int slash =
+                        line.indexOf('/')
+
+                if (slash >= 0) {
+                    line =
+                            line.substring(
+                                    0,
+                                    slash
+                            )
+                }
 
                 line = line.trim()
 
@@ -239,155 +179,85 @@ def downloadAndConvertDictionary = {
                 }
 
                 /*
-                 * First Hunspell line is the entry count.
+                 * PocketBoard currently handles single words.
                  */
-                if (firstLine) {
-
-                    firstLine = false
+                if (line.indexOf(' ') >= 0 ||
+                        line.indexOf('\t') >= 0) {
                     continue
                 }
 
-                /*
-                 * Ignore comments.
-                 */
-                if (line.startsWith("#")) {
-                    continue
-                }
+                boolean valid = true
 
-                /*
-                 * Hunspell entries normally have:
-                 *
-                 *     word/FLAGS
-                 *
-                 * Keep both parts.
-                 */
-                String word = line
-                String flags = ""
+                for (
+                        int i = 0;
+                        i < line.length();
+                        i++
+                ) {
+                    char c =
+                            line.charAt(i)
 
-                int slash =
-                        line.indexOf('/')
-
-                if (slash >= 0) {
-
-                    word =
-                            line.substring(
-                                    0,
-                                    slash
-                            )
-
-                    if (slash + 1 < line.length()) {
-
-                        flags =
-                                line.substring(
-                                        slash + 1
-                                )
+                    if (Character.isLetter(c) ||
+                            c == '\'' ||
+                            c == '-') {
+                        continue
                     }
-                }
 
-                word =
-                        normalizeDictionaryWord(
-                                word
-                        )
-
-                flags =
-                        flags.trim()
-
-                if (!isValidDictionaryWord(word)) {
-                    continue
-                }
-
-                /*
-                 * The dictionary should contain only the compact
-                 * information needed by the runtime.
-                 *
-                 * Hunspell affix rules themselves are not copied
-                 * here. The flags are retained because they identify
-                 * the linguistic classes of each entry.
-                 */
-                if (!entries.containsKey(word)) {
-
-                    entries.put(
-                            word,
-                            flags
-                    )
-                }
-
-                if (entries.size() >= maxDictionaryEntries) {
+                    valid = false
                     break
                 }
-            }
 
-            /*
-             * Sort words alphabetically.
-             *
-             * This makes prefix lookup deterministic and allows
-             * DictionaryManager to use binary search/indexing.
-             */
-            def sortedWords =
-                    new ArrayList<String>(
-                            entries.keySet()
-                    )
-
-            Collections.sort(
-                    sortedWords
-            )
-
-            outputFile.withWriter(
-                    "UTF-8"
-            ) { writer ->
-
-                /*
-                 * Header.
-                 *
-                 * Version allows DictionaryManager to reject
-                 * incompatible future formats cleanly.
-                 */
-                writer.write(
-                        "#POCKETBOARD-DICT-1"
-                )
-
-                writer.newLine()
-
-                for (String word : sortedWords) {
-
-                    String flags =
-                            entries.get(word)
-
-                    writer.write(word)
-                    writer.write('\t')
-                    writer.write(flags)
-                    writer.newLine()
+                if (!valid) {
+                    continue
                 }
-            }
 
-            println(
-                    "PocketBoard dictionary generated: " +
-                            outputFile.absolutePath +
-                            " (" +
-                            sortedWords.size() +
-                            " entries)"
-            )
+                words.add(
+                        line.toLowerCase(
+                                Locale.ROOT
+                        )
+                )
+            }
 
         } finally {
             reader.close()
         }
+
+        outputFile.withWriter(
+                "UTF-8"
+        ) { writer ->
+
+            writer.write(
+                    "#POCKETBOARD-DICT-1"
+            )
+
+            writer.newLine()
+
+            for (String word : words) {
+                writer.write(word)
+                writer.newLine()
+            }
+        }
+
+        println(
+                "PocketBoard dictionary generated: " +
+                        outputFile.absolutePath +
+                        " (" +
+                        words.size() +
+                        " words)"
+        )
 
     } finally {
         connection.disconnect()
     }
 }
 
-
 tasks.register(
         "downloadPocketBoardDictionaries"
 ) {
-
     outputs.dir(
             dictionariesOutputDir
     )
 
     doLast {
-
         dictionarySources.each {
             String language,
             String dictionaryUrl ->
@@ -400,17 +270,14 @@ tasks.register(
     }
 }
 
-
 /*
  * Dictionaries must exist before Android processes assets.
  */
 tasks.named("preBuild") {
-
     dependsOn(
             "downloadPocketBoardDictionaries"
     )
 }
-
 
 /*
  * ============================================================
@@ -421,11 +288,9 @@ tasks.named("preBuild") {
 tasks.register(
         "validateKeyboardMappings"
 ) {
-
     dependsOn("build")
 
     doLast {
-
         def factory =
                 SchemaFactory.newInstance(
                         XMLConstants.W3C_XML_SCHEMA_NS_URI
@@ -449,13 +314,11 @@ tasks.register(
         File[] keyboardMappings =
                 xmlRoot.listFiles(
                         new FilenameFilter() {
-
                             @Override
                             boolean accept(
                                     File dir,
                                     String name
                             ) {
-
                                 return name.startsWith(
                                         "keyboard_mapping_"
                                 ) &&
@@ -474,7 +337,6 @@ tasks.register(
                 File mappingFile :
                         keyboardMappings
         ) {
-
             println(
                     "Validating keyboard mapping: " +
                             mappingFile.name
