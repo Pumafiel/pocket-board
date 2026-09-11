@@ -10,8 +10,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,19 +22,15 @@ public class DictionaryManager {
     private static final String TAG =
             "PocketBoardDictionary";
 
-    private static final String FORMAT_HEADER_PREFIX =
+    private static final String LEGACY_HEADER_PREFIX =
             "# PocketBoard dictionary: ";
 
-    private static final int MAX_DICTIONARY_WORDS =
-            250000;
+    private static final String GENERATED_DICTIONARY_HEADER =
+            "#POCKETBOARD-DICT-1";
 
-    /*
-     * We deliberately collect more prefix candidates than the
-     * number finally displayed.
-     *
-     * Completion must compete with spelling correction instead
-     * of automatically winning.
-     */
+    private static final String DELETE_HEADER =
+            "#POCKETBOARD-DELETES-1";
+
     private static final int MAX_PREFIX_CANDIDATES =
             32;
 
@@ -48,6 +42,9 @@ public class DictionaryManager {
 
     private static final int MAX_WORD_LENGTH =
             64;
+
+    private static final int MAX_DELETE_DISTANCE =
+            2;
 
     private static final String ALPHABET =
             "abcdefghijklmnopqrstuvwxyz";
@@ -61,6 +58,9 @@ public class DictionaryManager {
     private final Context context;
 
     private final Map<String, Dictionary> dictionaries =
+            new HashMap<>();
+
+    private final Map<String, DeleteIndex> deleteIndexes =
             new HashMap<>();
 
     private final CorrectionEngine correctionEngine =
@@ -112,7 +112,6 @@ public class DictionaryManager {
                 );
 
         if (normalizedWord.isEmpty()) {
-
             return new ArrayList<>();
         }
 
@@ -128,31 +127,39 @@ public class DictionaryManager {
                 );
 
         /*
-         * ========================================================
-         * 1. EXACT WORD
-         * ========================================================
+         * A valid exact word must remain the strongest
+         * interpretation of what the user actually typed.
          *
-         * An exact dictionary word is already the strongest
-         * possible interpretation of what the user typed.
-         *
-         * It therefore occupies position 0.
-         *
-         * Longer words beginning with it remain available as
-         * alternatives.
+         * We still expose completions as alternatives.
          */
         if (exactMatch) {
 
-            List<String> alternatives =
-                    collectAlternativeCandidates(
-                            normalizedWord,
-                            language,
-                            dictionary
-                    );
+            LinkedHashSet<String> alternatives =
+                    new LinkedHashSet<>();
 
-            List<String> rankedAlternatives =
+            addPrefixCandidates(
+                    dictionary,
+                    normalizedWord,
+                    alternatives
+            );
+
+            addOwnLanguageCandidates(
+                    normalizedWord,
+                    language,
+                    dictionary,
+                    alternatives
+            );
+
+            alternatives.remove(
+                    normalizedWord
+            );
+
+            List<String> ranked =
                     rankCandidates(
                             normalizedWord,
-                            alternatives,
+                            new ArrayList<>(
+                                    alternatives
+                            ),
                             language,
                             Math.max(
                                     resultLimit - 1,
@@ -170,7 +177,7 @@ public class DictionaryManager {
             );
 
             for (String candidate :
-                    rankedAlternatives) {
+                    ranked) {
 
                 if (results.size() >=
                         resultLimit) {
@@ -178,9 +185,10 @@ public class DictionaryManager {
                     break;
                 }
 
-                if (candidate.equals(
-                        normalizedWord
-                )) {
+                if (candidate == null ||
+                        candidate.equals(
+                                normalizedWord
+                        )) {
 
                     continue;
                 }
@@ -197,59 +205,62 @@ public class DictionaryManager {
         }
 
         /*
-         * ========================================================
-         * 2. NON-EXACT INPUT
-         * ========================================================
+         * Non-exact input:
          *
-         * This is the important part.
+         * 1. prefix candidates
+         * 2. SymSpell candidates
+         * 3. our language-specific candidates
+         * 4. keyboard/language substitutions
+         * 5. repetition handling
          *
-         * Completion and correction are now candidates in the
-         * SAME ranking pool.
-         *
-         * We do NOT do:
-         *
-         *     prefix exists -> return prefix
-         *
-         * because that prevents CorrectionEngine from evaluating
-         * whether a spelling correction is actually better.
+         * CorrectionEngine decides the final order.
          */
         LinkedHashSet<String> candidates =
                 new LinkedHashSet<>();
 
-        /*
-         * Completion candidates.
-         */
         addPrefixCandidates(
                 dictionary,
                 normalizedWord,
                 candidates
         );
 
-        /*
-         * Spelling/keyboard/language candidates.
-         */
-        addCorrectionCandidates(
+        addDeleteIndexCandidates(
                 normalizedWord,
                 language,
                 dictionary,
                 candidates
         );
 
-        if (candidates.isEmpty()) {
+        addOwnLanguageCandidates(
+                normalizedWord,
+                language,
+                dictionary,
+                candidates
+        );
 
+        /*
+         * Symmetric-delete handles the vast majority of
+         * edit-distance candidates. Our own models remain as
+         * complementary sources, especially for keyboard and
+         * language-specific errors.
+         */
+        addKeyboardAndLanguageCandidates(
+                normalizedWord,
+                language,
+                dictionary,
+                candidates
+        );
+
+        addRepetitionCandidates(
+                normalizedWord,
+                dictionary,
+                candidates
+        );
+
+        if (candidates.isEmpty()) {
             return new ArrayList<>();
         }
 
-        /*
-         * The CorrectionEngine now decides which interpretation
-         * is most accurate.
-         *
-         * Therefore:
-         *
-         *     [0] = best candidate
-         *     [1] = alternative
-         *     [2] = alternative
-         */
         List<String> ranked =
                 rankCandidates(
                         normalizedWord,
@@ -271,7 +282,6 @@ public class DictionaryManager {
             String languageTag) {
 
         if (TextUtils.isEmpty(word)) {
-
             return false;
         }
 
@@ -327,59 +337,9 @@ public class DictionaryManager {
 
     /*
      * ============================================================
-     * CANDIDATE COLLECTION
+     * PREFIX COMPLETION
      * ============================================================
      */
-
-    private List<String> collectAlternativeCandidates(
-            String input,
-            String language,
-            Dictionary dictionary) {
-
-        LinkedHashSet<String> candidates =
-                new LinkedHashSet<>();
-
-        /*
-         * Longer completions of an already-correct word.
-         *
-         * Example:
-         *
-         *     casa
-         *
-         * can expose:
-         *
-         *     casado
-         *     casamiento
-         *
-         * but "casa" itself remains position 0.
-         */
-        addPrefixCandidates(
-                dictionary,
-                input,
-                candidates
-        );
-
-        /*
-         * Also collect spelling/language candidates. Normally
-         * there will be very few useful alternatives because the
-         * input is already a valid word, but keeping them here
-         * makes the candidate model consistent.
-         */
-        addCorrectionCandidates(
-                input,
-                language,
-                dictionary,
-                candidates
-        );
-
-        candidates.remove(
-                input
-        );
-
-        return new ArrayList<>(
-                candidates
-        );
-    }
 
     private void addPrefixCandidates(
             Dictionary dictionary,
@@ -413,447 +373,14 @@ public class DictionaryManager {
             candidates.add(
                     candidate
             );
-        }
-    }
 
-    private void addCorrectionCandidates(
-            String input,
-            String language,
-            Dictionary dictionary,
-            Set<String> candidates) {
+            if (candidates.size() >=
+                    MAX_CORRECTION_CANDIDATES) {
 
-        if (candidates.size() >=
-                MAX_CORRECTION_CANDIDATES) {
-
-            return;
-        }
-
-        addLanguageCandidates(
-                input,
-                language,
-                dictionary,
-                candidates
-        );
-
-        if (candidates.size() >=
-                MAX_CORRECTION_CANDIDATES) {
-
-            return;
-        }
-
-        addDeletionCandidates(
-                input,
-                dictionary,
-                candidates
-        );
-
-        if (candidates.size() >=
-                MAX_CORRECTION_CANDIDATES) {
-
-            return;
-        }
-
-        addInsertionCandidates(
-                input,
-                language,
-                dictionary,
-                candidates
-        );
-
-        if (candidates.size() >=
-                MAX_CORRECTION_CANDIDATES) {
-
-            return;
-        }
-
-        addTranspositionCandidates(
-                input,
-                dictionary,
-                candidates
-        );
-
-        if (candidates.size() >=
-                MAX_CORRECTION_CANDIDATES) {
-
-            return;
-        }
-
-        addSubstitutionCandidates(
-                input,
-                language,
-                dictionary,
-                candidates
-        );
-
-        if (candidates.size() >=
-                MAX_CORRECTION_CANDIDATES) {
-
-            return;
-        }
-
-        addRepetitionCandidates(
-                input,
-                dictionary,
-                candidates
-        );
-    }
-
-    /*
-     * ============================================================
-     * DICTIONARY LOADING
-     * ============================================================
-     */
-
-    private Dictionary getDictionary(
-            String language) {
-
-        Dictionary dictionary =
-                dictionaries.get(
-                        language
-                );
-
-        if (dictionary != null) {
-
-            return dictionary;
-        }
-
-        dictionary =
-                loadDictionary(
-                        language
-                );
-
-        dictionaries.put(
-                language,
-                dictionary
-        );
-
-        return dictionary;
-    }
-
-    private Dictionary loadDictionary(
-            String language) {
-
-        String assetName =
-                "dictionaries/" +
-                        getAssetName(
-                                language
-                        );
-
-        List<String> words =
-                new ArrayList<>();
-
-        List<String> flags =
-                new ArrayList<>();
-
-        try (
-                InputStream inputStream =
-                        context.getAssets().open(
-                                assetName
-                        );
-
-                BufferedReader reader =
-                        new BufferedReader(
-                                new InputStreamReader(
-                                        inputStream,
-                                        StandardCharsets.UTF_8
-                                )
-                        )
-        ) {
-
-            String header =
-                    reader.readLine();
-
-            String expectedDictionaryId =
-                    getDictionaryId(
-                            language
-                    );
-
-            String expectedHeader =
-                    FORMAT_HEADER_PREFIX +
-                            expectedDictionaryId;
-
-            if (!expectedHeader.equals(
-                    header
-            )) {
-
-                Log.e(
-                        TAG,
-                        "Invalid dictionary header. " +
-                                "language=" +
-                                language +
-                                ", asset=" +
-                                assetName +
-                                ", expected='" +
-                                expectedHeader +
-                                "', actual='" +
-                                header +
-                                "'"
-                );
-
-                return emptyDictionary();
+                return;
             }
-
-            String line;
-
-            while (
-                    (line = reader.readLine()) != null
-            ) {
-
-                if (line.isEmpty() ||
-                        line.startsWith("#")) {
-
-                    continue;
-                }
-
-                int separator =
-                        line.indexOf('\t');
-
-                String word;
-                String wordFlags;
-
-                if (separator >= 0) {
-
-                    word =
-                            line.substring(
-                                    0,
-                                    separator
-                            );
-
-                    wordFlags =
-                            line.substring(
-                                    separator + 1
-                            );
-
-                } else {
-
-                    word =
-                            line;
-
-                    wordFlags =
-                            "";
-                }
-
-                word =
-                        normalizeWord(
-                                word
-                        );
-
-                if (!isValidWord(
-                        word
-                )) {
-
-                    continue;
-                }
-
-                words.add(
-                        word
-                );
-
-                flags.add(
-                        wordFlags.trim()
-                );
-
-                if (words.size() >=
-                        MAX_DICTIONARY_WORDS) {
-
-                    break;
-                }
-            }
-
-        } catch (IOException exception) {
-
-            Log.e(
-                    TAG,
-                    "Could not load dictionary. " +
-                            "language=" +
-                            language +
-                            ", asset=" +
-                            assetName,
-                    exception
-            );
-
-            return emptyDictionary();
-        }
-
-        if (words.isEmpty()) {
-
-            Log.e(
-                    TAG,
-                    "Dictionary loaded but contains " +
-                            "no valid words. " +
-                            "language=" +
-                            language +
-                            ", asset=" +
-                            assetName
-            );
-
-            return emptyDictionary();
-        }
-
-        String[] wordArray =
-                words.toArray(
-                        new String[0]
-                );
-
-        String[] flagArray =
-                flags.toArray(
-                        new String[0]
-                );
-
-        sortEntries(
-                wordArray,
-                flagArray
-        );
-
-        Dictionary dictionary =
-                compactDictionary(
-                        wordArray,
-                        flagArray
-                );
-
-        Log.i(
-                TAG,
-                "Dictionary loaded successfully. " +
-                        "language=" +
-                        language +
-                        ", asset=" +
-                        assetName +
-                        ", words=" +
-                        dictionary.size()
-        );
-
-        return dictionary;
-    }
-
-    private String getDictionaryId(
-            String language) {
-
-        switch (language) {
-
-            case "es-AR":
-                return "es-AR";
-
-            case "de":
-                return "de-de";
-
-            case "en":
-            default:
-                return "en-en";
         }
     }
-
-    private void sortEntries(
-            String[] words,
-            String[] flags) {
-
-        Integer[] indexes =
-                new Integer[
-                        words.length
-                ];
-
-        for (int i = 0;
-             i < indexes.length;
-             i++) {
-
-            indexes[i] =
-                    i;
-        }
-
-        Arrays.sort(
-                indexes,
-                Comparator.comparing(
-                        i -> words[i]
-                )
-        );
-
-        String[] sortedWords =
-                words.clone();
-
-        String[] sortedFlags =
-                flags.clone();
-
-        for (int i = 0;
-             i < indexes.length;
-             i++) {
-
-            int source =
-                    indexes[i];
-
-            words[i] =
-                    sortedWords[source];
-
-            flags[i] =
-                    sortedFlags[source];
-        }
-    }
-
-    private Dictionary compactDictionary(
-            String[] words,
-            String[] flags) {
-
-        if (words.length == 0) {
-
-            return emptyDictionary();
-        }
-
-        List<String> compactWords =
-                new ArrayList<>();
-
-        List<String> compactFlags =
-                new ArrayList<>();
-
-        String previous =
-                null;
-
-        for (int i = 0;
-             i < words.length;
-             i++) {
-
-            String current =
-                    words[i];
-
-            if (current.equals(
-                    previous
-            )) {
-
-                continue;
-            }
-
-            compactWords.add(
-                    current
-            );
-
-            compactFlags.add(
-                    flags[i]
-            );
-
-            previous =
-                    current;
-        }
-
-        return new Dictionary(
-                compactWords.toArray(
-                        new String[0]
-                ),
-                compactFlags.toArray(
-                        new String[0]
-                )
-        );
-    }
-
-    private Dictionary emptyDictionary() {
-
-        return new Dictionary(
-                new String[0],
-                new String[0]
-        );
-    }
-
-    /*
-     * ============================================================
-     * COMPLETION
-     * ============================================================
-     */
 
     private List<String> getPrefixSuggestions(
             Dictionary dictionary,
@@ -909,11 +436,8 @@ public class DictionaryManager {
             Dictionary dictionary,
             String prefix) {
 
-        int low =
-                0;
-
-        int high =
-                dictionary.size();
+        int low = 0;
+        int high = dictionary.size();
 
         while (low < high) {
 
@@ -944,15 +468,377 @@ public class DictionaryManager {
 
     /*
      * ============================================================
-     * LANGUAGE CANDIDATES
+     * SYMMETRIC DELETE INDEX
      * ============================================================
      */
 
-    private void addLanguageCandidates(
+    private void addDeleteIndexCandidates(
             String input,
             String language,
             Dictionary dictionary,
             Set<String> candidates) {
+
+        if (input == null ||
+                input.isEmpty() ||
+                dictionary == null ||
+                dictionary.isEmpty()) {
+
+            return;
+        }
+
+        DeleteIndex index =
+                getDeleteIndex(
+                        language
+                );
+
+        if (index == null ||
+                index.isEmpty()) {
+
+            /*
+             * The generated index is an optimization, not the
+             * only source of candidates.
+             */
+            return;
+        }
+
+        LinkedHashSet<String> deletes =
+                new LinkedHashSet<>();
+
+        generateDeletes(
+                input,
+                MAX_DELETE_DISTANCE,
+                deletes
+        );
+
+        /*
+         * The original word itself can also be a delete key when
+         * the candidate differs by insertion.
+         */
+        deletes.add(
+                input
+        );
+
+        for (String delete :
+                deletes) {
+
+            List<String> matches =
+                    index.find(
+                            delete
+                    );
+
+            for (String candidate :
+                    matches) {
+
+                if (candidate == null ||
+                        candidate.equals(
+                                input
+                        )) {
+
+                    continue;
+                }
+
+                if (!dictionary.contains(
+                        candidate
+                )) {
+
+                    continue;
+                }
+
+                candidates.add(
+                        candidate
+                );
+
+                if (candidates.size() >=
+                        MAX_CORRECTION_CANDIDATES) {
+
+                    return;
+                }
+            }
+        }
+    }
+
+    /*
+     * SymSpell's symmetric-delete operation.
+     *
+     * This is intentionally performed only for the user's
+     * current word at runtime. The expensive dictionary-wide
+     * delete generation happens in the build script.
+     */
+    private void generateDeletes(
+            String word,
+            int maxDistance,
+            Set<String> output) {
+
+        if (word == null ||
+                word.isEmpty() ||
+                maxDistance <= 0) {
+
+            return;
+        }
+
+        generateDeletesRecursive(
+                word,
+                maxDistance,
+                output
+        );
+    }
+
+    private void generateDeletesRecursive(
+            String current,
+            int remainingDistance,
+            Set<String> output) {
+
+        if (remainingDistance <= 0 ||
+                current.isEmpty()) {
+
+            return;
+        }
+
+        for (int i = 0;
+             i < current.length();
+             i++) {
+
+            String deleted =
+                    current.substring(
+                            0,
+                            i
+                    ) +
+                    current.substring(
+                            i + 1
+                    );
+
+            if (output.add(
+                    deleted
+            )) {
+
+                generateDeletesRecursive(
+                        deleted,
+                        remainingDistance - 1,
+                        output
+                );
+            }
+        }
+    }
+
+    private DeleteIndex getDeleteIndex(
+            String language) {
+
+        DeleteIndex index =
+                deleteIndexes.get(
+                        language
+                );
+
+        if (index != null) {
+            return index;
+        }
+
+        index =
+                loadDeleteIndex(
+                        language
+                );
+
+        deleteIndexes.put(
+                language,
+                index
+        );
+
+        return index;
+    }
+
+    private DeleteIndex loadDeleteIndex(
+            String language) {
+
+        String assetName =
+                "dictionaries/" +
+                        getDeleteAssetName(
+                                language
+                        );
+
+        List<String> keys =
+                new ArrayList<>();
+
+        List<String> words =
+                new ArrayList<>();
+
+        try (
+                InputStream inputStream =
+                        context.getAssets().open(
+                                assetName
+                        );
+
+                BufferedReader reader =
+                        new BufferedReader(
+                                new InputStreamReader(
+                                        inputStream,
+                                        StandardCharsets.UTF_8
+                                )
+                        )
+        ) {
+
+            String header =
+                    reader.readLine();
+
+            if (header == null ||
+                    !header.startsWith(
+                            DELETE_HEADER
+                    )) {
+
+                Log.e(
+                        TAG,
+                        "Invalid delete index header. " +
+                                "language=" +
+                                language +
+                                ", asset=" +
+                                assetName +
+                                ", actual='" +
+                                header +
+                                "'"
+                );
+
+                return emptyDeleteIndex();
+            }
+
+            String line;
+
+            while (
+                    (line = reader.readLine()) != null
+            ) {
+
+                if (line.isEmpty() ||
+                        line.startsWith("#")) {
+
+                    continue;
+                }
+
+                int separator =
+                        line.indexOf('\t');
+
+                if (separator <= 0 ||
+                        separator >=
+                                line.length() - 1) {
+
+                    continue;
+                }
+
+                String deleteKey =
+                        normalizeWord(
+                                line.substring(
+                                        0,
+                                        separator
+                                )
+                        );
+
+                String candidate =
+                        normalizeWord(
+                                line.substring(
+                                        separator + 1
+                                )
+                        );
+
+                if (deleteKey.isEmpty() ||
+                        candidate.isEmpty()) {
+
+                    continue;
+                }
+
+                if (!isValidWord(
+                        candidate
+                )) {
+
+                    continue;
+                }
+
+                keys.add(
+                        deleteKey
+                );
+
+                words.add(
+                        candidate
+                );
+            }
+
+        } catch (IOException exception) {
+
+            Log.e(
+                    TAG,
+                    "Could not load delete index. " +
+                            "language=" +
+                            language +
+                            ", asset=" +
+                            assetName,
+                    exception
+            );
+
+            return emptyDeleteIndex();
+        }
+
+        if (keys.isEmpty()) {
+
+            Log.w(
+                    TAG,
+                    "Delete index is empty. " +
+                            "language=" +
+                            language +
+                            ", asset=" +
+                            assetName
+            );
+
+            return emptyDeleteIndex();
+        }
+
+        String[] keyArray =
+                keys.toArray(
+                        new String[0]
+                );
+
+        String[] wordArray =
+                words.toArray(
+                        new String[0]
+                );
+
+        DeleteIndex index =
+                new DeleteIndex(
+                        keyArray,
+                        wordArray
+                );
+
+        Log.i(
+                TAG,
+                "Delete index loaded. " +
+                        "language=" +
+                        language +
+                        ", entries=" +
+                        index.size()
+        );
+
+        return index;
+    }
+
+    private DeleteIndex emptyDeleteIndex() {
+
+        return new DeleteIndex(
+                new String[0],
+                new String[0]
+        );
+    }
+
+    /*
+     * ============================================================
+     * OUR LANGUAGE-SPECIFIC CANDIDATES
+     * ============================================================
+     */
+
+    private void addOwnLanguageCandidates(
+            String input,
+            String language,
+            Dictionary dictionary,
+            Set<String> candidates) {
+
+        if (input == null ||
+                input.isEmpty()) {
+
+            return;
+        }
 
         List<String> variants =
                 LanguageRules.getDiacriticVariants(
@@ -1022,158 +908,21 @@ public class DictionaryManager {
 
     /*
      * ============================================================
-     * DELETION
+     * KEYBOARD + LANGUAGE CANDIDATES
      * ============================================================
      */
 
-    private void addDeletionCandidates(
+    private void addKeyboardAndLanguageCandidates(
             String input,
+            String language,
             Dictionary dictionary,
             Set<String> candidates) {
 
-        if (input.length() <= 1) {
+        if (input == null ||
+                input.isEmpty()) {
 
             return;
         }
-
-        for (int i = 0;
-             i < input.length();
-             i++) {
-
-            String variant =
-                    input.substring(
-                            0,
-                            i
-                    ) +
-                    input.substring(
-                            i + 1
-                    );
-
-            addExactCandidate(
-                    variant,
-                    dictionary,
-                    candidates
-            );
-
-            if (candidates.size() >=
-                    MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-        }
-    }
-
-    /*
-     * ============================================================
-     * INSERTION
-     * ============================================================
-     */
-
-    private void addInsertionCandidates(
-            String input,
-            String language,
-            Dictionary dictionary,
-            Set<String> candidates) {
-
-        String alphabet =
-                getAlphabet(
-                        language
-                );
-
-        for (int position = 0;
-             position <= input.length();
-             position++) {
-
-            for (int i = 0;
-                 i < alphabet.length();
-                 i++) {
-
-                char inserted =
-                        alphabet.charAt(i);
-
-                String variant =
-                        input.substring(
-                                0,
-                                position
-                        ) +
-                        inserted +
-                        input.substring(
-                                position
-                        );
-
-                addExactCandidate(
-                        variant,
-                        dictionary,
-                        candidates
-                );
-
-                if (candidates.size() >=
-                        MAX_CORRECTION_CANDIDATES) {
-
-                    return;
-                }
-            }
-        }
-    }
-
-    /*
-     * ============================================================
-     * TRANSPOSITION
-     * ============================================================
-     */
-
-    private void addTranspositionCandidates(
-            String input,
-            Dictionary dictionary,
-            Set<String> candidates) {
-
-        for (int i = 0;
-             i + 1 < input.length();
-             i++) {
-
-            if (input.charAt(i) ==
-                    input.charAt(i + 1)) {
-
-                continue;
-            }
-
-            char[] chars =
-                    input.toCharArray();
-
-            char temporary =
-                    chars[i];
-
-            chars[i] =
-                    chars[i + 1];
-
-            chars[i + 1] =
-                    temporary;
-
-            addExactCandidate(
-                    new String(chars),
-                    dictionary,
-                    candidates
-            );
-
-            if (candidates.size() >=
-                    MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-        }
-    }
-
-    /*
-     * ============================================================
-     * SUBSTITUTION
-     * ============================================================
-     */
-
-    private void addSubstitutionCandidates(
-            String input,
-            String language,
-            Dictionary dictionary,
-            Set<String> candidates) {
 
         String alphabet =
                 getAlphabet(
@@ -1190,7 +939,11 @@ public class DictionaryManager {
                     );
 
             /*
-             * First try physical keyboard neighbors.
+             * Keyboard-aware substitutions.
+             *
+             * We deliberately do not generate every alphabet
+             * substitution. The keyboard model is used as a
+             * candidate gate.
              */
             for (int i = 0;
                  i < alphabet.length();
@@ -1214,7 +967,6 @@ public class DictionaryManager {
                                 );
 
                 if (keyboardCost > 2) {
-
                     continue;
                 }
 
@@ -1227,10 +979,16 @@ public class DictionaryManager {
                         dictionary,
                         candidates
                 );
+
+                if (candidates.size() >=
+                        MAX_CORRECTION_CANDIDATES) {
+
+                    return;
+                }
             }
 
             /*
-             * Then language-specific substitutions.
+             * Language-specific substitutions.
              */
             for (int i = 0;
                  i < alphabet.length();
@@ -1254,7 +1012,6 @@ public class DictionaryManager {
                                 );
 
                 if (languageCost >= 5) {
-
                     continue;
                 }
 
@@ -1267,12 +1024,12 @@ public class DictionaryManager {
                         dictionary,
                         candidates
                 );
-            }
 
-            if (candidates.size() >=
-                    MAX_CORRECTION_CANDIDATES) {
+                if (candidates.size() >=
+                        MAX_CORRECTION_CANDIDATES) {
 
-                return;
+                    return;
+                }
             }
         }
     }
@@ -1287,6 +1044,12 @@ public class DictionaryManager {
             String input,
             Dictionary dictionary,
             Set<String> candidates) {
+
+        if (input == null ||
+                input.length() < 2) {
+
+            return;
+        }
 
         /*
          * Example:
@@ -1328,7 +1091,7 @@ public class DictionaryManager {
 
     /*
      * ============================================================
-     * EXACT DICTIONARY CANDIDATE
+     * EXACT CANDIDATE
      * ============================================================
      */
 
@@ -1338,26 +1101,281 @@ public class DictionaryManager {
             Set<String> candidates) {
 
         if (candidate == null ||
-                candidate.isEmpty()) {
+                candidate.isEmpty() ||
+                dictionary == null) {
 
             return;
         }
 
+        String normalized =
+                normalizeWord(
+                        candidate
+                );
+
         if (!candidate.equals(
-                normalizeWord(candidate)
+                normalized
+        )) {
+
+            return;
+        }
+
+        if (!isValidWord(
+                normalized
         )) {
 
             return;
         }
 
         if (dictionary.contains(
-                candidate
+                normalized
         )) {
 
             candidates.add(
-                    candidate
+                    normalized
             );
         }
+    }
+
+    /*
+     * ============================================================
+     * DICTIONARY LOADING
+     * ============================================================
+     */
+
+    private Dictionary getDictionary(
+            String language) {
+
+        Dictionary dictionary =
+                dictionaries.get(
+                        language
+                );
+
+        if (dictionary != null) {
+            return dictionary;
+        }
+
+        dictionary =
+                loadDictionary(
+                        language
+                );
+
+        dictionaries.put(
+                language,
+                dictionary
+        );
+
+        return dictionary;
+    }
+
+    private Dictionary loadDictionary(
+            String language) {
+
+        String assetName =
+                "dictionaries/" +
+                        getAssetName(
+                                language
+                        );
+
+        List<String> words =
+                new ArrayList<>();
+
+        try (
+                InputStream inputStream =
+                        context.getAssets().open(
+                                assetName
+                        );
+
+                BufferedReader reader =
+                        new BufferedReader(
+                                new InputStreamReader(
+                                        inputStream,
+                                        StandardCharsets.UTF_8
+                                )
+                        )
+        ) {
+
+            String header =
+                    reader.readLine();
+
+            String expectedDictionaryId =
+                    getDictionaryId(
+                            language
+                    );
+
+            boolean generatedFormat =
+                    GENERATED_DICTIONARY_HEADER.equals(
+                            header
+                    );
+
+            boolean legacyFormat =
+                    header != null &&
+                            header.equals(
+                                    LEGACY_HEADER_PREFIX +
+                                            expectedDictionaryId
+                            );
+
+            if (!generatedFormat &&
+                    !legacyFormat) {
+
+                Log.e(
+                        TAG,
+                        "Invalid dictionary header. " +
+                                "language=" +
+                                language +
+                                ", asset=" +
+                                assetName +
+                                ", actual='" +
+                                header +
+                                "'"
+                );
+
+                return emptyDictionary();
+            }
+
+            String line;
+
+            while (
+                    (line = reader.readLine()) != null
+            ) {
+
+                if (line.isEmpty() ||
+                        line.startsWith("#")) {
+
+                    continue;
+                }
+
+                int separator =
+                        line.indexOf('\t');
+
+                String word;
+
+                if (separator >= 0) {
+
+                    word =
+                            line.substring(
+                                    0,
+                                    separator
+                            );
+
+                } else {
+
+                    word =
+                            line;
+                }
+
+                word =
+                        normalizeWord(
+                                word
+                        );
+
+                if (!isValidWord(
+                        word
+                )) {
+
+                    continue;
+                }
+
+                words.add(
+                        word
+                );
+            }
+
+        } catch (IOException exception) {
+
+            Log.e(
+                    TAG,
+                    "Could not load dictionary. " +
+                            "language=" +
+                            language +
+                            ", asset=" +
+                            assetName,
+                    exception
+            );
+
+            return emptyDictionary();
+        }
+
+        if (words.isEmpty()) {
+
+            Log.e(
+                    TAG,
+                    "Dictionary loaded but contains " +
+                            "no valid words. " +
+                            "language=" +
+                            language +
+                            ", asset=" +
+                            assetName
+            );
+
+            return emptyDictionary();
+        }
+
+        /*
+         * The generated dictionary is already sorted and unique.
+         * We still defensively sort here because the runtime
+         * prefix lookup depends on ordering.
+         */
+        String[] wordArray =
+                words.toArray(
+                        new String[0]
+                );
+
+        java.util.Arrays.sort(
+                wordArray
+        );
+
+        List<String> unique =
+                new ArrayList<>(
+                        wordArray.length
+                );
+
+        String previous =
+                null;
+
+        for (String word :
+                wordArray) {
+
+            if (word.equals(
+                    previous
+            )) {
+
+                continue;
+            }
+
+            unique.add(
+                    word
+            );
+
+            previous =
+                    word;
+        }
+
+        Dictionary dictionary =
+                new Dictionary(
+                        unique.toArray(
+                                new String[0]
+                        )
+                );
+
+        Log.i(
+                TAG,
+                "Dictionary loaded successfully. " +
+                        "language=" +
+                        language +
+                        ", asset=" +
+                        assetName +
+                        ", words=" +
+                        dictionary.size()
+        );
+
+        return dictionary;
+    }
+
+    private Dictionary emptyDictionary() {
+
+        return new Dictionary(
+                new String[0]
+        );
     }
 
     /*
@@ -1509,7 +1527,6 @@ public class DictionaryManager {
             String word) {
 
         if (word == null) {
-
             return "";
         }
 
@@ -1525,8 +1542,7 @@ public class DictionaryManager {
 
         if (word == null ||
                 word.length() < 1 ||
-                word.length() >
-                        MAX_WORD_LENGTH) {
+                word.length() > MAX_WORD_LENGTH) {
 
             return false;
         }
@@ -1551,6 +1567,23 @@ public class DictionaryManager {
         return true;
     }
 
+    private String getDictionaryId(
+            String language) {
+
+        switch (language) {
+
+            case "es-AR":
+                return "es-AR";
+
+            case "de":
+                return "de-de";
+
+            case "en":
+            default:
+                return "en-en";
+        }
+    }
+
     private String getAssetName(
             String language) {
 
@@ -1568,6 +1601,23 @@ public class DictionaryManager {
         }
     }
 
+    private String getDeleteAssetName(
+            String language) {
+
+        switch (language) {
+
+            case "es-AR":
+                return "es-AR.deletes";
+
+            case "de":
+                return "de-de.deletes";
+
+            case "en":
+            default:
+                return "en-en.deletes";
+        }
+    }
+
     /*
      * ============================================================
      * INTERNAL DICTIONARY
@@ -1577,17 +1627,12 @@ public class DictionaryManager {
     private static final class Dictionary {
 
         private final String[] words;
-        private final String[] flags;
 
         Dictionary(
-                String[] words,
-                String[] flags) {
+                String[] words) {
 
             this.words =
                     words;
-
-            this.flags =
-                    flags;
         }
 
         int size() {
@@ -1600,7 +1645,8 @@ public class DictionaryManager {
             return words.length == 0;
         }
 
-        String get(int index) {
+        String get(
+                int index) {
 
             return words[index];
         }
@@ -1614,9 +1660,7 @@ public class DictionaryManager {
                 return false;
             }
 
-            int low =
-                    0;
-
+            int low = 0;
             int high =
                     words.length - 1;
 
@@ -1650,6 +1694,118 @@ public class DictionaryManager {
             }
 
             return false;
+        }
+    }
+
+    /*
+     * ============================================================
+     * INTERNAL DELETE INDEX
+     * ============================================================
+     *
+     * The build script writes:
+     *
+     *     delete<TAB>word
+     *
+     * sorted by delete and then word.
+     *
+     * We keep parallel arrays instead of HashMap<String, List<>>
+     * because a large HashMap of Java objects would consume much
+     * more RAM on Android.
+     * ============================================================
+     */
+
+    private static final class DeleteIndex {
+
+        private final String[] keys;
+        private final String[] words;
+
+        DeleteIndex(
+                String[] keys,
+                String[] words) {
+
+            this.keys =
+                    keys;
+
+            this.words =
+                    words;
+        }
+
+        int size() {
+
+            return keys.length;
+        }
+
+        boolean isEmpty() {
+
+            return keys.length == 0;
+        }
+
+        List<String> find(
+                String key) {
+
+            List<String> results =
+                    new ArrayList<>();
+
+            if (key == null ||
+                    key.isEmpty() ||
+                    keys.length == 0) {
+
+                return results;
+            }
+
+            int start =
+                    lowerBound(
+                            key
+                    );
+
+            for (int i = start;
+                 i < keys.length;
+                 i++) {
+
+                int comparison =
+                        keys[i].compareTo(
+                                key
+                        );
+
+                if (comparison != 0) {
+                    break;
+                }
+
+                results.add(
+                        words[i]
+                );
+            }
+
+            return results;
+        }
+
+        private int lowerBound(
+                String key) {
+
+            int low = 0;
+            int high =
+                    keys.length;
+
+            while (low < high) {
+
+                int middle =
+                        (low + high) >>> 1;
+
+                if (keys[middle].compareTo(
+                        key
+                ) < 0) {
+
+                    low =
+                            middle + 1;
+
+                } else {
+
+                    high =
+                            middle;
+                }
+            }
+
+            return low;
         }
     }
 }
