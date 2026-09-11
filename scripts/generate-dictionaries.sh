@@ -343,10 +343,12 @@ generate_dictionary() {
     # - remove CR
     # - remove empty lines
     # - lowercase
-    # - retain Unicode letters
-    # - retain apostrophes
-    # - retain hyphens
+    # - preserve Unicode content
     # - sort unique
+    #
+    # Do NOT use a POSIX character-class filter here.
+    # With LC_ALL=C it can incorrectly reject Unicode words
+    # such as ñ, á, é, ü, ö, ä, ß, etc.
     #
 
     sed \
@@ -354,8 +356,6 @@ generate_dictionary() {
         -e '/^[[:space:]]*$/d' \
         "${raw_output}" |
         tr '[:upper:]' '[:lower:]' |
-        grep -E \
-        "^[[:alpha:]][[:alpha:]'’--]*$" |
         LC_ALL=C sort -u \
         > "${normalized_output}"
 
@@ -518,7 +518,7 @@ PY
 
     if [[ ! -s "${output}" ]]; then
         echo "ERROR: delete index is empty:"
-        echo "  ${language}"
+        echo "  ${output}"
         exit 1
     fi
 
