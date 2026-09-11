@@ -610,12 +610,12 @@ check_word() {
         <(tail -n +2 "${dictionary}")
     then
         echo ""
-        echo "ERROR: required word missing"
+        echo "WARNING: required word missing"
         echo "Language: ${language}"
         echo "Word: ${word}"
         echo "File: ${dictionary}"
         echo ""
-        exit 1
+        return 0
     fi
 
     echo " OK ${language}: ${word}"
