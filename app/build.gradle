@@ -22,6 +22,7 @@ android {
         release {
             minifyEnabled true
             shrinkResources true
+
             proguardFiles getDefaultProguardFile(
                     'proguard-android-optimize.txt'
             ), 'proguard-rules.pro'
@@ -52,226 +53,53 @@ dependencies {
 /*
  * ============================================================
  * POCKETBOARD DICTIONARIES
+ * ============================================================
  *
- * Dictionaries are downloaded from:
+ * Dictionary generation is handled by:
  *
- * https://github.com/wooorm/dictionaries
+ *     scripts/generate-dictionaries.sh
  *
- * Languages:
+ * The script:
  *
- *     es-AR = Spanish (Argentina)
- *     en    = English (USA)
- *     de    = German
+ *     - downloads Hunspell .dic files
+ *     - downloads corresponding .aff files
+ *     - validates both files
+ *     - expands Hunspell rules with unmunch
+ *     - normalizes the resulting word list
+ *     - writes plain one-word-per-line dictionaries
  *
- * The downloaded Hunspell .dic files are converted to the
- * simple one-word-per-line format expected by DictionaryManager.
+ * The Android application receives only the generated .dict
+ * files.
+ *
+ * Missing individual regional words are warnings and do not
+ * fail the build.
  * ============================================================
  */
 
 def dictionariesOutputDir =
         file("${projectDir}/src/main/assets/dictionaries")
 
-def dictionariesVersion = "main"
+def dictionaryGenerator =
+        file("${rootProject.projectDir}/scripts/generate-dictionaries.sh")
 
-def dictionarySources = [
-        "es-AR": "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/es-AR/index.dic",
-        "en"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/en/index.dic",
-        "de"   : "https://raw.githubusercontent.com/wooorm/dictionaries/${dictionariesVersion}/dictionaries/de/index.dic"
-]
 
-def downloadAndConvertDictionary = {
-    String language,
-    String dictionaryUrlString ->
-
-    File outputFile = new File(
-            dictionariesOutputDir,
-            "${language}.txt"
-    )
-
-    /*
-     * Do not download again if the generated dictionary
-     * already exists.
-     */
-    if (outputFile.exists() &&
-            outputFile.length() > 0) {
-
-        println(
-                "PocketBoard dictionary already exists: " +
-                        outputFile.name
-        )
-
-        return
-    }
-
-    println(
-            "Downloading PocketBoard dictionary: " +
-                    language
-    )
-
-    dictionariesOutputDir.mkdirs()
-
-    /*
-     * Important:
-     *
-     * Do NOT declare a variable named dictionaryUrl here.
-     * Groovy can interpret closure variables unexpectedly.
-     */
-    def connection =
-            new URL(dictionaryUrlString).openConnection()
-
-    connection.setConnectTimeout(30000)
-    connection.setReadTimeout(120000)
-    connection.setRequestProperty(
-            "User-Agent",
-            "PocketBoard-Build"
-    )
-
-    try {
-
-        int responseCode =
-                connection.getResponseCode()
-
-        if (responseCode != 200) {
-
-            throw new GradleException(
-                    "Could not download " +
-                            language +
-                            " dictionary. HTTP " +
-                            responseCode
-            )
-        }
-
-        BufferedReader reader =
-                new BufferedReader(
-                        new InputStreamReader(
-                                connection.getInputStream(),
-                                "UTF-8"
-                        )
-                )
-
-        try {
-
-            outputFile.withWriter(
-                    "UTF-8"
-            ) { writer ->
-
-                String line
-                boolean firstLine = true
-
-                while (
-                        (line = reader.readLine()) != null
-                ) {
-
-                    line = line.trim()
-
-                    if (line.isEmpty()) {
-                        continue
-                    }
-
-                    /*
-                     * Hunspell .dic first line:
-                     *
-                     *     number of entries
-                     */
-                    if (firstLine) {
-
-                        firstLine = false
-                        continue
-                    }
-
-                    /*
-                     * Remove Hunspell flags.
-                     *
-                     * Example:
-                     *
-                     * casa/S
-                     * abandonar/RED
-                     */
-                    int slash =
-                            line.indexOf('/')
-
-                    if (slash >= 0) {
-
-                        line =
-                                line.substring(
-                                        0,
-                                        slash
-                                )
-                    }
-
-                    line = line.trim()
-
-                    if (line.isEmpty()) {
-                        continue
-                    }
-
-                    /*
-                     * Ignore entries containing whitespace.
-                     */
-                    if (line.indexOf(' ') >= 0 ||
-                            line.indexOf('\t') >= 0) {
-
-                        continue
-                    }
-
-                    /*
-                     * Keep only letters, apostrophes
-                     * and hyphens.
-                     */
-                    boolean valid = true
-
-                    for (
-                            int i = 0;
-                            i < line.length();
-                            i++
-                    ) {
-
-                        char c =
-                                line.charAt(i)
-
-                        if (Character.isLetter(c) ||
-                                c == '\'' ||
-                                c == '-') {
-
-                            continue
-                        }
-
-                        valid = false
-                        break
-                    }
-
-                    if (!valid) {
-                        continue
-                    }
-
-                    writer.write(
-                            line.toLowerCase(
-                                    Locale.ROOT
-                            )
-                    )
-
-                    writer.newLine()
-                }
-            }
-
-        } finally {
-            reader.close()
-        }
-
-        println(
-                "PocketBoard dictionary generated: " +
-                        outputFile.absolutePath
-        )
-
-    } finally {
-        connection.disconnect()
-    }
-}
-
+/*
+ * ------------------------------------------------------------
+ * Generate dictionaries
+ * ------------------------------------------------------------
+ *
+ * This task deliberately delegates dictionary generation to
+ * the repository script so that GitHub Actions and Gradle use
+ * exactly the same generation logic.
+ */
 
 tasks.register(
-        "downloadPocketBoardDictionaries"
+        "generatePocketBoardDictionaries"
 ) {
+
+    inputs.file(
+            dictionaryGenerator
+    )
 
     outputs.dir(
             dictionariesOutputDir
@@ -279,15 +107,209 @@ tasks.register(
 
     doLast {
 
-        dictionarySources.each {
-            String language,
-            String dictionaryUrl ->
+        if (!dictionaryGenerator.exists()) {
 
-            downloadAndConvertDictionary(
-                    language,
-                    dictionaryUrl
+            throw new GradleException(
+                    "Dictionary generator not found: " +
+                            dictionaryGenerator.absolutePath
             )
         }
+
+        if (!dictionaryGenerator.canExecute()) {
+
+            throw new GradleException(
+                    "Dictionary generator is not executable: " +
+                            dictionaryGenerator.absolutePath +
+                            "\n" +
+                            "Run: chmod +x " +
+                            dictionaryGenerator.path
+            )
+        }
+
+        println("")
+        println(
+                "============================================================"
+        )
+        println(
+                " Generating PocketBoard dictionaries"
+        )
+        println(
+                "============================================================"
+        )
+        println("")
+
+        exec {
+            commandLine(
+                    "bash",
+                    dictionaryGenerator.absolutePath
+            )
+        }
+    }
+}
+
+
+/*
+ * ------------------------------------------------------------
+ * Validate generated dictionaries
+ * ------------------------------------------------------------
+ *
+ * Individual words are quality checks only.
+ *
+ * Missing words generate WARNINGs and do NOT fail the build.
+ *
+ * Missing or empty dictionary files remain fatal because the
+ * Android application cannot operate correctly without them.
+ */
+
+tasks.register(
+        "validatePocketBoardDictionaries"
+) {
+
+    dependsOn(
+            "generatePocketBoardDictionaries"
+    )
+
+    doLast {
+
+        Map<String, List<String>> checkedWords = [
+
+                "es-AR": [
+                        "hago",
+                        "hacer",
+                        "veré",
+                        "mañana",
+                        "vos",
+                        "tenés",
+                        "podés",
+                        "hacés"
+                ],
+
+                "en-en": [
+                        "the",
+                        "have",
+                        "hello"
+                ],
+
+                "de-de": [
+                        "ich",
+                        "habe",
+                        "morgen"
+                ]
+        ]
+
+        int missingWords = 0
+
+        checkedWords.each {
+            String language,
+            List<String> words ->
+
+            File dictionaryFile =
+                    new File(
+                            dictionariesOutputDir,
+                            "${language}.dict"
+                    )
+
+            /*
+             * The dictionary itself is mandatory.
+             */
+            if (!dictionaryFile.exists() ||
+                    dictionaryFile.length() == 0) {
+
+                throw new GradleException(
+                        "Missing or empty generated dictionary: " +
+                                dictionaryFile.absolutePath
+                )
+            }
+
+            Set<String> dictionaryWords =
+                    new HashSet<>()
+
+            dictionaryFile.eachLine(
+                    "UTF-8"
+            ) { String line ->
+
+                line = line.trim()
+
+                if (line.isEmpty() ||
+                        line.startsWith("#")) {
+
+                    return
+                }
+
+                dictionaryWords.add(
+                        line.toLowerCase(
+                                Locale.ROOT
+                        )
+                )
+            }
+
+            println(
+                    "${language}: " +
+                            dictionaryWords.size() +
+                            " words"
+            )
+
+            words.each {
+                String word ->
+
+                String normalizedWord =
+                        word.toLowerCase(
+                                Locale.ROOT
+                        )
+
+                if (!dictionaryWords.contains(
+                        normalizedWord
+                )) {
+
+                    println(
+                            " WARNING ${language}: " +
+                                    "missing word: " +
+                                    word
+                    )
+
+                    missingWords++
+
+                } else {
+
+                    println(
+                            " OK      ${language}: " +
+                                    word
+                    )
+                }
+            }
+        }
+
+        println("")
+        println(
+                "============================================================"
+        )
+        println(
+                " Dictionary validation summary"
+        )
+        println(
+                "============================================================"
+        )
+
+        if (missingWords > 0) {
+
+            println(
+                    "WARNING: " +
+                            missingWords +
+                            " optional word(s) were not found."
+            )
+
+            println(
+                    "The build will continue."
+            )
+
+        } else {
+
+            println(
+                    "All dictionary word checks passed."
+            )
+        }
+
+        println("")
     }
 }
 
@@ -298,7 +320,7 @@ tasks.register(
 tasks.named("preBuild") {
 
     dependsOn(
-            "downloadPocketBoardDictionaries"
+            "validatePocketBoardDictionaries"
     )
 }
 
