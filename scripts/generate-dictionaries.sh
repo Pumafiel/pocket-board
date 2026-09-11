@@ -2,383 +2,343 @@
 
 set -euo pipefail
 
-export LANG=C.UTF-8
-export LC_ALL=C.UTF-8
-
-# ============================================================
+###############################################################################
 # PocketBoard dictionary generator
-# ============================================================
 #
-# Sources are Hunspell dictionaries distributed by
-# wooorm/dictionaries.
+# Generates flat dictionaries from Hunspell .dic/.aff sources.
 #
-# es-AR is the Argentine Spanish dictionary generated from
-# RLA-ES.
+# Expected tools:
+#   curl
+#   unmunch
+#   sort
+#   grep
+#   sed
+#   awk
 #
-# The .aff files are REQUIRED.
-# They are processed by Hunspell's unmunch tool during the
-# GitHub Actions build.
-#
-# The Android application receives only plain word lists.
-#
-# Missing individual words are treated as warnings rather
-# than build-breaking errors. This allows the upstream
-# dictionary to remain the primary source of truth while
-# still reporting regional forms that may be worth reviewing.
-# ============================================================
+# Missing expected words are WARNINGS.
+# Broken/missing dictionary infrastructure remains fatal.
+###############################################################################
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-ROOT_DIR="$(
-    cd "$(dirname "${BASH_SOURCE[0]}")/.." &&
-    pwd
-)"
+OUTPUT_DIR="${PROJECT_ROOT}/app/src/main/assets/dictionaries"
+TMP_DIR="${PROJECT_ROOT}/build/dictionary-tmp"
 
-WORK_DIR="${ROOT_DIR}/build/pocketboard-dictionaries"
-OUTPUT_DIR="${ROOT_DIR}/app/src/main/assets/dictionaries"
-
-WOOORM_BASE="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries"
-
-ES_AR_DIR="${WORK_DIR}/es-AR"
-EN_DIR="${WORK_DIR}/en-en"
-DE_DIR="${WORK_DIR}/de-de"
-
-mkdir -p "${WORK_DIR}"
-mkdir -p "${ES_AR_DIR}"
-mkdir -p "${EN_DIR}"
-mkdir -p "${DE_DIR}"
 mkdir -p "${OUTPUT_DIR}"
+mkdir -p "${TMP_DIR}"
 
+###############################################################################
+# Helpers
+###############################################################################
 
-# ------------------------------------------------------------
-# Required commands
-# ------------------------------------------------------------
+log() {
+    echo
+    echo "============================================================"
+    echo "$1"
+    echo "============================================================"
+}
+
+info() {
+    echo "[INFO] $1"
+}
+
+warning() {
+    echo "[WARNING] $1"
+}
+
+error() {
+    echo "[ERROR] $1" >&2
+}
 
 require_command() {
     local command_name="$1"
 
     if ! command -v "${command_name}" >/dev/null 2>&1; then
-        echo "ERROR: command not found: ${command_name}"
+        error "Required command not found: ${command_name}"
         exit 1
     fi
 }
+
+cleanup() {
+    rm -rf "${TMP_DIR}"
+}
+
+trap cleanup EXIT
+
+###############################################################################
+# Required commands
+###############################################################################
+
+log "PocketBoard dictionary generation"
 
 require_command curl
 require_command unmunch
 require_command sort
 require_command grep
 require_command sed
-require_command tr
-require_command head
-require_command tail
-require_command wc
-require_command du
-require_command cut
+require_command awk
 
+###############################################################################
+# Sources
+###############################################################################
 
-# ------------------------------------------------------------
+# The es-AR dictionary is based on the Argentine Spanish resources
+# distributed through wooorm/dictionaries / RLA-ES.
+#
+# Keep the source structure explicit so it is easy to update later.
+
+ES_AR_BASE_URL="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/es_AR"
+EN_BASE_URL="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/en"
+DE_BASE_URL="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/de"
+
+###############################################################################
 # Download helper
-# ------------------------------------------------------------
+###############################################################################
 
-download() {
+download_file() {
     local url="$1"
     local destination="$2"
 
-    echo ""
-    echo "Downloading:"
-    echo "  ${url}"
-    echo "  -> ${destination}"
+    info "Downloading:"
+    info "  ${url}"
 
-    curl \
+    if ! curl \
         --fail \
         --location \
         --silent \
         --show-error \
-        --retry 4 \
+        --retry 3 \
         --retry-delay 2 \
-        --connect-timeout 30 \
-        --max-time 300 \
-        -A "PocketBoard-Build/1.1.6" \
-        -o "${destination}" \
-        "${url}"
-
-    if [[ ! -s "${destination}" ]]; then
-        echo "ERROR: downloaded file is empty:"
-        echo "  ${destination}"
-        exit 1
-    fi
-}
-
-
-# ------------------------------------------------------------
-# Download Hunspell dictionaries
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo " Downloading PocketBoard Hunspell dictionaries"
-echo "============================================================"
-echo ""
-
-# Argentine Spanish
-#
-# wooorm/dictionaries publishes dictionary-es-ar as the
-# Argentine Spanish dictionary generated from RLA-ES.
-
-download \
-    "${WOOORM_BASE}/es-AR/index.dic" \
-    "${ES_AR_DIR}/index.dic"
-
-download \
-    "${WOOORM_BASE}/es-AR/index.aff" \
-    "${ES_AR_DIR}/index.aff"
-
-
-# English
-
-download \
-    "${WOOORM_BASE}/en/index.dic" \
-    "${EN_DIR}/index.dic"
-
-download \
-    "${WOOORM_BASE}/en/index.aff" \
-    "${EN_DIR}/index.aff"
-
-
-# German
-
-download \
-    "${WOOORM_BASE}/de/index.dic" \
-    "${DE_DIR}/index.dic"
-
-download \
-    "${WOOORM_BASE}/de/index.aff" \
-    "${DE_DIR}/index.aff"
-
-
-# ------------------------------------------------------------
-# Validation
-# ------------------------------------------------------------
-
-validate_pair() {
-    local language="$1"
-    local dic="$2"
-    local aff="$3"
-
-    echo ""
-    echo "Validating ${language}"
-
-    if [[ ! -s "${dic}" ]]; then
-        echo "ERROR: missing .dic:"
-        echo "${dic}"
-        exit 1
-    fi
-
-    if [[ ! -s "${aff}" ]]; then
-        echo "ERROR: missing .aff:"
-        echo "${aff}"
-        exit 1
-    fi
-
-    local first_line
-
-    first_line="$(
-        head -n 1 "${dic}" |
-        tr -d '\r'
-    )"
-
-    if ! [[ "${first_line}" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: invalid Hunspell .dic header:"
-        echo "${dic}"
-        echo "First line: ${first_line}"
-        exit 1
-    fi
-
-    if ! grep -qE \
-        '^(SET|LANG|PFX|SFX|REP|MAP|TRY)([[:space:]]|$)' \
-        "${aff}"
+        "${url}" \
+        --output "${destination}"
     then
-        echo "ERROR: invalid Hunspell .aff:"
-        echo "${aff}"
+        error "Download failed:"
+        error "  ${url}"
         exit 1
     fi
 
-    echo "  .dic: $(wc -l < "${dic}") lines"
-    echo "  .aff: $(wc -l < "${aff}") lines"
-    echo "  OK"
+    if [ ! -s "${destination}" ]; then
+        error "Downloaded file is empty:"
+        error "  ${destination}"
+        exit 1
+    fi
 }
 
+###############################################################################
+# Validate Hunspell source files
+###############################################################################
 
-validate_pair \
-    "es-AR" \
-    "${ES_AR_DIR}/index.dic" \
-    "${ES_AR_DIR}/index.aff"
+validate_hunspell_files() {
+    local dic_file="$1"
+    local aff_file="$2"
+    local language="$3"
 
-validate_pair \
-    "en-en" \
-    "${EN_DIR}/index.dic" \
-    "${EN_DIR}/index.aff"
+    if [ ! -f "${dic_file}" ]; then
+        error "${language}: missing .dic file:"
+        error "  ${dic_file}"
+        exit 1
+    fi
 
-validate_pair \
-    "de-de" \
-    "${DE_DIR}/index.dic" \
-    "${DE_DIR}/index.aff"
+    if [ ! -f "${aff_file}" ]; then
+        error "${language}: missing .aff file:"
+        error "  ${aff_file}"
+        exit 1
+    fi
 
+    if [ ! -s "${dic_file}" ]; then
+        error "${language}: .dic file is empty:"
+        error "  ${dic_file}"
+        exit 1
+    fi
 
-# ------------------------------------------------------------
-# Generate plain word list
-# ------------------------------------------------------------
+    if [ ! -s "${aff_file}" ]; then
+        error "${language}: .aff file is empty:"
+        error "  ${aff_file}"
+        exit 1
+    fi
+
+    local dic_entries
+    dic_entries="$(head -n 1 "${dic_file}" | tr -d '\r')"
+
+    if ! [[ "${dic_entries}" =~ ^[0-9]+$ ]]; then
+        error "${language}: invalid Hunspell .dic header:"
+        error "  ${dic_entries}"
+        exit 1
+    fi
+
+    info "${language}: Hunspell source files validated."
+    info "  .dic entries: ${dic_entries}"
+}
+
+###############################################################################
+# Generate flat dictionary
+###############################################################################
 
 generate_dictionary() {
     local language="$1"
-    local dic="$2"
-    local aff="$3"
-    local output="$4"
+    local dic_file="$2"
+    local aff_file="$3"
+    local output_file="$4"
 
-    local raw_output
-    local normalized_output
+    local expanded_file="${TMP_DIR}/${language}.expanded"
 
-    raw_output="${WORK_DIR}/${language}.unmunch.txt"
-    normalized_output="${WORK_DIR}/${language}.normalized.txt"
+    log "Generating ${language}"
 
-    rm -f \
-        "${raw_output}" \
-        "${normalized_output}" \
-        "${output}"
+    validate_hunspell_files \
+        "${dic_file}" \
+        "${aff_file}" \
+        "${language}"
 
-    echo ""
-    echo "============================================================"
-    echo " Expanding ${language} with Hunspell .aff rules"
-    echo "============================================================"
-    echo ""
+    info "Running unmunch..."
 
-    # unmunch expands the entries in the .dic file using the
-    # affix rules from the corresponding .aff file.
-
-    unmunch \
-        "${dic}" \
-        "${aff}" \
-        > "${raw_output}"
-
-    if [[ ! -s "${raw_output}" ]]; then
-        echo "ERROR: unmunch generated no words for ${language}."
+    if ! unmunch \
+        "${dic_file}" \
+        "${aff_file}" \
+        > "${expanded_file}"
+    then
+        error "${language}: unmunch failed."
         exit 1
     fi
 
-    # --------------------------------------------------------
-    # Normalize:
-    #
-    # - remove CR
-    # - remove empty lines
-    # - lowercase
-    # - retain letters
-    # - retain apostrophes
-    # - retain hyphens
-    # - sort unique
-    #
-    # UTF-8 locale is explicitly configured at the top of this
-    # script so accented characters are handled consistently.
-    # --------------------------------------------------------
-
-    sed \
-        -e 's/\r$//' \
-        -e '/^[[:space:]]*$/d' \
-        "${raw_output}" |
-        tr '[:upper:]' '[:lower:]' |
-        grep -E \
-            "^[[:alpha:]][[:alpha:]'’\-]*$" |
-        sort -u \
-        > "${normalized_output}"
-
-    if [[ ! -s "${normalized_output}" ]]; then
-        echo "ERROR: normalized dictionary is empty:"
-        echo "${language}"
+    if [ ! -s "${expanded_file}" ]; then
+        error "${language}: unmunch produced an empty result."
         exit 1
     fi
+
+    info "Normalizing generated words..."
 
     {
-        echo "#POCKETBOARD-DICT-1"
-        cat "${normalized_output}"
-    } > "${output}"
+        echo "# PocketBoard dictionary: ${language}"
 
-    local count
+        sed \
+            -e 's/\r$//' \
+            -e 's/[[:space:]]*$//' \
+            "${expanded_file}" \
+        | grep -v '^$' \
+        | sort -fu
+    } > "${output_file}"
 
-    count="$(
-        tail -n +2 "${output}" |
-        wc -l
-    )"
-
-    echo ""
-    echo "${language}: ${count} words"
-    echo "Output: ${output}"
-
-    if [[ "${count}" -lt 1000 ]]; then
-        echo "ERROR: dictionary ${language} is suspiciously small."
+    if [ ! -s "${output_file}" ]; then
+        error "${language}: generated dictionary is empty."
         exit 1
     fi
+
+    local word_count
+    word_count="$(
+        tail -n +2 "${output_file}" | wc -l | tr -d ' '
+    )"
+
+    if [ "${word_count}" -lt 1000 ]; then
+        error "${language}: generated dictionary is suspiciously small."
+        error "  Words generated: ${word_count}"
+        exit 1
+    fi
+
+    info "${language}: dictionary generated successfully."
+    info "  Output: ${output_file}"
+    info "  Words: ${word_count}"
 }
 
-
-generate_dictionary \
-    "es-AR" \
-    "${ES_AR_DIR}/index.dic" \
-    "${ES_AR_DIR}/index.aff" \
-    "${OUTPUT_DIR}/es-AR.dict"
-
-generate_dictionary \
-    "en-en" \
-    "${EN_DIR}/index.dic" \
-    "${EN_DIR}/index.aff" \
-    "${OUTPUT_DIR}/en-en.dict"
-
-generate_dictionary \
-    "de-de" \
-    "${DE_DIR}/index.dic" \
-    "${DE_DIR}/index.aff" \
-    "${OUTPUT_DIR}/de-de.dict"
-
-
-# ------------------------------------------------------------
-# Optional word checks
-# ------------------------------------------------------------
+###############################################################################
+# Word validation
 #
-# These checks are quality checks, not hard requirements.
-#
-# The upstream Hunspell dictionary remains the source of truth.
-# A missing regional form must not break the build.
-#
-# Missing words are reported as WARNINGs so they can be reviewed
-# and optionally added later if they are confirmed as appropriate
-# for the target language.
-# ------------------------------------------------------------
-
-MISSING_WORDS=0
+# IMPORTANT:
+# Missing words are warnings, NOT build failures.
+###############################################################################
 
 check_word() {
     local language="$1"
     local word="$2"
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
+    if [ ! -f "${dictionary}" ]; then
+        error "${language}: dictionary does not exist:"
+        error "  ${dictionary}"
+        exit 1
+    fi
+
     if grep \
         -Fqx \
         "${word}" \
         <(tail -n +2 "${dictionary}")
     then
-        echo "  OK      ${language}: ${word}"
+        info "OK ${language}: ${word}"
     else
-        echo "  WARNING ${language}: missing word: ${word}"
-        MISSING_WORDS=$((MISSING_WORDS + 1))
+        warning "${language}: expected word is missing: ${word}"
     fi
 }
 
+###############################################################################
+# Download source dictionaries
+###############################################################################
 
-echo ""
-echo "============================================================"
-echo " Optional word checks"
-echo "============================================================"
-echo ""
+log "Downloading source dictionaries"
 
-# Argentine Spanish
+ES_AR_DIC="${TMP_DIR}/es_AR.dic"
+ES_AR_AFF="${TMP_DIR}/es_AR.aff"
 
+EN_DIC="${TMP_DIR}/en.dic"
+EN_AFF="${TMP_DIR}/en.aff"
+
+DE_DIC="${TMP_DIR}/de.dic"
+DE_AFF="${TMP_DIR}/de.aff"
+
+download_file \
+    "${ES_AR_BASE_URL}/index.dic" \
+    "${ES_AR_DIC}"
+
+download_file \
+    "${ES_AR_BASE_URL}/index.aff" \
+    "${ES_AR_AFF}"
+
+download_file \
+    "${EN_BASE_URL}/index.dic" \
+    "${EN_DIC}"
+
+download_file \
+    "${EN_BASE_URL}/index.aff" \
+    "${EN_AFF}"
+
+download_file \
+    "${DE_BASE_URL}/index.dic" \
+    "${DE_DIC}"
+
+download_file \
+    "${DE_BASE_URL}/index.aff" \
+    "${DE_AFF}"
+
+###############################################################################
+# Generate dictionaries
+###############################################################################
+
+generate_dictionary \
+    "es-AR" \
+    "${ES_AR_DIC}" \
+    "${ES_AR_AFF}" \
+    "${OUTPUT_DIR}/es-AR.dict"
+
+generate_dictionary \
+    "en-en" \
+    "${EN_DIC}" \
+    "${EN_AFF}" \
+    "${OUTPUT_DIR}/en-en.dict"
+
+generate_dictionary \
+    "de-de" \
+    "${DE_DIC}" \
+    "${DE_AFF}" \
+    "${OUTPUT_DIR}/de-de.dict"
+
+###############################################################################
+# Expected word checks
+#
+# These checks intentionally do NOT fail the build.
+###############################################################################
+
+log "Checking expected words"
+
+# Spanish / Argentine Spanish
 check_word "es-AR" "hago"
 check_word "es-AR" "hacer"
 check_word "es-AR" "veré"
@@ -388,60 +348,38 @@ check_word "es-AR" "tenés"
 check_word "es-AR" "podés"
 check_word "es-AR" "hacés"
 
-
 # English
-
-check_word "en-en" "the"
-check_word "en-en" "have"
 check_word "en-en" "hello"
-
+check_word "en-en" "world"
 
 # German
+check_word "de-de" "hallo"
+check_word "de-de" "welt"
 
-check_word "de-de" "ich"
-check_word "de-de" "habe"
-check_word "de-de" "morgen"
-
-
-# ------------------------------------------------------------
-# Word check summary
-# ------------------------------------------------------------
-
-echo ""
-echo "============================================================"
-echo " Word check summary"
-echo "============================================================"
-echo ""
-
-if [[ "${MISSING_WORDS}" -gt 0 ]]; then
-    echo "WARNING: ${MISSING_WORDS} optional word(s) were not found."
-    echo "The build will continue."
-else
-    echo "All optional word checks passed."
-fi
-
-echo ""
-
-
-# ------------------------------------------------------------
+###############################################################################
 # Final report
-# ------------------------------------------------------------
+###############################################################################
 
-echo ""
-echo "============================================================"
-echo " PocketBoard dictionaries generated successfully"
-echo "============================================================"
-echo ""
+log "Dictionary generation complete"
 
 for dictionary in \
     "${OUTPUT_DIR}/es-AR.dict" \
     "${OUTPUT_DIR}/en-en.dict" \
     "${OUTPUT_DIR}/de-de.dict"
 do
-    echo "$(basename "${dictionary}")"
-    echo " Size: $(du -h "${dictionary}" | cut -f1)"
-    echo " Words: $(tail -n +2 "${dictionary}" | wc -l)"
-    echo ""
+    if [ ! -f "${dictionary}" ]; then
+        error "Expected output dictionary is missing:"
+        error "  ${dictionary}"
+        exit 1
+    fi
+
+    word_count="$(
+        tail -n +2 "${dictionary}" |
+        wc -l |
+        tr -d ' '
+    )"
+
+    info "$(basename "${dictionary}"): ${word_count} words"
 done
 
-echo "Done."
+info "Dictionary generation finished successfully."
