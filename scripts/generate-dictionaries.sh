@@ -492,7 +492,9 @@ generate_dictionary() {
     local output="$3"
 
     {
-        echo "#POCKETBOARD-DICT-2"
+        # Runtime compatibility:
+        # DictionaryManager expects DICT-1.
+        echo "#POCKETBOARD-DICT-1"
         cat "${vocabulary}"
     } > "${output}"
 
@@ -645,7 +647,9 @@ PY
         > "${grouped}"
 
     {
-        echo "#POCKETBOARD-DELETES-2"
+        # Runtime compatibility:
+        # DictionaryManager expects DELETES-1.
+        echo "#POCKETBOARD-DELETES-1"
         echo "#MAX_DISTANCE=${DELETE_MAX_DISTANCE}"
         echo "#MAX_WORD_LENGTH=${DELETE_MAX_WORD_LENGTH}"
         echo "#MAX_CANDIDATES=${MAX_CANDIDATES_PER_DELETE}"
