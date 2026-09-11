@@ -34,7 +34,6 @@ public class SuggestionsManager
     private final DictionaryManager dictionaryManager;
 
     private final int suggestionsCount;
-
     private final List<CharSequence> dictionarySuggestions;
     private final List<CharSequence> spellcheckerSuggestions;
 
@@ -65,7 +64,8 @@ public class SuggestionsManager
             PocketBoardIME pocketBoardIME,
             KeyboardInputHandler keyboardInputHandler) {
 
-        this.pocketBoardIME = pocketBoardIME;
+        this.pocketBoardIME =
+                pocketBoardIME;
 
         this.preferencesHolder =
                 pocketBoardIME.getPreferencesHolder();
@@ -74,7 +74,9 @@ public class SuggestionsManager
                 keyboardInputHandler;
 
         this.dictionaryManager =
-                new DictionaryManager(pocketBoardIME);
+                new DictionaryManager(
+                        pocketBoardIME
+                );
 
         suggestionsCount =
                 pocketBoardIME
@@ -84,58 +86,99 @@ public class SuggestionsManager
                         );
 
         dictionarySuggestions =
-                new ArrayList<>(suggestionsCount);
+                new ArrayList<>(
+                        suggestionsCount
+                );
 
         spellcheckerSuggestions =
-                new ArrayList<>(suggestionsCount);
+                new ArrayList<>(
+                        suggestionsCount
+                );
     }
 
-    public void setInputView(InputView inputView) {
-        this.inputView = inputView;
+    public void setInputView(
+            InputView inputView) {
+
+        this.inputView =
+                inputView;
     }
 
     public void onStartInput(
             EditorInfo attribute,
             InputMethodSubtype currentInputMethodSubtype) {
 
+        /*
+         * Limpiamos cualquier resultado anterior
+         * antes de configurar el nuevo editor.
+         */
         disallowSuggestions();
 
         updateCurrentLanguage(
                 currentInputMethodSubtype
         );
 
+        /*
+         * El editor debe permitir sugerencias y no ser
+         * un campo numérico.
+         */
         boolean suggestionAllowedEditor =
-                InputUtils.isSuggestionAllowedEditor(attribute)
-                        && !InputUtils.isNumericEditor(attribute);
-
-        boolean suggestionsPanelVisible =
-                pocketBoardIME.isShouldShowIme()
-                        && preferencesHolder.isShowSuggestionsEnabled();
-
-        dictionarySuggestionsAllowed =
-                suggestionAllowedEditor
-                        && (
-                        suggestionsPanelVisible
-                                || preferencesHolder.isDictShortcutsEnabled()
+                InputUtils.isSuggestionAllowedEditor(
+                        attribute
+                )
+                        && !InputUtils.isNumericEditor(
+                        attribute
                 );
 
         /*
-         * El corrector de PocketBoard utiliza SIEMPRE
+         * IMPORTANTE:
+         *
+         * Suggestions NO dependen de
+         * PocketBoardIME.isShouldShowIme().
+         *
+         * isShouldShowIme() controla la visibilidad del
+         * teclado cuando existe un teclado físico y no debe
+         * decidir si el motor de Suggestions funciona.
+         */
+        dictionarySuggestionsAllowed =
+                suggestionAllowedEditor
+                        && (
+                        preferencesHolder
+                                .isShowSuggestionsEnabled()
+                                || preferencesHolder
+                                .isDictShortcutsEnabled()
+                );
+
+        /*
+         * El corrector nativo de PocketBoard utiliza
          * DictionaryManager.
          *
-         * No se utiliza el SpellChecker del sistema.
+         * No utilizamos:
+         *
+         *     TextServicesManager
+         *     SpellCheckerSession
+         *     corrector del sistema
+         *
+         * Si el usuario habilita autocorrección, el motor
+         * puede trabajar aunque el panel visual de
+         * Suggestions esté oculto.
          */
         spellcheckerSuggestionsAllowed =
                 suggestionAllowedEditor
                         && (
-                        suggestionsPanelVisible
-                                || preferencesHolder.isAutoCorrectionEnabled()
+                        preferencesHolder
+                                .isShowSuggestionsEnabled()
+                                || preferencesHolder
+                                .isAutoCorrectionEnabled()
                 );
     }
 
     public void onStartInputView(
             InputMethodSubtype currentInputMethodSubtype) {
 
+        /*
+         * Volvemos a obtener el idioma cuando se crea
+         * la vista de entrada.
+         */
         updateCurrentLanguage(
                 currentInputMethodSubtype
         );
@@ -149,8 +192,11 @@ public class SuggestionsManager
 
         clear();
 
-        dictionarySuggestionsAllowed = false;
-        spellcheckerSuggestionsAllowed = false;
+        dictionarySuggestionsAllowed =
+                false;
+
+        spellcheckerSuggestionsAllowed =
+                false;
     }
 
     public boolean isSuggestionsAllowed() {
@@ -162,10 +208,14 @@ public class SuggestionsManager
     public void clear() {
 
         dictionarySuggestions.clear();
+
         spellcheckerSuggestions.clear();
 
-        hasRecommendedSpellcheckerSuggestion = false;
-        lastRecommendedSuggestion = null;
+        hasRecommendedSpellcheckerSuggestion =
+                false;
+
+        lastRecommendedSuggestion =
+                null;
 
         showSuggestions();
     }
@@ -190,9 +240,10 @@ public class SuggestionsManager
 
         /*
          * =========================================================
-         * SUGGESTIONS DEL DICCIONARIO DE POCKETBOARD
+         * SUGERENCIAS DEL DICCIONARIO DE POCKETBOARD
          * =========================================================
          */
+
         if (dictionarySuggestionsAllowed) {
 
             updateDictionarySuggestions(
@@ -206,18 +257,13 @@ public class SuggestionsManager
 
         /*
          * =========================================================
-         * CORRECTOR DE POCKETBOARD
+         * CORRECTOR ORTOGRÁFICO NATIVO DE POCKETBOARD
          * =========================================================
          *
-         * No usamos:
-         *
-         *     TextServicesManager
-         *     SpellCheckerSession
-         *     corrector del sistema
-         *
-         * El idioma se determina exclusivamente mediante
-         * currentLanguageTag.
+         * El corrector utiliza exactamente el mismo
+         * DictionaryManager que las Suggestions.
          */
+
         if (spellcheckerSuggestionsAllowed) {
 
             updateSpellcheckerSuggestions(
@@ -235,6 +281,13 @@ public class SuggestionsManager
         showSuggestions();
     }
 
+    /*
+     * Android puede enviar completions externas.
+     *
+     * Las conservamos como una fuente adicional,
+     * pero el motor propio de PocketBoard no depende
+     * de ellas.
+     */
     public void update(
             CompletionInfo[] completions) {
 
@@ -298,9 +351,12 @@ public class SuggestionsManager
             return;
         }
 
-        for (String suggestion : suggestions) {
+        for (String suggestion :
+                suggestions) {
 
-            if (!TextUtils.isEmpty(suggestion)) {
+            if (!TextUtils.isEmpty(
+                    suggestion
+            )) {
 
                 dictionarySuggestions.add(
                         suggestion
@@ -323,13 +379,15 @@ public class SuggestionsManager
         hasRecommendedSpellcheckerSuggestion =
                 false;
 
-        if (TextUtils.isEmpty(composingText)) {
+        if (TextUtils.isEmpty(
+                composingText
+        )) {
             return;
         }
 
         /*
-         * Si la palabra existe en el diccionario del idioma
-         * seleccionado, no necesita corrección.
+         * Si la palabra ya existe en el diccionario
+         * seleccionado, no necesitamos corregirla.
          */
         if (dictionaryManager.contains(
                 composingText,
@@ -340,8 +398,8 @@ public class SuggestionsManager
         }
 
         /*
-         * Las correcciones salen del MISMO diccionario
-         * seleccionado para el teclado.
+         * Las correcciones salen del MISMO motor
+         * y diccionario utilizado por Suggestions.
          */
         List<String> suggestions =
                 dictionaryManager.getSuggestions(
@@ -359,9 +417,12 @@ public class SuggestionsManager
         Set<String> uniqueSuggestions =
                 new LinkedHashSet<>();
 
-        for (String suggestion : suggestions) {
+        for (String suggestion :
+                suggestions) {
 
-            if (!TextUtils.isEmpty(suggestion)) {
+            if (!TextUtils.isEmpty(
+                    suggestion
+            )) {
 
                 uniqueSuggestions.add(
                         suggestion
@@ -380,8 +441,7 @@ public class SuggestionsManager
         );
 
         /*
-         * La primera sugerencia de nuestro diccionario
-         * es la recomendada.
+         * La primera corrección es la recomendada.
          */
         if (!spellcheckerSuggestions.isEmpty()) {
 
@@ -396,6 +456,7 @@ public class SuggestionsManager
     public CharSequence getCurrentDictSuggestion() {
 
         if (!dictionarySuggestions.isEmpty()) {
+
             return dictionarySuggestions.get(0);
         }
 
@@ -437,6 +498,18 @@ public class SuggestionsManager
             );
         }
     }
+
+    /*
+     * ============================================================
+     * INLINE SUGGESTIONS
+     * ============================================================
+     *
+     * Estos métodos se conservan TEMPORALMENTE para que
+     * PocketBoardIME siga compilando durante esta primera etapa.
+     *
+     * En el siguiente archivo eliminaremos la integración
+     * Inline/Autofill completa.
+     */
 
     @RequiresApi(Build.VERSION_CODES.R)
     public boolean showInlineSuggestions(
@@ -491,13 +564,15 @@ public class SuggestionsManager
         }
 
         List<CharSequence> merged =
-                new ArrayList<>(suggestionsCount);
+                new ArrayList<>(
+                        suggestionsCount
+                );
 
         Set<CharSequence> unique =
                 new LinkedHashSet<>();
 
         /*
-         * Primero las sugerencias normales del idioma.
+         * Primero las sugerencias normales del diccionario.
          */
         unique.addAll(
                 dictionarySuggestions
@@ -510,13 +585,20 @@ public class SuggestionsManager
                 spellcheckerSuggestions
         );
 
-        for (CharSequence suggestion : unique) {
+        /*
+         * El panel de PocketBoard muestra como máximo
+         * tres resultados.
+         */
+        for (CharSequence suggestion :
+                unique) {
 
             if (merged.size() >= 3) {
                 break;
             }
 
-            merged.add(suggestion);
+            merged.add(
+                    suggestion
+            );
         }
 
         boolean hasRecommended =
@@ -551,19 +633,29 @@ public class SuggestionsManager
             InputMethodSubtype subtype) {
 
         if (subtype == null) {
+
             currentLanguageTag = "en";
+
             return;
         }
 
         String languageTag =
                 subtype.getLanguageTag();
 
-        if (TextUtils.isEmpty(languageTag)) {
+        /*
+         * Compatibilidad con dispositivos/subtypes
+         * que todavía proporcionan getLocale().
+         */
+        if (TextUtils.isEmpty(
+                languageTag
+        )) {
 
             String localeString =
                     subtype.getLocale();
 
-            if (!TextUtils.isEmpty(localeString)) {
+            if (!TextUtils.isEmpty(
+                    localeString
+            )) {
 
                 languageTag =
                         localeString.replace(
@@ -605,18 +697,30 @@ public class SuggestionsManager
         String language =
                 locale.getLanguage();
 
-        if ("es".equals(language)) {
+        if ("es".equals(
+                language
+        )) {
+
             return "es-AR";
         }
 
-        if ("de".equals(language)) {
+        if ("de".equals(
+                language
+        )) {
+
             return "de";
         }
 
-        if ("en".equals(language)) {
+        if ("en".equals(
+                language
+        )) {
+
             return "en";
         }
 
+        /*
+         * Fallback seguro.
+         */
         return "en";
     }
 }
