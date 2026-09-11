@@ -7,9 +7,15 @@ set -euo pipefail
 #
 # Generates flat dictionaries from Hunspell .dic/.aff sources.
 #
+# Sources:
+#   es-AR -> RLA-ES v2.9
+#   en-en -> wooorm/dictionaries
+#   de-de -> wooorm/dictionaries
+#
 # Expected tools:
 #   curl
 #   unmunch
+#   python3
 #   sort
 #   grep
 #   sed
@@ -74,6 +80,7 @@ log "PocketBoard dictionary generation"
 
 require_command curl
 require_command unmunch
+require_command python3
 require_command sort
 require_command grep
 require_command sed
@@ -83,12 +90,14 @@ require_command awk
 # Sources
 ###############################################################################
 
-# The es-AR dictionary is based on the Argentine Spanish resources
-# distributed through wooorm/dictionaries / RLA-ES.
+# RLA-ES v2.9
 #
-# Keep the source structure explicit so it is easy to update later.
+# This release contains an explicit es_AR.oxt dictionary for Argentina.
+# We pin the version so builds remain reproducible.
+RLA_ES_VERSION="v2.9"
+RLA_ES_BASE_URL="https://github.com/sbosio/rla-es/releases/download/${RLA_ES_VERSION}"
 
-ES_AR_BASE_URL="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/es_AR"
+# wooorm/dictionaries
 EN_BASE_URL="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/en"
 DE_BASE_URL="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/de"
 
@@ -121,6 +130,63 @@ download_file() {
     if [ ! -s "${destination}" ]; then
         error "Downloaded file is empty:"
         error "  ${destination}"
+        exit 1
+    fi
+}
+
+###############################################################################
+# Extract RLA-ES OXT
+###############################################################################
+
+extract_rla_es_argentina() {
+    local oxt_file="$1"
+    local destination_dir="$2"
+
+    mkdir -p "${destination_dir}"
+
+    info "Extracting RLA-ES ${RLA_ES_VERSION} es_AR.oxt..."
+
+    if ! python3 - "${oxt_file}" "${destination_dir}" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+
+required = {
+    "es_AR.dic",
+    "es_AR.aff",
+}
+
+try:
+    with zipfile.ZipFile(archive, "r") as zf:
+        names = set(zf.namelist())
+
+        missing = required - names
+
+        if missing:
+            print(
+                "ERROR: RLA-ES archive is missing: "
+                + ", ".join(sorted(missing)),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        for filename in required:
+            data = zf.read(filename)
+            output = destination / filename
+            output.write_bytes(data)
+
+except zipfile.BadZipFile:
+    print(
+        "ERROR: downloaded RLA-ES file is not a valid ZIP/OXT archive.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+    then
+        error "Could not extract RLA-ES es_AR.oxt."
         exit 1
     fi
 }
@@ -226,7 +292,9 @@ generate_dictionary() {
 
     local word_count
     word_count="$(
-        tail -n +2 "${output_file}" | wc -l | tr -d ' '
+        tail -n +2 "${output_file}" |
+        wc -l |
+        tr -d ' '
     )"
 
     if [ "${word_count}" -lt 1000 ]; then
@@ -275,22 +343,30 @@ check_word() {
 
 log "Downloading source dictionaries"
 
-ES_AR_DIC="${TMP_DIR}/es_AR.dic"
-ES_AR_AFF="${TMP_DIR}/es_AR.aff"
+###############################################################################
+# Argentine Spanish - RLA-ES v2.9
+###############################################################################
+
+ES_AR_OXT="${TMP_DIR}/es_AR.oxt"
+ES_AR_DIR="${TMP_DIR}/es_AR"
+
+download_file \
+    "${RLA_ES_BASE_URL}/es_AR.oxt" \
+    "${ES_AR_OXT}"
+
+extract_rla_es_argentina \
+    "${ES_AR_OXT}" \
+    "${ES_AR_DIR}"
+
+ES_AR_DIC="${ES_AR_DIR}/es_AR.dic"
+ES_AR_AFF="${ES_AR_DIR}/es_AR.aff"
+
+###############################################################################
+# English
+###############################################################################
 
 EN_DIC="${TMP_DIR}/en.dic"
 EN_AFF="${TMP_DIR}/en.aff"
-
-DE_DIC="${TMP_DIR}/de.dic"
-DE_AFF="${TMP_DIR}/de.aff"
-
-download_file \
-    "${ES_AR_BASE_URL}/index.dic" \
-    "${ES_AR_DIC}"
-
-download_file \
-    "${ES_AR_BASE_URL}/index.aff" \
-    "${ES_AR_AFF}"
 
 download_file \
     "${EN_BASE_URL}/index.dic" \
@@ -299,6 +375,13 @@ download_file \
 download_file \
     "${EN_BASE_URL}/index.aff" \
     "${EN_AFF}"
+
+###############################################################################
+# German
+###############################################################################
+
+DE_DIC="${TMP_DIR}/de.dic"
+DE_AFF="${TMP_DIR}/de.aff"
 
 download_file \
     "${DE_BASE_URL}/index.dic" \
