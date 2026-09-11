@@ -3,14 +3,6 @@ name: PocketBoard Build
 on:
   workflow_dispatch:
 
-  push:
-    branches:
-      - Pocketboard-E
-
-  pull_request:
-    branches:
-      - Pocketboard-E
-
 permissions:
   contents: read
 
@@ -131,25 +123,25 @@ jobs:
           done
 
           echo ""
-          echo "Spanish mandatory forms:"
+          echo "Spanish dictionary checks:"
 
-          grep -F -x "hago" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "veré" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "mañana" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "tenés" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "podés" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "hacés" \
-            app/src/main/assets/dictionaries/es-AR.dict
+          for word in \
+            "hago" \
+            "veré" \
+            "mañana" \
+            "tenés" \
+            "podés" \
+            "hacés"
+          do
+            if grep -F -x -q \
+              "${word}" \
+              app/src/main/assets/dictionaries/es-AR.dict
+            then
+              echo "  OK      ${word}"
+            else
+              echo "  WARNING ${word}: missing"
+            fi
+          done
 
       # -------------------------------------------------------
       # Build release APK
