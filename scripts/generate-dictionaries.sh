@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+export LC_ALL=C
+export LANG=C
+
 # ============================================================
 # PocketBoard dictionary generator
 # ============================================================
@@ -439,6 +442,7 @@ pairs_file = sys.argv[2]
 max_distance = int(sys.argv[3])
 max_word_length = int(sys.argv[4])
 
+
 def deletes(word, distance):
     if distance <= 0:
         return set()
@@ -464,7 +468,9 @@ def deletes(word, distance):
                 walk(candidate, remaining - 1)
 
     walk(word, distance)
+
     return result
+
 
 with open(words_file, "r", encoding="utf-8") as source, \
      open(pairs_file, "w", encoding="utf-8") as output:
