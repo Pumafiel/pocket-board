@@ -9,17 +9,26 @@ public final class KeyboardErrorModel {
      * Lower cost = more likely typing error.
      *
      * 0 = exact character
-     * 1 = direct horizontal/near key
-     * 2 = diagonal/adjacent key
-     * 3 = plausible but farther key
-     * 4 = unknown/far substitution
-     * 5 = deliberately unavailable / invalid
+     * 1 = direct horizontal neighbour
+     * 2 = diagonal / adjacent key
+     * 3 = nearby but weaker physical relationship
+     * 5 = unknown / no keyboard evidence
+     *
+     * IMPORTANT:
+     *
+     * There is intentionally no COST_FAR = 4.
+     *
+     * CorrectionEngine uses getUnknownCost() as the boundary
+     * between real keyboard evidence and an unrelated substitution.
+     *
+     * Therefore an unrelated character MUST NOT return a value
+     * below COST_UNKNOWN.
      */
+
     private static final int COST_EXACT = 0;
     private static final int COST_NEIGHBOR = 1;
     private static final int COST_DIAGONAL = 2;
     private static final int COST_NEAR = 3;
-    private static final int COST_FAR = 4;
     private static final int COST_UNKNOWN = 5;
 
     private static final Map<Character, Map<Character, Integer>>
@@ -29,9 +38,9 @@ public final class KeyboardErrorModel {
     static {
 
         /*
-         * --------------------------------------------------------
-         * QWERTY rows
-         * --------------------------------------------------------
+         * ========================================================
+         * QWERTY ROWS
+         * ========================================================
          *
          * Horizontal neighbours are the strongest physical
          * keyboard relationship.
@@ -42,9 +51,9 @@ public final class KeyboardErrorModel {
         addRow("zxcvbnm");
 
         /*
-         * --------------------------------------------------------
-         * Upper/lower row diagonals
-         * --------------------------------------------------------
+         * ========================================================
+         * UPPER / HOME ROW DIAGONALS
+         * ========================================================
          */
 
         addDiagonal('q', 'a');
@@ -76,9 +85,9 @@ public final class KeyboardErrorModel {
         addDiagonal('p', 'l');
 
         /*
-         * --------------------------------------------------------
-         * Home row -> bottom row
-         * --------------------------------------------------------
+         * ========================================================
+         * HOME ROW / BOTTOM ROW DIAGONALS
+         * ========================================================
          */
 
         addDiagonal('a', 'z');
@@ -110,35 +119,51 @@ public final class KeyboardErrorModel {
         addDiagonal('k', 'm');
 
         /*
-         * --------------------------------------------------------
-         * One-step extended relationships
-         * --------------------------------------------------------
+         * ========================================================
+         * WEAKER NEARBY RELATIONSHIPS
+         * ========================================================
          *
-         * These are intentionally weaker than immediate neighbours.
+         * These are weaker than immediate neighbours/diagonals.
          *
-         * They help rank candidates without allowing arbitrary
-         * characters to receive the same score as a real key error.
+         * They can help distinguish a plausible keyboard typo from
+         * a completely unrelated substitution, but they must never
+         * become as strong as an actual adjacent key.
          */
 
         addNear('q', 's');
+
         addNear('w', 'd');
+
         addNear('e', 'f');
+
         addNear('r', 'g');
+
         addNear('t', 'h');
+
         addNear('y', 'j');
+
         addNear('u', 'k');
+
         addNear('i', 'l');
 
         addNear('a', 'x');
+
         addNear('s', 'v');
+
         addNear('d', 'b');
+
         addNear('f', 'n');
+
         addNear('g', 'm');
 
         addNear('z', 'c');
+
         addNear('x', 'v');
+
         addNear('c', 'b');
+
         addNear('v', 'n');
+
         addNear('b', 'm');
     }
 
@@ -174,7 +199,7 @@ public final class KeyboardErrorModel {
                 COSTS.get(first);
 
         if (neighbours == null) {
-            return COST_FAR;
+            return COST_UNKNOWN;
         }
 
         Integer cost =
@@ -185,10 +210,13 @@ public final class KeyboardErrorModel {
         }
 
         /*
-         * Unknown relationships are intentionally more expensive
-         * than all known physical relationships.
+         * There is no physical relationship between these keys.
+         *
+         * This MUST return COST_UNKNOWN rather than a lower value,
+         * otherwise CorrectionEngine would incorrectly classify
+         * arbitrary substitutions as keyboard evidence.
          */
-        return COST_FAR;
+        return COST_UNKNOWN;
     }
 
     /*
@@ -227,27 +255,26 @@ public final class KeyboardErrorModel {
      * INSERTION / DELETION
      * ============================================================
      *
-     * There is no physical key involved in an insertion/deletion,
-     * so these methods deliberately return a neutral typing-error
-     * cost.
+     * There is no direct physical-key substitution involved in
+     * insertion/deletion.
      *
-     * The CorrectionEngine applies the actual base insertion/deletion
-     * cost and uses these only when it has a reason to distinguish
-     * repeated-character errors.
+     * CorrectionEngine owns the actual insertion/deletion cost.
+     *
+     * These methods therefore deliberately return UNKNOWN.
      */
 
     public static int getInsertionCost(
             char character,
             String languageTag) {
 
-        return COST_FAR;
+        return COST_UNKNOWN;
     }
 
     public static int getDeletionCost(
             char character,
             String languageTag) {
 
-        return COST_FAR;
+        return COST_UNKNOWN;
     }
 
     /*
@@ -255,8 +282,12 @@ public final class KeyboardErrorModel {
      * TRANSPOSITION
      * ============================================================
      *
-     * Adjacent letters that are physically close are more likely
-     * to be transposed by fast typing.
+     * Adjacent characters that are physically close are more
+     * plausible transposition errors.
+     *
+     * This method still provides a weak physical signal for a
+     * transposition, even when the two keys are not direct
+     * neighbours.
      */
 
     public static int getTranspositionCost(
@@ -287,13 +318,19 @@ public final class KeyboardErrorModel {
             return COST_DIAGONAL;
         }
 
+        if (substitutionCost ==
+                COST_NEAR) {
+
+            return COST_NEAR;
+        }
+
         /*
-         * A transposition is still a plausible typing error even
-         * when the two characters are not adjacent on the keyboard,
-         * but it should not be cheaper than a real physical
-         * neighbour relationship.
+         * No physical relationship.
+         *
+         * Return UNKNOWN so CorrectionEngine can fall back to its
+         * normal transposition cost.
          */
-        return COST_NEAR;
+        return COST_UNKNOWN;
     }
 
     /*
@@ -301,10 +338,11 @@ public final class KeyboardErrorModel {
      * REPEATED CHARACTER
      * ============================================================
      *
-     * Double letters are a very common typing error:
+     * Repeated-character mistakes are handled primarily by
+     * CorrectionEngine's edit model.
      *
-     *     helo  -> hello
-     *     comming -> coming
+     * This value represents a common typing-error signal rather
+     * than a physical keyboard distance.
      */
 
     public static int getRepetitionCost(
@@ -313,6 +351,22 @@ public final class KeyboardErrorModel {
 
         return COST_NEIGHBOR;
     }
+
+    /*
+     * ============================================================
+     * UNKNOWN COST
+     * ============================================================
+     *
+     * CorrectionEngine uses this as the boundary:
+     *
+     *     cost < UNKNOWN
+     *
+     * means real keyboard/language evidence.
+     *
+     *     cost >= UNKNOWN
+     *
+     * means no evidence.
+     */
 
     public static int getUnknownCost() {
         return COST_UNKNOWN;
