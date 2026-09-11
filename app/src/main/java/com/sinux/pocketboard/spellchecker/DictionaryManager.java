@@ -53,12 +53,10 @@ public class DictionaryManager {
 
     private final Context context;
 
-    private final Map<String, Dictionary>
-            dictionaries =
+    private final Map<String, Dictionary> dictionaries =
             new HashMap<>();
 
-    private final CorrectionEngine
-            correctionEngine =
+    private final CorrectionEngine correctionEngine =
             new CorrectionEngine();
 
     public DictionaryManager(
@@ -121,8 +119,17 @@ public class DictionaryManager {
          * 1. COMPLETION
          * ========================================================
          *
-         * Prefix suggestions are completely independent from
+         * Prefix completion is deliberately handled before
          * spelling correction.
+         *
+         * Example:
+         *
+         *     ma -> mañana
+         *     cas -> casa
+         *     hel -> hello
+         *
+         * Completion must never be sent through the correction
+         * engine.
          */
 
         List<String> prefixResults =
@@ -133,12 +140,9 @@ public class DictionaryManager {
                 );
 
         /*
-         * If the user is typing a prefix, completion wins.
-         *
-         * We do not send completion candidates through the
-         * correction engine.
+         * If the input is not an exact dictionary word and
+         * matching prefixes exist, completion wins.
          */
-
         if (!dictionary.contains(
                 normalizedWord
         )) {
@@ -155,10 +159,9 @@ public class DictionaryManager {
         /*
          * An exact dictionary word is already correct.
          *
-         * We return other completions only when there are any,
-         * otherwise no correction is necessary.
+         * We may still expose longer completions beginning with
+         * the same word.
          */
-
         if (dictionary.contains(
                 normalizedWord
         )) {
@@ -199,6 +202,7 @@ public class DictionaryManager {
                 );
 
         if (candidates.isEmpty()) {
+
             return new ArrayList<>();
         }
 
@@ -312,28 +316,20 @@ public class DictionaryManager {
                     reader.readLine();
 
             /*
-             * The dictionary generator writes:
+             * The build script generates:
              *
-             *     # PocketBoard dictionary: es-AR
-             *     # PocketBoard dictionary: en-en
-             *     # PocketBoard dictionary: de-de
+             * # PocketBoard dictionary: es-AR
+             * # PocketBoard dictionary: en-en
+             * # PocketBoard dictionary: de-de
              *
-             * The runtime language is normalized to:
+             * The runtime language names are:
              *
-             *     es-AR
-             *     en
-             *     de
+             * es-AR
+             * en
+             * de
              *
-             * while the generated asset keeps the source
-             * dictionary identifier:
-             *
-             *     es-AR
-             *     en-en
-             *     de-de
-             *
-             * Therefore the expected header is derived from
-             * the asset name rather than from the normalized
-             * runtime language.
+             * Therefore the expected dictionary identifier is
+             * derived from the runtime language.
              */
 
             String expectedDictionaryId =
@@ -475,10 +471,6 @@ public class DictionaryManager {
                 flagArray
         );
 
-        /*
-         * Remove duplicate words after sorting.
-         */
-
         Dictionary dictionary =
                 compactDictionary(
                         wordArray,
@@ -565,6 +557,7 @@ public class DictionaryManager {
             String[] flags) {
 
         if (words.length == 0) {
+
             return emptyDictionary();
         }
 
@@ -598,7 +591,8 @@ public class DictionaryManager {
                     flags[i]
             );
 
-            previous = current;
+            previous =
+                    current;
         }
 
         return new Dictionary(
@@ -650,8 +644,8 @@ public class DictionaryManager {
 
         for (
                 int index = start;
-                index < dictionary.size() &&
-                        results.size() < maxResults;
+                index < dictionary.size()
+                        && results.size() < maxResults;
                 index++
         ) {
 
@@ -716,9 +710,9 @@ public class DictionaryManager {
      * CORRECTION CANDIDATES
      * ============================================================
      *
-     * Every candidate must exist EXACTLY in the dictionary.
+     * Every candidate must exist exactly in the dictionary.
      *
-     * We never use prefix matching here.
+     * No correction candidate is invented.
      */
 
     private List<String> collectCorrectionCandidates(
@@ -820,7 +814,6 @@ public class DictionaryManager {
         /*
          * Spanish n <-> ñ.
          */
-
         if ("es-AR".equals(
                 language
         )) {
@@ -852,6 +845,12 @@ public class DictionaryManager {
                         dictionary,
                         candidates
                 );
+
+                if (candidates.size() >=
+                        MAX_CORRECTION_CANDIDATES) {
+
+                    return;
+                }
             }
         }
     }
@@ -860,6 +859,10 @@ public class DictionaryManager {
             String input,
             Dictionary dictionary,
             Set<String> candidates) {
+
+        if (input.length() <= 1) {
+            return;
+        }
 
         for (int i = 0;
              i < input.length();
@@ -992,12 +995,13 @@ public class DictionaryManager {
              position++) {
 
             char original =
-                    input.charAt(position);
+                    input.charAt(
+                            position
+                    );
 
             /*
              * First try physical keyboard neighbors.
              */
-
             for (int i = 0;
                  i < alphabet.length();
                  i++) {
@@ -1037,7 +1041,6 @@ public class DictionaryManager {
             /*
              * Then language-specific substitutions.
              */
-
             for (int i = 0;
                  i < alphabet.length();
                  i++) {
@@ -1088,9 +1091,10 @@ public class DictionaryManager {
             Set<String> candidates) {
 
         /*
+         * Example:
+         *
          * helllo -> hello
          */
-
         for (int i = 0;
              i < input.length() - 1;
              i++) {
@@ -1115,6 +1119,12 @@ public class DictionaryManager {
                     dictionary,
                     candidates
             );
+
+            if (candidates.size() >=
+                    MAX_CORRECTION_CANDIDATES) {
+
+                return;
+            }
         }
     }
 
@@ -1129,12 +1139,19 @@ public class DictionaryManager {
             return;
         }
 
-        if (candidate.equals(
+        /*
+         * Candidates generated internally are already normalized.
+         */
+        if (!candidate.equals(
                 normalizeWord(candidate)
-        ) &&
-                dictionary.contains(
-                        candidate
-                )) {
+        )) {
+
+            return;
+        }
+
+        if (dictionary.contains(
+                candidate
+        )) {
 
             candidates.add(
                     candidate
@@ -1375,7 +1392,8 @@ public class DictionaryManager {
             }
 
             int low = 0;
-            int high = words.length - 1;
+            int high =
+                    words.length - 1;
 
             while (low <= high) {
 
