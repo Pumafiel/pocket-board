@@ -2,32 +2,19 @@ package com.sinux.pocketboard;
 
 import android.annotation.SuppressLint;
 import android.inputmethodservice.InputMethodService;
-import android.os.Build;
-import android.os.Bundle;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
-import android.util.Size;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
-import android.view.inputmethod.InlineSuggestion;
-import android.view.inputmethod.InlineSuggestionsRequest;
-import android.view.inputmethod.InlineSuggestionsResponse;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
-import android.widget.inline.InlinePresentationSpec;
-
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.annotation.RequiresApi;
-import androidx.autofill.inline.UiVersions;
-import androidx.autofill.inline.v1.InlineSuggestionUi;
 
 import com.sinux.pocketboard.input.SuggestionsManager;
 import com.sinux.pocketboard.input.handler.SymPadInputHandler;
@@ -39,7 +26,6 @@ import com.sinux.pocketboard.utils.InputUtils;
 import com.sinux.pocketboard.utils.ToastMessageUtils;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 public class PocketBoardIME extends InputMethodService {
@@ -62,27 +48,52 @@ public class PocketBoardIME extends InputMethodService {
     public void onCreate() {
         super.onCreate();
 
-        inputMethodManager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        preferencesHolder = new PreferencesHolder(this);
+        inputMethodManager =
+                (InputMethodManager) getSystemService(
+                        INPUT_METHOD_SERVICE
+                );
 
-        metaKeyManager = new MetaKeyManager(this);
-        keyboardInputHandler = new KeyboardInputHandler(this);
-        symPadInputHandler = new SymPadInputHandler(this);
-        suggestionsManager = new SuggestionsManager(this, keyboardInputHandler);
+        preferencesHolder =
+                new PreferencesHolder(this);
 
-        directInputEditors = Arrays.asList(getResources().getStringArray(R.array.direct_input_editors));
+        metaKeyManager =
+                new MetaKeyManager(this);
+
+        keyboardInputHandler =
+                new KeyboardInputHandler(this);
+
+        symPadInputHandler =
+                new SymPadInputHandler(this);
+
+        suggestionsManager =
+                new SuggestionsManager(
+                        this,
+                        keyboardInputHandler
+                );
+
+        directInputEditors =
+                Arrays.asList(
+                        getResources().getStringArray(
+                                R.array.direct_input_editors
+                        )
+                );
     }
 
     @Override
     public void onDestroy() {
+
         metaKeyManager.destroy();
+
         super.onDestroy();
     }
 
     @Override
     public void onWindowHidden() {
+
         super.onWindowHidden();
+
         if (inputView != null) {
+
             inputView.hideEmojiPanel();
         }
     }
@@ -90,143 +101,338 @@ public class PocketBoardIME extends InputMethodService {
     @SuppressLint("InflateParams")
     @Override
     public View onCreateInputView() {
-        inputView = (InputView) getLayoutInflater().inflate(R.layout.input, null);
-        suggestionsManager.setInputView(inputView);
-        metaKeyManager.setMetaKeyStateChangeListener(inputView);
+
+        inputView =
+                (InputView) getLayoutInflater()
+                        .inflate(
+                                R.layout.input,
+                                null
+                        );
+
+        suggestionsManager.setInputView(
+                inputView
+        );
+
+        metaKeyManager.setMetaKeyStateChangeListener(
+                inputView
+        );
+
         return inputView;
     }
 
     @Override
-    public void onStartInput(EditorInfo attribute, boolean restarting) {
-        super.onStartInput(attribute, restarting);
-        autoCapitalization = preferencesHolder.isAutoCapitalizationEnabled();
+    public void onStartInput(
+            EditorInfo attribute,
+            boolean restarting) {
+
+        super.onStartInput(
+                attribute,
+                restarting
+        );
+
+        autoCapitalization =
+                preferencesHolder
+                        .isAutoCapitalizationEnabled();
 
         if (!restarting) {
+
             metaKeyManager.reset();
         }
 
-        InputMethodSubtype currentInputMethodSubtype = inputMethodManager.getCurrentInputMethodSubtype();
-        suggestionsManager.onStartInput(attribute, currentInputMethodSubtype);
+        InputMethodSubtype currentInputMethodSubtype =
+                inputMethodManager
+                        .getCurrentInputMethodSubtype();
+
+        suggestionsManager.onStartInput(
+                attribute,
+                currentInputMethodSubtype
+        );
 
         int cursorPosition = -1;
-        InputConnection inputConnection = getCurrentInputConnection();
+
+        InputConnection inputConnection =
+                getCurrentInputConnection();
+
         if (inputConnection != null) {
-            ExtractedText extractedText = inputConnection.getExtractedText(new ExtractedTextRequest(), 0);
+
+            ExtractedText extractedText =
+                    inputConnection.getExtractedText(
+                            new ExtractedTextRequest(),
+                            0
+                    );
+
             if (extractedText != null) {
-                cursorPosition = Math.min(extractedText.selectionStart, extractedText.selectionEnd);
+
+                cursorPosition =
+                        Math.min(
+                                extractedText.selectionStart,
+                                extractedText.selectionEnd
+                        );
             }
         }
-        keyboardInputHandler.onStartInput(attribute, suggestionsManager.isSuggestionsAllowed(), cursorPosition);
 
+        keyboardInputHandler.onStartInput(
+                attribute,
+                suggestionsManager.isSuggestionsAllowed(),
+                cursorPosition
+        );
 
         updateMetaState();
     }
 
     @Override
-    public void onStartInputView(EditorInfo attribute, boolean restarting) {
-        super.onStartInput(attribute, restarting);
-        InputMethodSubtype currentInputMethodSubtype = inputMethodManager.getCurrentInputMethodSubtype();
-        suggestionsManager.onStartInputView(currentInputMethodSubtype);
+    public void onStartInputView(
+            EditorInfo attribute,
+            boolean restarting) {
+
+        super.onStartInputView(
+                attribute,
+                restarting
+        );
+
+        InputMethodSubtype currentInputMethodSubtype =
+                inputMethodManager
+                        .getCurrentInputMethodSubtype();
+
+        suggestionsManager.onStartInputView(
+                currentInputMethodSubtype
+        );
+
+        /*
+         * Force an initial refresh of the native PocketBoard
+         * dictionary/suggestion engine.
+         */
         suggestionsManager.update();
-        inputView.onStartInputView(attribute, currentInputMethodSubtype, suggestionsManager.isSuggestionsAllowed());
+
+        inputView.onStartInputView(
+                attribute,
+                currentInputMethodSubtype,
+                suggestionsManager.isSuggestionsAllowed()
+        );
     }
 
     @Override
-    public void onFinishInputView(boolean finishingInput) {
-        super.onFinishInputView(finishingInput);
+    public void onFinishInputView(
+            boolean finishingInput) {
+
+        super.onFinishInputView(
+                finishingInput
+        );
+
         suggestionsManager.onFinishInput();
+
         keyboardInputHandler.onFinishInput();
     }
 
     @Override
     public boolean onEvaluateInputViewShown() {
+
         super.onEvaluateInputViewShown();
-        // Force keyboard show to allow user toggle emoji panel even in hidden mode
+
+        /*
+         * Force keyboard show to allow the user to toggle
+         * the emoji panel even in hidden mode.
+         */
         return true;
     }
 
     @Override
-    protected void onCurrentInputMethodSubtypeChanged(InputMethodSubtype newSubtype) {
-        super.onCurrentInputMethodSubtypeChanged(newSubtype);
-        if (preferencesHolder.isLayoutChangeIndicationEnabled()) {
-            ToastMessageUtils.showMessage(this, newSubtype.getNameResId());
+    protected void onCurrentInputMethodSubtypeChanged(
+            InputMethodSubtype newSubtype) {
+
+        super.onCurrentInputMethodSubtypeChanged(
+                newSubtype
+        );
+
+        if (preferencesHolder
+                .isLayoutChangeIndicationEnabled()) {
+
+            ToastMessageUtils.showMessage(
+                    this,
+                    newSubtype.getNameResId()
+            );
         }
-        suggestionsManager.onInputMethodSubtypeChanged(newSubtype);
-        keyboardInputHandler.onInputMethodSubtypeChanged(newSubtype, suggestionsManager.isSuggestionsAllowed());
+
+        /*
+         * Keep the native dictionary language synchronized
+         * with the active keyboard subtype.
+         */
+        suggestionsManager
+                .onInputMethodSubtypeChanged(
+                        newSubtype
+                );
+
+        keyboardInputHandler
+                .onInputMethodSubtypeChanged(
+                        newSubtype,
+                        suggestionsManager
+                                .isSuggestionsAllowed()
+                );
+
         if (inputView != null) {
-            inputView.onInputMethodSubtypeChanged(newSubtype, suggestionsManager.isSuggestionsAllowed());
+
+            inputView
+                    .onInputMethodSubtypeChanged(
+                            newSubtype,
+                            suggestionsManager
+                                    .isSuggestionsAllowed()
+                    );
         }
+
         updateMetaState();
     }
 
     @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
+    public boolean onKeyDown(
+            int keyCode,
+            KeyEvent event) {
+
         switch (keyCode) {
+
             case KeyEvent.KEYCODE_BACK:
+
                 if (isInputViewShown()) {
-                    if (inputView.isEmojiPanelVisible()) {
+
+                    if (inputView != null &&
+                            inputView.isEmojiPanelVisible()) {
+
                         inputView.hideEmojiPanel();
-                    } else if (suggestionsManager.isInlineSuggestionsShown()) {
-                        suggestionsManager.cancelInlineSuggestions();
+
                     } else {
+
                         requestHideSelf(0);
                     }
+
                     return true;
                 }
+
                 return false;
+
             case KeyEvent.KEYCODE_VOLUME_UP:
             case KeyEvent.KEYCODE_VOLUME_DOWN:
+
                 return false;
         }
 
-        InputConnection inputConnection = getCurrentInputConnection();
-        EditorInfo editorInfo = getCurrentInputEditorInfo();
+        InputConnection inputConnection =
+                getCurrentInputConnection();
 
-        if (editorInfo != null && directInputEditors.contains(editorInfo.packageName))
+        EditorInfo editorInfo =
+                getCurrentInputEditorInfo();
+
+        if (editorInfo != null &&
+                directInputEditors.contains(
+                        editorInfo.packageName
+                )) {
+
             return false;
+        }
 
-        // Meta keys and shortcuts
-        if (metaKeyManager.handleKeyDown(keyCode, event, inputConnection))
+        /*
+         * Meta keys and shortcuts.
+         */
+        if (metaKeyManager.handleKeyDown(
+                keyCode,
+                event,
+                inputConnection
+        )) {
+
             return true;
+        }
 
-        // Skip CTRL+X shortcuts
-        if (event.isCtrlPressed() && !metaKeyManager.isSymFixed())
+        /*
+         * Skip CTRL+X shortcuts.
+         */
+        if (event.isCtrlPressed() &&
+                !metaKeyManager.isSymFixed()) {
+
             return false;
+        }
 
-        if (inputConnection == null)
+        if (inputConnection == null) {
+
             return false;
+        }
 
-        // Emulate D-pad and some media keys
+        /*
+         * SymPad / D-pad handling.
+         */
         if (metaKeyManager.isSymFixed()) {
-            keyboardInputHandler.resetComposing(inputConnection);
-            if (symPadInputHandler.handleKeyDown(keyCode, event, inputConnection)) {
+
+            keyboardInputHandler
+                    .resetComposing(
+                            inputConnection
+                    );
+
+            if (symPadInputHandler.handleKeyDown(
+                    keyCode,
+                    event,
+                    inputConnection
+            )) {
+
                 symPadJustUsed = true;
+
                 return true;
             }
         }
 
         switch (keyCode) {
+
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_CTRL_LEFT:
             case KeyEvent.KEYCODE_CTRL_RIGHT:
+
                 return false;
         }
 
-        // Handle text input in Keyboard mode
-        if (editorInfo != null && (editorInfo.inputType != InputType.TYPE_NULL || keyboardInputHandler.isInRawInputMode())) {
-            // Handle emoji shortcuts
-            if (inputView != null && inputView.isEmojiPanelVisible() && inputView.handleEmojiShortcut(keyCode)) {
+        /*
+         * Normal keyboard input.
+         */
+        if (editorInfo != null &&
+                (
+                        editorInfo.inputType !=
+                                InputType.TYPE_NULL
+                                ||
+                                keyboardInputHandler
+                                        .isInRawInputMode()
+                )) {
+
+            /*
+             * Emoji shortcuts.
+             */
+            if (inputView != null &&
+                    inputView.isEmojiPanelVisible() &&
+                    inputView.handleEmojiShortcut(
+                            keyCode
+                    )) {
+
                 return true;
             }
-            // Handle input
-            if (keyboardInputHandler.handleKeyDown(keyCode, event, inputConnection,
-                    metaKeyManager.isShiftEnabled(), metaKeyManager.isAltEnabled())) {
-                // Show input view if it's hidden
+
+            /*
+             * Native PocketBoard input handler.
+             *
+             * Suggestions are refreshed through the normal
+             * selection/composing lifecycle.
+             */
+            if (keyboardInputHandler.handleKeyDown(
+                    keyCode,
+                    event,
+                    inputConnection,
+                    metaKeyManager.isShiftEnabled(),
+                    metaKeyManager.isAltEnabled()
+            )) {
+
                 if (!isInputViewShown()) {
-                    requestShowSelf(InputMethodManager.SHOW_FORCED);
+
+                    requestShowSelf(
+                            InputMethodManager.SHOW_FORCED
+                    );
                 }
             }
+
         } else {
+
             return false;
         }
 
@@ -234,28 +440,56 @@ public class PocketBoardIME extends InputMethodService {
     }
 
     @Override
-    public boolean onKeyUp(int keyCode, KeyEvent event) {
+    public boolean onKeyUp(
+            int keyCode,
+            KeyEvent event) {
+
         switch (keyCode) {
+
             case KeyEvent.KEYCODE_VOLUME_UP:
             case KeyEvent.KEYCODE_VOLUME_DOWN:
+
                 return false;
         }
 
-        InputConnection inputConnection = getCurrentInputConnection();
-        EditorInfo editorInfo = getCurrentInputEditorInfo();
+        InputConnection inputConnection =
+                getCurrentInputConnection();
 
-        if (editorInfo != null && directInputEditors.contains(editorInfo.packageName))
+        EditorInfo editorInfo =
+                getCurrentInputEditorInfo();
+
+        if (editorInfo != null &&
+                directInputEditors.contains(
+                        editorInfo.packageName
+                )) {
+
             return false;
+        }
 
-        // Meta keys
-        if (metaKeyManager.handleKeyUp(keyCode, event, inputConnection)) {
-            if (keyCode == KeyEvent.KEYCODE_SYM || keyCode == KeyEvent.KEYCODE_PICTSYMBOLS) {
-                if (!symPadJustUsed && !metaKeyManager.isSymFixed()) {
-                    // Toggle emoji panel on SYM release
+        /*
+         * Meta keys.
+         */
+        if (metaKeyManager.handleKeyUp(
+                keyCode,
+                event,
+                inputConnection
+        )) {
+
+            if (keyCode ==
+                    KeyEvent.KEYCODE_SYM ||
+                    keyCode ==
+                            KeyEvent.KEYCODE_PICTSYMBOLS) {
+
+                if (!symPadJustUsed &&
+                        !metaKeyManager.isSymFixed()) {
+
                     if (isInputViewShown()) {
+
                         inputView.toggleEmojiPanel();
                     }
+
                 } else {
+
                     symPadJustUsed = false;
                 }
             }
@@ -263,173 +497,354 @@ public class PocketBoardIME extends InputMethodService {
             return true;
         }
 
-        // Skip CTRL+X shortcuts
-        if (event.isCtrlPressed() && !metaKeyManager.isSymFixed())
-            return false;
+        /*
+         * Skip CTRL+X shortcuts.
+         */
+        if (event.isCtrlPressed() &&
+                !metaKeyManager.isSymFixed()) {
 
-        if (inputConnection == null)
             return false;
+        }
 
-        // Emulate D-pad and some media keys
-        if (metaKeyManager.isSymFixed() || symPadInputHandler.hasPressedKey(keyCode)) {
-            if (symPadInputHandler.handleKeyUp(keyCode, event, inputConnection)) {
+        if (inputConnection == null) {
+
+            return false;
+        }
+
+        /*
+         * SymPad / D-pad handling.
+         */
+        if (metaKeyManager.isSymFixed() ||
+                symPadInputHandler.hasPressedKey(
+                        keyCode
+                )) {
+
+            if (symPadInputHandler.handleKeyUp(
+                    keyCode,
+                    event,
+                    inputConnection
+            )) {
+
                 return true;
             }
         }
 
         switch (keyCode) {
+
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_CTRL_LEFT:
             case KeyEvent.KEYCODE_CTRL_RIGHT:
+
                 return false;
         }
 
-        return editorInfo != null && (editorInfo.inputType != InputType.TYPE_NULL || keyboardInputHandler.isInRawInputMode()) &&
-                keyboardInputHandler.handleKeyUp(keyCode, event);
+        return editorInfo != null &&
+                (
+                        editorInfo.inputType !=
+                                InputType.TYPE_NULL
+                                ||
+                                keyboardInputHandler
+                                        .isInRawInputMode()
+                ) &&
+                keyboardInputHandler.handleKeyUp(
+                        keyCode,
+                        event
+                );
     }
 
     @Override
-    public void onUpdateSelection(int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd, int candidatesStart, int candidatesEnd) {
-        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd);
-        keyboardInputHandler.onUpdateSelection(getCurrentInputConnection(), newSelStart, newSelEnd, candidatesEnd);
+    public void onUpdateSelection(
+            int oldSelStart,
+            int oldSelEnd,
+            int newSelStart,
+            int newSelEnd,
+            int candidatesStart,
+            int candidatesEnd) {
+
+        super.onUpdateSelection(
+                oldSelStart,
+                oldSelEnd,
+                newSelStart,
+                newSelEnd,
+                candidatesStart,
+                candidatesEnd
+        );
+
+        keyboardInputHandler.onUpdateSelection(
+                getCurrentInputConnection(),
+                newSelStart,
+                newSelEnd,
+                candidatesEnd
+        );
+
         updateMetaState();
+
+        /*
+         * This is one of the main entry points for the native
+         * PocketBoard Suggestions/Correction engine.
+         */
         suggestionsManager.update();
     }
 
-    public void moveCursor(int offset, int metaState) {
-        InputConnection ic = getCurrentInputConnection();
-        if (ic == null || offset == 0) return;
+    public void moveCursor(
+            int offset,
+            int metaState) {
 
-        long eventTime = SystemClock.uptimeMillis();
-        int repeatCount = Math.abs(offset);
-        int keyCode = (offset > 0) ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-        boolean isAltPressed = (metaState & KeyEvent.META_ALT_ON) != 0;
-        boolean isShiftPressed = (metaState & KeyEvent.META_SHIFT_ON) != 0;
-        boolean hasSelectedText = !TextUtils.isEmpty(ic.getSelectedText(0));
+        InputConnection ic =
+                getCurrentInputConnection();
 
-        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && !hasSelectedText && TextUtils.isEmpty(ic.getTextAfterCursor(1, 0))) {
-            return;
-        } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && !hasSelectedText && TextUtils.isEmpty(ic.getTextBeforeCursor(1, 0))) {
+        if (ic == null ||
+                offset == 0) {
+
             return;
         }
 
+        long eventTime =
+                SystemClock.uptimeMillis();
 
-        if (isAltPressed)
-            ic.sendKeyEvent(InputUtils.createKeyEvent(eventTime, KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.ACTION_DOWN, 0, metaState));
-        if (isShiftPressed)
-            ic.sendKeyEvent(InputUtils.createKeyEvent(eventTime, KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.ACTION_DOWN, 0, metaState));
+        int repeatCount =
+                Math.abs(offset);
 
-        for (int i = 0; i < repeatCount; i++) {
-            ic.sendKeyEvent(InputUtils.createKeyEvent(eventTime, keyCode, KeyEvent.ACTION_DOWN, i, metaState));
+        int keyCode =
+                offset > 0
+                        ? KeyEvent.KEYCODE_DPAD_RIGHT
+                        : KeyEvent.KEYCODE_DPAD_LEFT;
+
+        boolean isAltPressed =
+                (metaState &
+                        KeyEvent.META_ALT_ON) != 0;
+
+        boolean isShiftPressed =
+                (metaState &
+                        KeyEvent.META_SHIFT_ON) != 0;
+
+        boolean hasSelectedText =
+                !TextUtils.isEmpty(
+                        ic.getSelectedText(0)
+                );
+
+        if (keyCode ==
+                KeyEvent.KEYCODE_DPAD_RIGHT &&
+                !hasSelectedText &&
+                TextUtils.isEmpty(
+                        ic.getTextAfterCursor(
+                                1,
+                                0
+                        )
+                )) {
+
+            return;
+
+        } else if (
+                keyCode ==
+                        KeyEvent.KEYCODE_DPAD_LEFT &&
+                        !hasSelectedText &&
+                        TextUtils.isEmpty(
+                                ic.getTextBeforeCursor(
+                                        1,
+                                        0
+                                )
+                        )) {
+
+            return;
         }
 
-        ic.sendKeyEvent(InputUtils.createKeyEvent(eventTime, keyCode, KeyEvent.ACTION_UP, 0, metaState));
+        if (isAltPressed) {
 
-        if (isAltPressed)
-            ic.sendKeyEvent(InputUtils.createKeyEvent(eventTime, KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.ACTION_UP, 0, 0));
-        if (isShiftPressed)
-            ic.sendKeyEvent(InputUtils.createKeyEvent(eventTime, KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.ACTION_UP, 0, 0));
-    }
-
-    @Override
-    public void onDisplayCompletions(CompletionInfo[] completions) {
-        suggestionsManager.update(completions);
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    @Nullable
-    @Override
-    public InlineSuggestionsRequest onCreateInlineSuggestionsRequest(@NonNull Bundle uiExtras) {
-        if (!preferencesHolder.isInlineSuggestionsEnabled()) {
-            return null;
+            ic.sendKeyEvent(
+                    InputUtils.createKeyEvent(
+                            eventTime,
+                            KeyEvent.KEYCODE_ALT_LEFT,
+                            KeyEvent.ACTION_DOWN,
+                            0,
+                            metaState
+                    )
+            );
         }
 
-        UiVersions.StylesBuilder stylesBuilder = UiVersions.newStylesBuilder();
+        if (isShiftPressed) {
 
-        InlineSuggestionUi.Style style = InlineSuggestionUi
-                .newStyleBuilder()
-                .build();
-        stylesBuilder.addStyle(style);
-        Bundle stylesBundle = stylesBuilder.build();
-
-        InlinePresentationSpec spec = new InlinePresentationSpec.Builder(
-                new Size(0, 0),
-                new Size(Integer.MAX_VALUE, Integer.MAX_VALUE)
-        )
-                .setStyle(stylesBundle)
-                .build();
-
-        return new InlineSuggestionsRequest.Builder(Collections.singletonList(spec))
-                .setMaxSuggestionCount(InlineSuggestionsRequest.SUGGESTION_COUNT_UNLIMITED)
-                .setExtras(uiExtras)
-                .build();
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    @Override
-    public boolean onInlineSuggestionsResponse(@NonNull InlineSuggestionsResponse response) {
-        if (isInputViewShown()) {
-            List<InlineSuggestion> inlineSuggestions = response.getInlineSuggestions();
-            if (inlineSuggestions != null && !inlineSuggestions.isEmpty()) {
-                return suggestionsManager.showInlineSuggestions(inlineSuggestions);
-            } else {
-                suggestionsManager.cancelInlineSuggestions();
-            }
+            ic.sendKeyEvent(
+                    InputUtils.createKeyEvent(
+                            eventTime,
+                            KeyEvent.KEYCODE_SHIFT_LEFT,
+                            KeyEvent.ACTION_DOWN,
+                            0,
+                            metaState
+                    )
+            );
         }
 
-        return false;
+        for (int i = 0;
+             i < repeatCount;
+             i++) {
+
+            ic.sendKeyEvent(
+                    InputUtils.createKeyEvent(
+                            eventTime,
+                            keyCode,
+                            KeyEvent.ACTION_DOWN,
+                            i,
+                            metaState
+                    )
+            );
+        }
+
+        ic.sendKeyEvent(
+                InputUtils.createKeyEvent(
+                        eventTime,
+                        keyCode,
+                        KeyEvent.ACTION_UP,
+                        0,
+                        metaState
+                )
+        );
+
+        if (isAltPressed) {
+
+            ic.sendKeyEvent(
+                    InputUtils.createKeyEvent(
+                            eventTime,
+                            KeyEvent.KEYCODE_ALT_LEFT,
+                            KeyEvent.ACTION_UP,
+                            0,
+                            0
+                    )
+            );
+        }
+
+        if (isShiftPressed) {
+
+            ic.sendKeyEvent(
+                    InputUtils.createKeyEvent(
+                            eventTime,
+                            KeyEvent.KEYCODE_SHIFT_LEFT,
+                            KeyEvent.ACTION_UP,
+                            0,
+                            0
+                    )
+            );
+        }
+    }
+
+    /*
+     * Android can provide editor completions.
+     *
+     * PocketBoard deliberately does not use those completions
+     * as its suggestion source. SuggestionsManager simply
+     * refreshes the native dictionary engine.
+     */
+    @Override
+    public void onDisplayCompletions(
+            CompletionInfo[] completions) {
+
+        suggestionsManager.update(
+                completions
+        );
     }
 
     @Override
     public void hideStatusIcon() {
+
         super.hideStatusIcon();
+
         symPadJustUsed = true;
     }
 
     private void updateMetaState() {
-        // Auto-capitalize
+
+        /*
+         * Auto-capitalize.
+         */
         if (autoCapitalization) {
-            EditorInfo editorInfo = getCurrentInputEditorInfo();
-            if (editorInfo != null && (editorInfo.inputType != InputType.TYPE_NULL || keyboardInputHandler.isInRawInputMode())) {
-                InputConnection inputConnection = getCurrentInputConnection();
+
+            EditorInfo editorInfo =
+                    getCurrentInputEditorInfo();
+
+            if (editorInfo != null &&
+                    (
+                            editorInfo.inputType !=
+                                    InputType.TYPE_NULL
+                                    ||
+                                    keyboardInputHandler
+                                            .isInRawInputMode()
+                    )) {
+
+                InputConnection inputConnection =
+                        getCurrentInputConnection();
+
                 if (inputConnection != null) {
-                    if (inputConnection.getCursorCapsMode(TextUtils.CAP_MODE_SENTENCES) > 0 &&
-                            InputUtils.isSuggestionAllowedEditor(editorInfo)) {
-                        metaKeyManager.enableShift();
+
+                    if (
+                            inputConnection
+                                    .getCursorCapsMode(
+                                            TextUtils
+                                                    .CAP_MODE_SENTENCES
+                                    ) > 0
+                                    &&
+                                    InputUtils
+                                            .isSuggestionAllowedEditor(
+                                                    editorInfo
+                                            )
+                    ) {
+
+                        metaKeyManager
+                                .enableShift();
+
                     } else {
-                        metaKeyManager.disableShift();
+
+                        metaKeyManager
+                                .disableShift();
                     }
+
                     metaKeyManager.updateAlt();
                 }
+
             }
+
         } else {
+
             metaKeyManager.updateShift();
+
             metaKeyManager.updateAlt();
         }
     }
 
-    public InputMethodManager getInputMethodManager() {
+    public InputMethodManager
+    getInputMethodManager() {
+
         return inputMethodManager;
     }
 
-    public PreferencesHolder getPreferencesHolder() {
+    public PreferencesHolder
+    getPreferencesHolder() {
+
         return preferencesHolder;
     }
 
-    public MetaKeyManager getMetaKeyManager() {
+    public MetaKeyManager
+    getMetaKeyManager() {
+
         return metaKeyManager;
     }
 
-    public SuggestionsManager getSuggestionsManager() {
+    public SuggestionsManager
+    getSuggestionsManager() {
+
         return suggestionsManager;
     }
 
-    public KeyboardInputHandler getKeyboardInputHandler() {
+    public KeyboardInputHandler
+    getKeyboardInputHandler() {
+
         return keyboardInputHandler;
     }
 
     public boolean isShouldShowIme() {
-        if (preferencesHolder.isShowPanelEnabled()) {
+
+        if (preferencesHolder
+                .isShowPanelEnabled()) {
+
             return Settings.Secure.getInt(
                     getContentResolver(),
                     "show_ime_with_hard_keyboard",
