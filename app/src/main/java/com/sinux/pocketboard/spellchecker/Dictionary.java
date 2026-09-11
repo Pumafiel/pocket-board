@@ -37,29 +37,39 @@ public final class Dictionary {
     public String getFlags(int index) {
         if (index < 0 ||
                 index >= flags.length) {
-
             return "";
         }
 
-        return flags[index];
+        String value =
+                flags[index];
+
+        return value != null
+                ? value
+                : "";
     }
 
-    public boolean contains(String word) {
-        return word != null
-                && Arrays.binarySearch(
-                        words,
-                        word
-                ) >= 0;
+    public boolean contains(
+            String word) {
+
+        return indexOf(word) >= 0;
     }
 
-    public int indexOf(String word) {
-        if (word == null) {
+    public int indexOf(
+            String word) {
+
+        if (word == null ||
+                word.isEmpty()) {
             return -1;
         }
 
-        return Arrays.binarySearch(
-                words,
-                word
-        );
+        int result =
+                Arrays.binarySearch(
+                        words,
+                        word
+                );
+
+        return result >= 0
+                ? result
+                : -1;
     }
 }
