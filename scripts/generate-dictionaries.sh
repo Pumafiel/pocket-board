@@ -21,7 +21,6 @@ pwd
 )"
 
 WORK_DIR="${ROOT_DIR}/build/pocketboard-dictionaries"
-
 OUTPUT_DIR="${ROOT_DIR}/app/src/main/assets/dictionaries"
 
 WOOORM_BASE="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries"
@@ -41,13 +40,10 @@ Required commands
 ------------------------------------------------------------
 
 require_command() {
-
 local command_name="$1"
 
 if ! command -v "${command_name}" >/dev/null 2>&1; then
-
     echo "ERROR: command not found: ${command_name}"
-
     exit 1
 fi
 
@@ -69,7 +65,6 @@ Download helper
 ------------------------------------------------------------
 
 download() {
-
 local url="$1"
 local destination="$2"
 
@@ -92,10 +87,8 @@ curl \
     "${url}"
 
 if [[ ! -s "${destination}" ]]; then
-
     echo "ERROR: downloaded file is empty:"
     echo "  ${destination}"
-
     exit 1
 fi
 
@@ -110,6 +103,7 @@ echo ""
 echo "============================================================"
 echo " Downloading PocketBoard Hunspell dictionaries"
 echo "============================================================"
+echo ""
 
 Argentina
 wooorm/dictionaries publishes dictionary-es-ar as the
@@ -148,7 +142,6 @@ Validation
 ------------------------------------------------------------
 
 validate_pair() {
-
 local language="$1"
 local dic="$2"
 local aff="$3"
@@ -157,18 +150,14 @@ echo ""
 echo "Validating ${language}"
 
 if [[ ! -s "${dic}" ]]; then
-
     echo "ERROR: missing .dic:"
     echo "${dic}"
-
     exit 1
 fi
 
 if [[ ! -s "${aff}" ]]; then
-
     echo "ERROR: missing .aff:"
     echo "${aff}"
-
     exit 1
 fi
 
@@ -180,11 +169,9 @@ first_line="$(
 )"
 
 if ! [[ "${first_line}" =~ ^[0-9]+$ ]]; then
-
     echo "ERROR: invalid Hunspell .dic header:"
     echo "${dic}"
     echo "First line: ${first_line}"
-
     exit 1
 fi
 
@@ -192,10 +179,8 @@ if ! grep -qE \
     '^(SET|LANG|PFX|SFX|REP|MAP|TRY)([[:space:]]|$)' \
     "${aff}"
 then
-
     echo "ERROR: invalid Hunspell .aff:"
     echo "${aff}"
-
     exit 1
 fi
 
@@ -226,7 +211,6 @@ Generate plain word list
 ------------------------------------------------------------
 
 generate_dictionary() {
-
 local language="$1"
 local dic="$2"
 local aff="$3"
@@ -247,14 +231,11 @@ echo ""
 echo "============================================================"
 echo " Expanding ${language} with Hunspell .aff rules"
 echo "============================================================"
+echo ""
 
 #
-# unmunch syntax:
-#
-#     unmunch dictionary.dic dictionary.aff
-#
-# This is the stage that applies the .aff rules to the
-# flagged entries in .dic.
+# unmunch expands the entries in the .dic file using the
+# affix rules from the corresponding .aff file.
 #
 
 unmunch \
@@ -263,9 +244,7 @@ unmunch \
     > "${raw_output}"
 
 if [[ ! -s "${raw_output}" ]]; then
-
     echo "ERROR: unmunch generated no words for ${language}."
-
     exit 1
 fi
 
@@ -275,7 +254,7 @@ fi
 # - remove CR
 # - remove empty lines
 # - lowercase
-# - retain Unicode letters
+# - retain letters
 # - retain apostrophes and hyphens
 # - sort unique
 #
@@ -291,10 +270,8 @@ sed \
     > "${normalized_output}"
 
 if [[ ! -s "${normalized_output}" ]]; then
-
     echo "ERROR: normalized dictionary is empty:"
     echo "${language}"
-
     exit 1
 fi
 
@@ -312,11 +289,10 @@ count="$(
 
 echo ""
 echo "${language}: ${count} words"
+echo "Output: ${output}"
 
 if [[ "${count}" -lt 1000 ]]; then
-
     echo "ERROR: dictionary ${language} is suspiciously small."
-
     exit 1
 fi
 
@@ -342,28 +318,25 @@ generate_dictionary
 "${OUTPUT_DIR}/de-de.dict"
 
 ------------------------------------------------------------
-Required Spanish forms
+Required word checks
 ------------------------------------------------------------
 
 check_word() {
-
 local language="$1"
 local word="$2"
 local dictionary="${OUTPUT_DIR}/${language}.dict"
 
 if ! grep \
-        -Fqx \
-        "${word}" \
-        <(tail -n +2 "${dictionary}")
+    -Fqx \
+    "${word}" \
+    <(tail -n +2 "${dictionary}")
 then
-
     echo ""
     echo "ERROR: required word missing"
     echo "Language: ${language}"
     echo "Word:     ${word}"
     echo "File:     ${dictionary}"
     echo ""
-
     exit 1
 fi
 
@@ -376,6 +349,9 @@ echo ""
 echo "============================================================"
 echo " Required word checks"
 echo "============================================================"
+echo ""
+
+Argentine Spanish
 
 check_word "es-AR" "hago"
 check_word "es-AR" "hacer"
@@ -386,13 +362,21 @@ check_word "es-AR" "tenés"
 check_word "es-AR" "podés"
 check_word "es-AR" "hacés"
 
+English
+
 check_word "en-en" "the"
 check_word "en-en" "have"
 check_word "en-en" "hello"
 
+German
+
 check_word "de-de" "ich"
 check_word "de-de" "habe"
 check_word "de-de" "morgen"
+
+------------------------------------------------------------
+Final report
+------------------------------------------------------------
 
 echo ""
 echo "============================================================"
@@ -405,11 +389,10 @@ for dictionary in
 "${OUTPUT_DIR}/en-en.dict"
 "${OUTPUT_DIR}/de-de.dict"
 do
-
 echo "$(basename "${dictionary}")"
-echo "  Size:  $(du -h "${dictionary}" | cut -f1)"
-echo "  Words: $(tail -n +2 "${dictionary}" | wc -l)"
+echo " Size: $(du -h "${dictionary}" | cut -f1)"
+echo " Words: $(tail -n +2 "${dictionary}" | wc -l)"
 echo ""
-
-
 done
+
+echo "Done."
