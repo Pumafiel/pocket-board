@@ -10,7 +10,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -29,38 +28,46 @@ public class DictionaryManager {
             250000;
 
     private static final int MAX_PREFIX_RESULTS =
-            20;
+            3;
 
     private static final int MAX_CORRECTION_CANDIDATES =
             600;
 
-    private static final int MAX_LENGTH_DELTA =
-            2;
-
     private static final int MAX_CORRECTION_RESULTS =
             3;
 
+    private static final int MAX_WORD_LENGTH =
+            64;
+
+    private static final String ALPHABET =
+            "abcdefghijklmnopqrstuvwxyz";
+
+    private static final String SPANISH_EXTRA =
+            "áéíóúñ";
+
+    private static final String GERMAN_EXTRA =
+            "äöüß";
+
     private final Context context;
 
-    private final Map<String, Dictionary> dictionaries =
+    private final Map<String, Dictionary>
+            dictionaries =
             new HashMap<>();
 
-    private final Map<String, DictionaryIndex> indexes =
-            new HashMap<>();
-
-    private final CorrectionEngine correctionEngine =
+    private final CorrectionEngine
+            correctionEngine =
             new CorrectionEngine();
 
-    public DictionaryManager(Context context) {
+    public DictionaryManager(
+            Context context) {
 
         this.context =
                 context.getApplicationContext();
     }
 
-
     /*
      * ============================================================
-     * SUGGESTIONS / CORRECTIONS
+     * PUBLIC API
      * ============================================================
      */
 
@@ -107,136 +114,102 @@ public class DictionaryManager {
                 );
 
         /*
-         * --------------------------------------------------------
-         * 1. PREFIX SUGGESTIONS
-         * --------------------------------------------------------
+         * ========================================================
+         * 1. COMPLETION
+         * ========================================================
          *
-         * El prefijo sigue teniendo prioridad.
-         *
-         * Esto es importante para el uso normal del teclado:
-         *
-         *     ma -> mañana
-         *     man -> mañana
-         *     cas -> casa
+         * Prefix suggestions are completely independent from
+         * spelling correction.
          */
 
         List<String> prefixResults =
                 getPrefixSuggestions(
                         dictionary,
                         normalizedWord,
-                        Math.min(
-                                resultLimit,
-                                MAX_PREFIX_RESULTS
-                        )
+                        resultLimit
                 );
 
         /*
-         * Si tenemos suficientes resultados de prefijo,
-         * no necesitamos ejecutar el motor de corrección.
+         * If the user is typing a prefix, completion wins.
+         *
+         * We do not send completion candidates through the
+         * correction engine.
          */
 
-        if (prefixResults.size()
-                >= resultLimit) {
+        if (!dictionary.contains(
+                normalizedWord
+        )) {
+
+            if (!prefixResults.isEmpty()) {
+                return applyCapitalization(
+                        prefixResults,
+                        word
+                );
+            }
+        }
+
+        /*
+         * An exact dictionary word is already correct.
+         *
+         * We return other completions only when there are any,
+         * otherwise no correction is necessary.
+         */
+
+        if (dictionary.contains(
+                normalizedWord
+        )) {
+
+            List<String> alternatives =
+                    new ArrayList<>();
+
+            for (String candidate :
+                    prefixResults) {
+
+                if (!candidate.equals(
+                        normalizedWord
+                )) {
+                    alternatives.add(
+                            candidate
+                    );
+                }
+            }
 
             return applyCapitalization(
-                    prefixResults,
+                    alternatives,
                     word
             );
         }
 
         /*
-         * --------------------------------------------------------
-         * 2. CANDIDATOS DE CORRECCIÓN
-         * --------------------------------------------------------
-         *
-         * Generamos únicamente candidatos plausibles:
-         *
-         * - misma palabra
-         * - eliminación de una letra
-         * - inserción de una letra
-         * - sustitución
-         * - transposición
-         * - repetición accidental
-         * - teclas vecinas
-         * - reglas lingüísticas específicas
-         *
-         * Después CorrectionEngine decide cuáles son mejores.
+         * ========================================================
+         * 2. CORRECTION
+         * ========================================================
          */
 
         List<String> candidates =
                 collectCorrectionCandidates(
                         normalizedWord,
-                        language
+                        language,
+                        dictionary
                 );
 
-        /*
-         * Los prefijos ya encontrados también participan en el
-         * ranking final, pero conservamos su prioridad.
-         */
-
-        LinkedHashSet<String> combined =
-                new LinkedHashSet<>();
-
-        combined.addAll(
-                prefixResults
-        );
-
-        combined.addAll(
-                candidates
-        );
-
-        if (combined.isEmpty()) {
-
+        if (candidates.isEmpty()) {
             return new ArrayList<>();
         }
-
-        /*
-         * --------------------------------------------------------
-         * 3. RANKING
-         * --------------------------------------------------------
-         */
 
         List<String> ranked =
                 correctionEngine.rankCandidates(
                         normalizedWord,
-                        new ArrayList<>(
-                                combined
-                        ),
+                        candidates,
                         language,
                         resultLimit
                 );
-
-        /*
-         * Si el motor no encontró candidatos suficientemente
-         * buenos pero sí tenemos prefijos, devolvemos éstos.
-         */
-
-        if (ranked.isEmpty()) {
-
-            return applyCapitalization(
-                    prefixResults,
-                    word
-            );
-        }
-
-        /*
-         * --------------------------------------------------------
-         * 4. CAPITALIZACIÓN
-         * --------------------------------------------------------
-         */
 
         return applyCapitalization(
                 ranked,
                 word
         );
     }
-
-
-    /*
-     * ============================================================
-     * CONTAINS
-     * ============================================================
-     */
 
     public synchronized boolean contains(
             String word,
@@ -269,7 +242,6 @@ public class DictionaryManager {
         );
     }
 
-
     /*
      * ============================================================
      * DICTIONARY LOADING
@@ -298,20 +270,8 @@ public class DictionaryManager {
                 dictionary
         );
 
-        /*
-         * El índice se construye una sola vez.
-         */
-
-        indexes.put(
-                language,
-                new DictionaryIndex(
-                        dictionary
-                )
-        );
-
         return dictionary;
     }
-
 
     private Dictionary loadDictionary(
             String language) {
@@ -346,10 +306,12 @@ public class DictionaryManager {
             String header =
                     reader.readLine();
 
+            /*
+             * The build task creates this exact header.
+             */
             if (!FORMAT_HEADER.equals(
                     header
             )) {
-
                 return emptyDictionary();
             }
 
@@ -361,14 +323,11 @@ public class DictionaryManager {
 
                 if (line.isEmpty() ||
                         line.startsWith("#")) {
-
                     continue;
                 }
 
                 int separator =
-                        line.indexOf(
-                                '\t'
-                        );
+                        line.indexOf('\t');
 
                 String word;
                 String wordFlags;
@@ -400,21 +359,16 @@ public class DictionaryManager {
                 if (!isValidWord(
                         word
                 )) {
-
                     continue;
                 }
 
-                words.add(
-                        word
-                );
-
+                words.add(word);
                 flags.add(
                         wordFlags.trim()
                 );
 
-                if (words.size()
-                        >= MAX_DICTIONARY_WORDS) {
-
+                if (words.size() >=
+                        MAX_DICTIONARY_WORDS) {
                     break;
                 }
             }
@@ -438,24 +392,19 @@ public class DictionaryManager {
                         new String[0]
                 );
 
-        /*
-         * El build ya entrega los datos ordenados.
-         *
-         * Aun así ordenamos defensivamente para garantizar
-         * el contrato de Dictionary.binarySearch().
-         */
-
         sortEntries(
                 wordArray,
                 flagArray
         );
 
-        return new Dictionary(
+        /*
+         * Remove duplicate words after sorting.
+         */
+        return compactDictionary(
                 wordArray,
                 flagArray
         );
     }
-
 
     private void sortEntries(
             String[] words,
@@ -501,6 +450,55 @@ public class DictionaryManager {
         }
     }
 
+    private Dictionary compactDictionary(
+            String[] words,
+            String[] flags) {
+
+        if (words.length == 0) {
+            return emptyDictionary();
+        }
+
+        List<String> compactWords =
+                new ArrayList<>();
+
+        List<String> compactFlags =
+                new ArrayList<>();
+
+        String previous = null;
+
+        for (int i = 0;
+             i < words.length;
+             i++) {
+
+            String current =
+                    words[i];
+
+            if (current.equals(
+                    previous
+            )) {
+                continue;
+            }
+
+            compactWords.add(
+                    current
+            );
+
+            compactFlags.add(
+                    flags[i]
+            );
+
+            previous = current;
+        }
+
+        return new Dictionary(
+                compactWords.toArray(
+                        new String[0]
+                ),
+                compactFlags.toArray(
+                        new String[0]
+                )
+        );
+    }
 
     private Dictionary emptyDictionary() {
 
@@ -510,10 +508,9 @@ public class DictionaryManager {
         );
     }
 
-
     /*
      * ============================================================
-     * PREFIX SEARCH
+     * COMPLETION
      * ============================================================
      */
 
@@ -522,29 +519,29 @@ public class DictionaryManager {
             String prefix,
             int maxResults) {
 
+        List<String> results =
+                new ArrayList<>();
+
         if (dictionary == null ||
                 dictionary.isEmpty() ||
                 prefix == null ||
                 prefix.isEmpty() ||
                 maxResults <= 0) {
 
-            return new ArrayList<>();
+            return results;
         }
 
-        List<String> results =
-                new ArrayList<>(
-                        maxResults
-                );
-
-        int index =
+        int start =
                 findPrefixStart(
                         dictionary,
                         prefix
                 );
 
-        while (
+        for (
+                int index = start;
                 index < dictionary.size() &&
-                results.size() < maxResults
+                        results.size() < maxResults;
+                index++
         ) {
 
             String candidate =
@@ -555,20 +552,16 @@ public class DictionaryManager {
             if (!candidate.startsWith(
                     prefix
             )) {
-
                 break;
             }
 
             results.add(
                     candidate
             );
-
-            index++;
         }
 
         return results;
     }
-
 
     private int findPrefixStart(
             Dictionary dictionary,
@@ -580,12 +573,12 @@ public class DictionaryManager {
 
         while (low < high) {
 
-            int mid =
+            int middle =
                     (low + high) >>> 1;
 
             String candidate =
                     dictionary.get(
-                            mid
+                            middle
                     );
 
             if (candidate.compareTo(
@@ -593,190 +586,88 @@ public class DictionaryManager {
             ) < 0) {
 
                 low =
-                        mid + 1;
+                        middle + 1;
 
             } else {
 
                 high =
-                        mid;
+                        middle;
             }
         }
 
         return low;
     }
 
-
     /*
      * ============================================================
-     * CORRECTION CANDIDATE GENERATION
+     * CORRECTION CANDIDATES
      * ============================================================
+     *
+     * Every candidate must exist EXACTLY in the dictionary.
+     *
+     * We never use prefix matching here.
      */
 
     private List<String> collectCorrectionCandidates(
             String input,
-            String language) {
-
-        DictionaryIndex index =
-                indexes.get(
-                        language
-                );
-
-        if (index == null ||
-                input.isEmpty()) {
-
-            return new ArrayList<>();
-        }
+            String language,
+            Dictionary dictionary) {
 
         LinkedHashSet<String> candidates =
                 new LinkedHashSet<>();
 
-        /*
-         * --------------------------------------------------------
-         * 1. REGLAS LINGÜÍSTICAS ESPECÍFICAS
-         * --------------------------------------------------------
-         *
-         * Se ejecutan antes que las transformaciones generales.
-         *
-         * Para español argentino:
-         *
-         *     manana -> mañana
-         *
-         * La ñ es una letra diferente de n.
-         *
-         * IMPORTANTE:
-         *
-         * No se inventan palabras.
-         * La variante solamente entra si existe exactamente
-         * en el diccionario.
-         */
-
-        addLanguageSpecificCandidates(
+        addLanguageCandidates(
                 input,
                 language,
-                index,
+                dictionary,
                 candidates
         );
-
-        /*
-         * --------------------------------------------------------
-         * 2. Variantes por eliminación
-         * --------------------------------------------------------
-         *
-         * manana -> maana
-         *
-         * Útil para detectar palabras donde falta una letra
-         * respecto del candidato real.
-         */
 
         addDeletionCandidates(
                 input,
-                index,
+                dictionary,
                 candidates
         );
-
-        /*
-         * --------------------------------------------------------
-         * 3. Variantes por inserción
-         * --------------------------------------------------------
-         *
-         * maanana -> manana
-         *
-         * Se genera eliminando cada carácter de la entrada y
-         * buscando esa variante.
-         */
 
         addInsertionCandidates(
                 input,
-                index,
+                language,
+                dictionary,
                 candidates
         );
-
-        /*
-         * --------------------------------------------------------
-         * 4. Transposiciones
-         * --------------------------------------------------------
-         *
-         * manana -> maanna
-         * qeu -> que
-         */
 
         addTranspositionCandidates(
                 input,
-                index,
+                dictionary,
                 candidates
         );
-
-        /*
-         * --------------------------------------------------------
-         * 5. Sustituciones
-         * --------------------------------------------------------
-         *
-         * Se prueban letras normales y letras físicamente
-         * próximas en QWERTY.
-         */
 
         addSubstitutionCandidates(
                 input,
                 language,
-                index,
+                dictionary,
                 candidates
         );
-
-        /*
-         * --------------------------------------------------------
-         * 6. Repeticiones accidentales
-         * --------------------------------------------------------
-         *
-         * helllo -> hello
-         * maaana -> maana
-         */
 
         addRepetitionCandidates(
                 input,
-                index,
+                dictionary,
                 candidates
         );
 
-        /*
-         * --------------------------------------------------------
-         * 7. Variantes con diacríticos
-         * --------------------------------------------------------
-         *
-         * LanguageRules genera las variantes lingüísticas.
-         *
-         * Esto NO significa que una palabra sin tilde sea
-         * automáticamente equivalente a una palabra con tilde.
-         *
-         * La variante debe existir en el diccionario y después
-         * CorrectionEngine decide su score.
-         */
-
-        addDiacriticCandidates(
-                input,
-                language,
-                index,
-                candidates
-        );
-
-        /*
-         * El conjunto está deliberadamente limitado para impedir
-         * que una corrección bloquee el hilo del teclado.
-         *
-         * Las reglas lingüísticas prioritarias ya fueron agregadas
-         * antes de llegar a este límite.
-         */
-
-        if (candidates.size()
-                > MAX_CORRECTION_CANDIDATES) {
+        if (candidates.size() >
+                MAX_CORRECTION_CANDIDATES) {
 
             List<String> limited =
                     new ArrayList<>(
                             candidates
                     );
 
-            return limited.subList(
-                    0,
-                    MAX_CORRECTION_CANDIDATES
+            return new ArrayList<>(
+                    limited.subList(
+                            0,
+                            MAX_CORRECTION_CANDIDATES
+                    )
             );
         }
 
@@ -785,496 +676,10 @@ public class DictionaryManager {
         );
     }
 
-
-    /*
-     * ============================================================
-     * LANGUAGE-SPECIFIC RULES
-     * ============================================================
-     */
-
-    private void addLanguageSpecificCandidates(
+    private void addLanguageCandidates(
             String input,
             String language,
-            DictionaryIndex index,
-            Set<String> candidates) {
-
-        if (input == null ||
-                input.isEmpty() ||
-                index == null) {
-
-            return;
-        }
-
-        /*
-         * --------------------------------------------------------
-         * ESPAÑOL ARGENTINO
-         * --------------------------------------------------------
-         *
-         * n <-> ñ
-         *
-         * Esto es deliberadamente independiente de la eliminación
-         * de diacríticos.
-         *
-         * La ñ no es una n con un simple diacrítico: es una letra
-         * distinta del alfabeto español.
-         *
-         * Ejemplo:
-         *
-         *     manana -> mañana
-         *
-         * Solamente se agrega si "mañana" existe en el diccionario.
-         */
-
-        if ("es-AR".equals(language)) {
-
-            for (int i = 0;
-                 i < input.length();
-                 i++) {
-
-                char current =
-                        input.charAt(
-                                i
-                        );
-
-                char replacement;
-
-                if (current == 'n') {
-
-                    replacement = 'ñ';
-
-                } else if (current == 'ñ') {
-
-                    replacement = 'n';
-
-                } else {
-
-                    continue;
-                }
-
-                String variant =
-                        replaceCharacter(
-                                input,
-                                i,
-                                replacement
-                        );
-
-                /*
-                 * Nunca inventamos candidatos.
-                 *
-                 * La variante solamente entra si existe
-                 * exactamente en el diccionario.
-                 */
-
-                if (index.contains(
-                        variant
-                )) {
-
-                    candidates.add(
-                            variant
-                    );
-                }
-
-                if (candidates.size()
-                        >= MAX_CORRECTION_CANDIDATES) {
-
-                    return;
-                }
-            }
-        }
-    }
-
-
-    /*
-     * ============================================================
-     * DELETE
-     * ============================================================
-     */
-
-    private void addDeletionCandidates(
-            String input,
-            DictionaryIndex index,
-            Set<String> candidates) {
-
-        if (input.length() <= 1) {
-            return;
-        }
-
-        for (int i = 0;
-             i < input.length();
-             i++) {
-
-            String variant =
-                    input.substring(
-                            0,
-                            i
-                    )
-                            +
-                            input.substring(
-                                    i + 1
-                            );
-
-            addIndexMatches(
-                    variant,
-                    index,
-                    candidates
-            );
-
-            if (candidates.size()
-                    >= MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-        }
-    }
-
-
-    /*
-     * ============================================================
-     * INSERT
-     * ============================================================
-     */
-
-    private void addInsertionCandidates(
-            String input,
-            DictionaryIndex index,
-            Set<String> candidates) {
-
-        /*
-         * No generamos todas las letras del alfabeto.
-         *
-         * Buscamos palabras del diccionario que difieren por una
-         * eliminación. Para eso aprovechamos los buckets por
-         * longitud.
-         */
-
-        List<String> lengthCandidates =
-                index.getLengthCandidates(
-                        input.length() + 1
-                );
-
-        for (String candidate :
-                lengthCandidates) {
-
-            if (candidates.size()
-                    >= MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-
-            if (isOneInsertionAway(
-                    input,
-                    candidate
-            )) {
-
-                candidates.add(
-                        candidate
-                );
-            }
-        }
-    }
-
-
-    private boolean isOneInsertionAway(
-            String shorter,
-            String longer) {
-
-        if (longer.length()
-                != shorter.length() + 1) {
-
-            return false;
-        }
-
-        int shortIndex = 0;
-        int longIndex = 0;
-        boolean skipped = false;
-
-        while (
-                shortIndex < shorter.length() &&
-                longIndex < longer.length()
-        ) {
-
-            if (shorter.charAt(
-                    shortIndex
-            ) ==
-                    longer.charAt(
-                            longIndex
-                    )) {
-
-                shortIndex++;
-                longIndex++;
-
-                continue;
-            }
-
-            if (skipped) {
-                return false;
-            }
-
-            skipped = true;
-            longIndex++;
-        }
-
-        return true;
-    }
-
-
-    /*
-     * ============================================================
-     * TRANSPOSE
-     * ============================================================
-     */
-
-    private void addTranspositionCandidates(
-            String input,
-            DictionaryIndex index,
-            Set<String> candidates) {
-
-        if (input.length() < 2) {
-            return;
-        }
-
-        for (int i = 0;
-             i < input.length() - 1;
-             i++) {
-
-            char first =
-                    input.charAt(
-                            i
-                    );
-
-            char second =
-                    input.charAt(
-                            i + 1
-                    );
-
-            if (first == second) {
-                continue;
-            }
-
-            String variant =
-                    input.substring(
-                            0,
-                            i
-                    )
-                            +
-                            second
-                            +
-                            first
-                            +
-                            input.substring(
-                                    i + 2
-                            );
-
-            addIndexMatches(
-                    variant,
-                    index,
-                    candidates
-            );
-
-            if (candidates.size()
-                    >= MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-        }
-    }
-
-
-    /*
-     * ============================================================
-     * SUBSTITUTION
-     * ============================================================
-     */
-
-    private void addSubstitutionCandidates(
-            String input,
-            String language,
-            DictionaryIndex index,
-            Set<String> candidates) {
-
-        /*
-         * Primero probamos las teclas físicamente vecinas.
-         *
-         * Esto cubre errores frecuentes como:
-         *
-         *     holq -> hola
-         */
-
-        for (int i = 0;
-             i < input.length();
-             i++) {
-
-            char typed =
-                    input.charAt(
-                            i
-                    );
-
-            List<Character> neighbors =
-                    getKeyboardNeighbors(
-                            typed
-                    );
-
-            for (Character replacement :
-                    neighbors) {
-
-                if (replacement == null) {
-                    continue;
-                }
-
-                String variant =
-                        replaceCharacter(
-                                input,
-                                i,
-                                replacement
-                        );
-
-                addIndexMatches(
-                        variant,
-                        index,
-                        candidates
-                );
-
-                if (candidates.size()
-                        >= MAX_CORRECTION_CANDIDATES) {
-
-                    return;
-                }
-            }
-        }
-
-        /*
-         * Después buscamos candidatos de igual longitud.
-         *
-         * CorrectionEngine se encargará de penalizar las
-         * sustituciones que no sean plausibles.
-         */
-
-        List<String> sameLength =
-                index.getLengthCandidates(
-                        input.length()
-                );
-
-        for (String candidate :
-                sameLength) {
-
-            if (candidates.size()
-                    >= MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-
-            if (hasSmallSubstitutionDistance(
-                    input,
-                    candidate
-            )) {
-
-                candidates.add(
-                        candidate
-                );
-            }
-        }
-    }
-
-
-    private boolean hasSmallSubstitutionDistance(
-            String first,
-            String second) {
-
-        if (first.length()
-                != second.length()) {
-
-            return false;
-        }
-
-        int differences = 0;
-
-        for (int i = 0;
-             i < first.length();
-             i++) {
-
-            if (first.charAt(i)
-                    != second.charAt(i)) {
-
-                differences++;
-
-                if (differences > 2) {
-                    return false;
-                }
-            }
-        }
-
-        return differences <= 2;
-    }
-
-
-    /*
-     * ============================================================
-     * REPETITIONS
-     * ============================================================
-     */
-
-    private void addRepetitionCandidates(
-            String input,
-            DictionaryIndex index,
-            Set<String> candidates) {
-
-        if (input.length() < 2) {
-            return;
-        }
-
-        /*
-         * Caso:
-         *
-         *     helllo
-         *
-         * eliminamos una de las letras repetidas.
-         */
-
-        for (int i = 0;
-             i < input.length() - 1;
-             i++) {
-
-            if (input.charAt(i)
-                    != input.charAt(i + 1)) {
-
-                continue;
-            }
-
-            String variant =
-                    input.substring(
-                            0,
-                            i
-                    )
-                            +
-                            input.substring(
-                                    i + 1
-                            );
-
-            addIndexMatches(
-                    variant,
-                    index,
-                    candidates
-            );
-
-            if (candidates.size()
-                    >= MAX_CORRECTION_CANDIDATES) {
-
-                return;
-            }
-        }
-    }
-
-
-    /*
-     * ============================================================
-     * DIACRITICS
-     * ============================================================
-     */
-
-    private void addDiacriticCandidates(
-            String input,
-            String language,
-            DictionaryIndex index,
+            Dictionary dictionary,
             Set<String> candidates) {
 
         List<String> variants =
@@ -1283,162 +688,361 @@ public class DictionaryManager {
                         language
                 );
 
-        if (variants == null) {
-            return;
-        }
-
         for (String variant :
                 variants) {
 
-            if (TextUtils.isEmpty(
-                    variant
-            )) {
-
-                continue;
-            }
-
-            addIndexMatches(
+            addExactCandidate(
                     variant,
-                    index,
+                    dictionary,
                     candidates
             );
 
-            if (candidates.size()
-                    >= MAX_CORRECTION_CANDIDATES) {
+            if (candidates.size() >=
+                    MAX_CORRECTION_CANDIDATES) {
+                return;
+            }
+        }
 
+        /*
+         * Spanish n <-> ñ.
+         */
+        if ("es-AR".equals(
+                language
+        )) {
+
+            for (int i = 0;
+                 i < input.length();
+                 i++) {
+
+                char current =
+                        input.charAt(i);
+
+                if (current != 'n' &&
+                        current != 'ñ') {
+                    continue;
+                }
+
+                char replacement =
+                        current == 'n'
+                                ? 'ñ'
+                                : 'n';
+
+                addExactCandidate(
+                        replaceCharacter(
+                                input,
+                                i,
+                                replacement
+                        ),
+                        dictionary,
+                        candidates
+                );
+            }
+        }
+    }
+
+    private void addDeletionCandidates(
+            String input,
+            Dictionary dictionary,
+            Set<String> candidates) {
+
+        for (int i = 0;
+             i < input.length();
+             i++) {
+
+            String variant =
+                    input.substring(
+                            0,
+                            i
+                    ) +
+                    input.substring(
+                            i + 1
+                    );
+
+            addExactCandidate(
+                    variant,
+                    dictionary,
+                    candidates
+            );
+
+            if (candidates.size() >=
+                    MAX_CORRECTION_CANDIDATES) {
                 return;
             }
         }
     }
 
-
-    /*
-     * ============================================================
-     * INDEX LOOKUP
-     * ============================================================
-     */
-
-    private void addIndexMatches(
-            String variant,
-            DictionaryIndex index,
+    private void addInsertionCandidates(
+            String input,
+            String language,
+            Dictionary dictionary,
             Set<String> candidates) {
 
-        if (variant == null ||
-                variant.isEmpty()) {
-
-            return;
-        }
-
-        /*
-         * Primero buscamos coincidencia exacta.
-         *
-         * Las variantes generadas representan errores de un paso,
-         * por lo que una coincidencia exacta es un candidato fuerte.
-         */
-
-        if (index.contains(
-                variant
-        )) {
-
-            candidates.add(
-                    variant
-            );
-
-            return;
-        }
-
-        /*
-         * También agregamos palabras que comienzan por la variante.
-         *
-         * Esto ayuda especialmente cuando el usuario está a mitad
-         * de una palabra.
-         */
-
-        int prefixLimit =
-                Math.min(
-                        5,
-                        MAX_CORRECTION_CANDIDATES
-                                - candidates.size()
+        String alphabet =
+                getAlphabet(
+                        language
                 );
 
-        if (prefixLimit <= 0) {
-            return;
-        }
+        for (int position = 0;
+             position <= input.length();
+             position++) {
 
-        List<String> prefixMatches =
-                index.getPrefixMatches(
+            for (int i = 0;
+                 i < alphabet.length();
+                 i++) {
+
+                char inserted =
+                        alphabet.charAt(i);
+
+                String variant =
+                        input.substring(
+                                0,
+                                position
+                        ) +
+                        inserted +
+                        input.substring(
+                                position
+                        );
+
+                addExactCandidate(
                         variant,
-                        prefixLimit
+                        dictionary,
+                        candidates
                 );
 
-        candidates.addAll(
-                prefixMatches
-        );
+                if (candidates.size() >=
+                        MAX_CORRECTION_CANDIDATES) {
+                    return;
+                }
+            }
+        }
     }
 
-
-    /*
-     * ============================================================
-     * KEYBOARD NEIGHBORS
-     * ============================================================
-     */
-
-    private List<Character> getKeyboardNeighbors(
-            char character) {
-
-        List<Character> result =
-                new ArrayList<>();
-
-        String alphabet =
-                "abcdefghijklmnopqrstuvwxyz";
-
-        char normalized =
-                Character.toLowerCase(
-                        character
-                );
-
-        /*
-         * No existe una API para enumerar vecinos en
-         * KeyboardErrorModel, por lo que probamos las letras del
-         * alfabeto y consultamos su costo.
-         *
-         * Son sólo 26 comprobaciones por posición, no 250.000
-         * entradas del diccionario.
-         */
+    private void addTranspositionCandidates(
+            String input,
+            Dictionary dictionary,
+            Set<String> candidates) {
 
         for (int i = 0;
-             i < alphabet.length();
+             i + 1 < input.length();
              i++) {
 
-            char candidate =
-                    alphabet.charAt(
-                            i
-                    );
-
-            if (candidate == normalized) {
+            if (input.charAt(i) ==
+                    input.charAt(i + 1)) {
                 continue;
             }
 
-            if (KeyboardErrorModel
-                    .getSubstitutionCost(
-                            normalized,
-                            candidate,
-                            null
-                    ) <= 2) {
+            char[] chars =
+                    input.toCharArray();
 
-                result.add(
-                        candidate
-                );
+            char temporary =
+                    chars[i];
+
+            chars[i] =
+                    chars[i + 1];
+
+            chars[i + 1] =
+                    temporary;
+
+            addExactCandidate(
+                    new String(chars),
+                    dictionary,
+                    candidates
+            );
+
+            if (candidates.size() >=
+                    MAX_CORRECTION_CANDIDATES) {
+                return;
             }
         }
-
-        return result;
     }
 
+    private void addSubstitutionCandidates(
+            String input,
+            String language,
+            Dictionary dictionary,
+            Set<String> candidates) {
+
+        String alphabet =
+                getAlphabet(
+                        language
+                );
+
+        for (int position = 0;
+             position < input.length();
+             position++) {
+
+            char original =
+                    input.charAt(position);
+
+            /*
+             * First try physical keyboard neighbors.
+             */
+            for (int i = 0;
+                 i < alphabet.length();
+                 i++) {
+
+                char replacement =
+                        alphabet.charAt(i);
+
+                if (replacement ==
+                        original) {
+                    continue;
+                }
+
+                int keyboardCost =
+                        KeyboardErrorModel
+                                .getSubstitutionCost(
+                                        original,
+                                        replacement,
+                                        language
+                                );
+
+                if (keyboardCost > 2) {
+                    continue;
+                }
+
+                addExactCandidate(
+                        replaceCharacter(
+                                input,
+                                position,
+                                replacement
+                        ),
+                        dictionary,
+                        candidates
+                );
+            }
+
+            /*
+             * Then language-specific substitutions.
+             */
+            for (int i = 0;
+                 i < alphabet.length();
+                 i++) {
+
+                char replacement =
+                        alphabet.charAt(i);
+
+                if (replacement ==
+                        original) {
+                    continue;
+                }
+
+                int languageCost =
+                        LanguageRules
+                                .getCharacterSubstitutionCost(
+                                        original,
+                                        replacement,
+                                        language
+                                );
+
+                if (languageCost >= 5) {
+                    continue;
+                }
+
+                addExactCandidate(
+                        replaceCharacter(
+                                input,
+                                position,
+                                replacement
+                        ),
+                        dictionary,
+                        candidates
+                );
+            }
+
+            if (candidates.size() >=
+                    MAX_CORRECTION_CANDIDATES) {
+                return;
+            }
+        }
+    }
+
+    private void addRepetitionCandidates(
+            String input,
+            Dictionary dictionary,
+            Set<String> candidates) {
+
+        /*
+         * helllo -> hello
+         */
+        for (int i = 0;
+             i < input.length() - 1;
+             i++) {
+
+            if (input.charAt(i) !=
+                    input.charAt(i + 1)) {
+                continue;
+            }
+
+            String variant =
+                    input.substring(
+                            0,
+                            i
+                    ) +
+                    input.substring(
+                            i + 1
+                    );
+
+            addExactCandidate(
+                    variant,
+                    dictionary,
+                    candidates
+            );
+        }
+    }
+
+    private void addExactCandidate(
+            String candidate,
+            Dictionary dictionary,
+            Set<String> candidates) {
+
+        if (candidate == null ||
+                candidate.isEmpty()) {
+            return;
+        }
+
+        if (candidate.equals(
+                normalizeWord(candidate)
+        ) &&
+                dictionary.contains(
+                        candidate
+                )) {
+
+            candidates.add(
+                    candidate
+            );
+        }
+    }
+
+    /*
+     * ============================================================
+     * HELPERS
+     * ============================================================
+     */
+
+    private String getAlphabet(
+            String language) {
+
+        if ("es-AR".equals(
+                language
+        )) {
+            return ALPHABET +
+                    SPANISH_EXTRA;
+        }
+
+        if ("de".equals(
+                language
+        )) {
+            return ALPHABET +
+                    GERMAN_EXTRA;
+        }
+
+        return ALPHABET;
+    }
 
     private String replaceCharacter(
             String input,
-            int index,
+            int position,
             char replacement) {
 
         StringBuilder builder =
@@ -1447,34 +1051,24 @@ public class DictionaryManager {
                 );
 
         builder.setCharAt(
-                index,
+                position,
                 replacement
         );
 
         return builder.toString();
     }
 
-
-    /*
-     * ============================================================
-     * CAPITALIZATION
-     * ============================================================
-     */
-
     private List<String> applyCapitalization(
             List<String> suggestions,
             String original) {
 
+        List<String> results =
+                new ArrayList<>();
+
         if (suggestions == null ||
                 suggestions.isEmpty()) {
-
-            return new ArrayList<>();
+            return results;
         }
-
-        List<String> results =
-                new ArrayList<>(
-                        suggestions.size()
-                );
 
         for (String suggestion :
                 suggestions) {
@@ -1490,7 +1084,6 @@ public class DictionaryManager {
         return results;
     }
 
-
     private String applyCapitalization(
             String suggestion,
             String original) {
@@ -1503,24 +1096,14 @@ public class DictionaryManager {
             return suggestion;
         }
 
-        boolean allUpper =
-                true;
-
-        boolean firstUpper =
-                Character.isUpperCase(
-                        original.charAt(
-                                0
-                        )
-                );
+        boolean allUpper = true;
 
         for (int i = 0;
              i < original.length();
              i++) {
 
             char c =
-                    original.charAt(
-                            i
-                    );
+                    original.charAt(i);
 
             if (Character.isLetter(c) &&
                     !Character.isUpperCase(c)) {
@@ -1531,84 +1114,31 @@ public class DictionaryManager {
         }
 
         if (allUpper) {
-
             return suggestion.toUpperCase(
                     Locale.ROOT
             );
         }
 
-        if (firstUpper &&
-                !suggestion.isEmpty()) {
+        if (Character.isUpperCase(
+                original.charAt(0)
+        )) {
 
             return Character.toUpperCase(
-                    suggestion.charAt(
-                            0
-                    )
-            )
-                    +
-                    suggestion.substring(
-                            1
-                    );
+                    suggestion.charAt(0)
+            ) +
+                    suggestion.substring(1);
         }
 
         return suggestion;
     }
 
-
-    /*
-     * ============================================================
-     * LANGUAGE
-     * ============================================================
-     */
-
     private String normalizeLanguage(
             String languageTag) {
 
-        if (TextUtils.isEmpty(
+        return LanguageRules.normalizeLanguage(
                 languageTag
-        )) {
-
-            return "en";
-        }
-
-        String normalized =
-                languageTag.replace(
-                        '_',
-                        '-'
-                );
-
-        Locale locale =
-                Locale.forLanguageTag(
-                        normalized
-                );
-
-        String language =
-                locale.getLanguage();
-
-        if ("es".equals(
-                language
-        )) {
-
-            return "es-AR";
-        }
-
-        if ("de".equals(
-                language
-        )) {
-
-            return "de";
-        }
-
-        if ("en".equals(
-                language
-        )) {
-
-            return "en";
-        }
-
-        return "en";
+        );
     }
-
 
     private String normalizeWord(
             String word) {
@@ -1624,19 +1154,13 @@ public class DictionaryManager {
                 );
     }
 
-
-    /*
-     * ============================================================
-     * VALIDATION
-     * ============================================================
-     */
-
     private boolean isValidWord(
             String word) {
 
         if (word == null ||
                 word.length() < 1 ||
-                word.length() > 64) {
+                word.length() >
+                        MAX_WORD_LENGTH) {
 
             return false;
         }
@@ -1646,14 +1170,11 @@ public class DictionaryManager {
              i++) {
 
             char c =
-                    word.charAt(
-                            i
-                    );
+                    word.charAt(i);
 
             if (Character.isLetter(c) ||
                     c == '\'' ||
                     c == '-') {
-
                 continue;
             }
 
@@ -1662,13 +1183,6 @@ public class DictionaryManager {
 
         return true;
     }
-
-
-    /*
-     * ============================================================
-     * ASSET NAMES
-     * ============================================================
-     */
 
     private String getAssetName(
             String language) {
@@ -1684,187 +1198,6 @@ public class DictionaryManager {
             case "en":
             default:
                 return "en.dict";
-        }
-    }
-
-
-    /*
-     * ============================================================
-     * DICTIONARY INDEX
-     * ============================================================
-     *
-     * El objetivo es evitar recorrer todo el diccionario en cada
-     * pulsación.
-     *
-     * Tenemos:
-     *
-     *     longitud -> palabras
-     *
-     * y aprovechamos la ordenación original para búsquedas de
-     * prefijo.
-     */
-
-    private static final class DictionaryIndex {
-
-        private final Dictionary dictionary;
-
-        private final Map<Integer, List<String>>
-                wordsByLength =
-                new HashMap<>();
-
-        DictionaryIndex(
-                Dictionary dictionary) {
-
-            this.dictionary =
-                    dictionary;
-
-            buildLengthIndex();
-        }
-
-        private void buildLengthIndex() {
-
-            if (dictionary == null ||
-                    dictionary.isEmpty()) {
-
-                return;
-            }
-
-            for (int i = 0;
-                 i < dictionary.size();
-                 i++) {
-
-                String word =
-                        dictionary.get(
-                                i
-                        );
-
-                if (word == null) {
-                    continue;
-                }
-
-                int length =
-                        word.length();
-
-                List<String> bucket =
-                        wordsByLength.computeIfAbsent(
-                                length,
-                                key ->
-                                        new ArrayList<>()
-                        );
-
-                bucket.add(
-                        word
-                );
-            }
-        }
-
-        boolean contains(
-                String word) {
-
-            return dictionary != null &&
-                    dictionary.contains(
-                            word
-                    );
-        }
-
-        List<String> getLengthCandidates(
-                int length) {
-
-            List<String> candidates =
-                    wordsByLength.get(
-                            length
-                    );
-
-            if (candidates == null) {
-                return Collections.emptyList();
-            }
-
-            return candidates;
-        }
-
-        List<String> getPrefixMatches(
-                String prefix,
-                int limit) {
-
-            if (dictionary == null ||
-                    dictionary.isEmpty() ||
-                    prefix == null ||
-                    prefix.isEmpty() ||
-                    limit <= 0) {
-
-                return Collections.emptyList();
-            }
-
-            List<String> result =
-                    new ArrayList<>(
-                            limit
-                    );
-
-            int index =
-                    findPrefixStart(
-                            prefix
-                    );
-
-            while (
-                    index < dictionary.size() &&
-                    result.size() < limit
-            ) {
-
-                String candidate =
-                        dictionary.get(
-                                index
-                        );
-
-                if (!candidate.startsWith(
-                        prefix
-                )) {
-
-                    break;
-                }
-
-                result.add(
-                        candidate
-                );
-
-                index++;
-            }
-
-            return result;
-        }
-
-        private int findPrefixStart(
-                String prefix) {
-
-            int low = 0;
-
-            int high =
-                    dictionary.size();
-
-            while (low < high) {
-
-                int mid =
-                        (low + high) >>> 1;
-
-                String candidate =
-                        dictionary.get(
-                                mid
-                        );
-
-                if (candidate.compareTo(
-                        prefix
-                ) < 0) {
-
-                    low =
-                            mid + 1;
-
-                } else {
-
-                    high =
-                            mid;
-                }
-            }
-
-            return low;
         }
     }
 }
