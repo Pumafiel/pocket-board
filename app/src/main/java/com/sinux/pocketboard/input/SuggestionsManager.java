@@ -1,14 +1,10 @@
 package com.sinux.pocketboard.input;
 
-import android.os.Build;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InlineSuggestion;
 import android.view.inputmethod.InputMethodSubtype;
-
-import androidx.annotation.RequiresApi;
 
 import com.sinux.pocketboard.PocketBoardIME;
 import com.sinux.pocketboard.R;
@@ -35,13 +31,6 @@ public class SuggestionsManager
 
     private final int suggestionsCount;
 
-    /*
-     * Both lists are kept because the rest of PocketBoard
-     * distinguishes between normal dictionary suggestions
-     * and a recommended spelling correction.
-     *
-     * They are populated from ONE DictionaryManager query.
-     */
     private final List<CharSequence> dictionarySuggestions;
     private final List<CharSequence> spellcheckerSuggestions;
 
@@ -57,7 +46,7 @@ public class SuggestionsManager
     private boolean isPaused;
 
     /*
-     * Runtime language used by the native PocketBoard dictionary.
+     * Language used by the native PocketBoard dictionary.
      *
      * Supported dictionary identifiers:
      *
@@ -80,9 +69,6 @@ public class SuggestionsManager
         this.keyboardInputHandler =
                 keyboardInputHandler;
 
-        /*
-         * PocketBoard's native dictionary/correction engine.
-         */
         this.dictionaryManager =
                 new DictionaryManager(
                         pocketBoardIME
@@ -129,11 +115,9 @@ public class SuggestionsManager
                 currentInputMethodSubtype
         );
 
-        /*
-         * Suggestions/correction only make sense in text editors.
-         */
         boolean suggestionAllowedEditor =
-                InputUtils.isSuggestionAllowedEditor(
+                attribute != null
+                        && InputUtils.isSuggestionAllowedEditor(
                         attribute
                 )
                         && !InputUtils.isNumericEditor(
@@ -155,7 +139,8 @@ public class SuggestionsManager
         /*
          * Native spelling correction.
          *
-         * No Android SpellCheckerSession is used here.
+         * PocketBoard does not use Android's external
+         * SpellCheckerSession here.
          */
         spellcheckerSuggestionsAllowed =
                 suggestionAllowedEditor
@@ -263,16 +248,14 @@ public class SuggestionsManager
                 composing.toString();
 
         /*
-         * One query only.
+         * DictionaryManager owns the complete native
+         * suggestion/correction pipeline.
          *
-         * DictionaryManager is responsible for deciding whether
-         * the result is:
+         * It decides internally between:
          *
-         *     - prefix completion
-         *     - correction candidate
-         *
-         * We must not ask it twice and potentially produce
-         * inconsistent results.
+         *     1. prefix completion
+         *     2. exact dictionary word
+         *     3. spelling correction
          */
         boolean exactDictionaryWord =
                 dictionaryManager.contains(
@@ -325,14 +308,14 @@ public class SuggestionsManager
          * SPELLING CORRECTION
          * ========================================================
          *
-         * An exact dictionary word does not need correction.
+         * Exact dictionary words are already correct.
          *
-         * Also, a prefix completion must not become an automatic
-         * spelling correction.
+         * Prefix completion must remain completion and must not
+         * become an automatic correction.
          *
          * Example:
          *
-         *     "hol" -> "hola"
+         *     hol -> hola
          *
          * is completion, not correction.
          */
@@ -362,20 +345,14 @@ public class SuggestionsManager
     }
 
     /*
-     * ============================================================
-     * EXTERNAL COMPLETIONS
-     * ============================================================
+     * Android may still call onDisplayCompletions().
      *
-     * Android can call onDisplayCompletions().
+     * These CompletionInfo values are NOT used as the source
+     * of PocketBoard suggestions.
      *
-     * These CompletionInfo values are deliberately ignored.
-     *
-     * PocketBoard's own dictionary and correction engine are the
-     * source of Suggestions.
-     *
-     * The method remains because PocketBoardIME still calls it.
+     * The native PocketBoard DictionaryManager remains the
+     * only source.
      */
-
     public void update(
             CompletionInfo[] completions) {
 
@@ -438,10 +415,6 @@ public class SuggestionsManager
                                     Locale.ROOT
                             );
 
-            /*
-             * A result that starts with the complete typed
-             * sequence is a completion.
-             */
             if (normalizedSuggestion.startsWith(
                     normalizedInput
             )
@@ -626,8 +599,8 @@ public class SuggestionsManager
                 locale.getLanguage();
 
         /*
-         * All Spanish locales use the PocketBoard
-         * Argentine Spanish dictionary.
+         * PocketBoard uses the Argentine Spanish
+         * dictionary for Spanish input.
          */
         if ("es".equals(
                 language
@@ -650,9 +623,6 @@ public class SuggestionsManager
             return "en";
         }
 
-        /*
-         * Safe fallback.
-         */
         return "en";
     }
 
@@ -704,7 +674,7 @@ public class SuggestionsManager
         }
 
         /*
-         * If there is still room, add correction candidates.
+         * Add correction candidates if there is still room.
          */
         if (merged.size()
                 < suggestionsCount) {
@@ -783,54 +753,5 @@ public class SuggestionsManager
                         .getCurrentInputConnection(),
                 true
         );
-    }
-
-    /*
-     * ============================================================
-     * INLINE SUGGESTIONS
-     * ============================================================
-     *
-     * These methods are kept temporarily because PocketBoardIME
-     * still references them.
-     *
-     * They are NOT part of the native PocketBoard dictionary or
-     * correction engine.
-     *
-     * Once PocketBoardIME is cleaned from Autofill/Inline
-     * Suggestions, these methods will be removed as well.
-     */
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    public boolean showInlineSuggestions(
-            List<InlineSuggestion> inlineSuggestions) {
-
-        if (inputView == null) {
-
-            return false;
-        }
-
-        return inputView.setInlineSuggestions(
-                inlineSuggestions
-        );
-    }
-
-    public boolean isInlineSuggestionsShown() {
-
-        if (inputView == null) {
-
-            return false;
-        }
-
-        return inputView.isInlineSuggestionsShown();
-    }
-
-    public void cancelInlineSuggestions() {
-
-        if (inputView == null) {
-
-            return;
-        }
-
-        inputView.cancelInlineSuggestions();
     }
 }
