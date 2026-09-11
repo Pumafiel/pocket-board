@@ -1,11 +1,8 @@
-name: PocketBoard Build
+name: PocketBoard Release
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - Pocketboard-E
-  pull_request:
     branches:
       - Pocketboard-E
 
@@ -14,53 +11,32 @@ permissions:
 
 jobs:
   build:
-    name: Build PocketBoard-E Release
+    name: Build signed Release APK
     runs-on: ubuntu-24.04
 
     steps:
-      # -------------------------------------------------------
-      # Checkout
-      # -------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------------
-      # Java 17
-      # -------------------------------------------------------
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # -------------------------------------------------------
-      # Gradle
-      # -------------------------------------------------------
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # -------------------------------------------------------
-      # Hunspell tools
-      # -------------------------------------------------------
       - name: Install Hunspell tools
         shell: bash
         run: |
           set -euo pipefail
 
           sudo apt-get update
+          sudo apt-get install -y hunspell-tools
 
-          sudo apt-get install -y \
-            hunspell-tools \
-            curl
-
-          echo ""
-          echo "Hunspell tools:"
           command -v unmunch
-          command -v wordforms || true
 
-      # -------------------------------------------------------
-      # Dictionary generator permissions
-      # -------------------------------------------------------
       - name: Prepare dictionary generator
         shell: bash
         run: |
@@ -70,10 +46,7 @@ jobs:
 
           test -x scripts/generate-dictionaries.sh
 
-      # -------------------------------------------------------
-      # Generate dictionaries
-      # -------------------------------------------------------
-      - name: Generate PocketBoard dictionaries
+      - name: Generate dictionaries
         shell: bash
         run: |
           set -euo pipefail
@@ -82,10 +55,7 @@ jobs:
             --no-daemon \
             generatePocketBoardDictionaries
 
-      # -------------------------------------------------------
-      # Validate dictionaries
-      # -------------------------------------------------------
-      - name: Validate PocketBoard dictionaries
+      - name: Validate dictionaries
         shell: bash
         run: |
           set -euo pipefail
@@ -95,53 +65,39 @@ jobs:
             validatePocketBoardDictionaries
 
       # -------------------------------------------------------
-      # Dictionary report
+      # Generate temporary release keystore
       # -------------------------------------------------------
-      - name: Dictionary report
+      - name: Generate release keystore
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=========================================="
-          echo "PocketBoard dictionaries"
-          echo "=========================================="
+          KEYSTORE="$RUNNER_TEMP/pocketboard-release.keystore"
 
-          for file in app/src/main/assets/dictionaries/*.dict
-          do
-            echo ""
-            echo "FILE: ${file}"
-            echo "SIZE:"
-            du -h "${file}"
+          keytool \
+            -genkeypair \
+            -v \
+            -keystore "$KEYSTORE" \
+            -storetype PKCS12 \
+            -alias pocketboard \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass pocketboard \
+            -keypass pocketboard \
+            -dname "CN=PocketBoard, OU=PocketBoard, O=PocketBoard, L=Buenos Aires, ST=Buenos Aires, C=AR"
 
-            echo "WORDS:"
-            tail -n +2 "${file}" | wc -l
-          done
+          test -f "$KEYSTORE"
 
-          echo ""
-          echo "Spanish mandatory forms:"
-
-          grep -F -x "hago" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "veré" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "mañana" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "tenés" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "podés" \
-            app/src/main/assets/dictionaries/es-AR.dict
-
-          grep -F -x "hacés" \
-            app/src/main/assets/dictionaries/es-AR.dict
+          echo "POCKETBOARD_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "POCKETBOARD_KEYSTORE_PASSWORD=pocketboard" >> "$GITHUB_ENV"
+          echo "POCKETBOARD_KEY_ALIAS=pocketboard" >> "$GITHUB_ENV"
+          echo "POCKETBOARD_KEY_PASSWORD=pocketboard" >> "$GITHUB_ENV"
 
       # -------------------------------------------------------
-      # Build Release APK
+      # Build only Release
       # -------------------------------------------------------
-      - name: Build release APK
+      - name: Build signed Release APK
         shell: bash
         run: |
           set -euo pipefail
@@ -154,30 +110,33 @@ jobs:
       # -------------------------------------------------------
       # Verify APK
       # -------------------------------------------------------
-      - name: Verify release APK
+      - name: Verify APK signature
         shell: bash
         run: |
           set -euo pipefail
 
           APK="app/build/outputs/apk/release/Pocketboard-E-release.apk"
 
-          test -f "${APK}"
+          test -f "$APK"
+
+          BUILD_TOOLS="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" \
+            verify \
+            --verbose \
+            "$APK"
 
           echo ""
           echo "=========================================="
-          echo "Release APK"
+          echo "SIGNED APK"
           echo "=========================================="
 
-          ls -lh "${APK}"
-
-          echo ""
-          echo "APK:"
-          file "${APK}"
+          ls -lh "$APK"
 
       # -------------------------------------------------------
-      # Upload Release APK
+      # Upload only Release APK
       # -------------------------------------------------------
-      - name: Upload release APK
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: Pocketboard-E-release
