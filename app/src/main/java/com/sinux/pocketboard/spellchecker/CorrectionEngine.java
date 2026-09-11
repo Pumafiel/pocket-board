@@ -18,8 +18,8 @@ import java.util.Set;
  *  - Handle duplicated characters.
  *  - Handle adjacent transpositions.
  *  - Handle language-specific substitutions.
- *  - Preserve common prefixes.
- *  - Rank candidates deterministically.
+ *  - Preserve meaningful prefixes and suffixes.
+ *  - Rank candidates by accuracy rather than word length.
  *
  * Completion/prefix matching is intentionally NOT handled here.
  * DictionaryManager owns completion and candidate generation.
@@ -40,7 +40,7 @@ public final class CorrectionEngine {
      * Basic edit costs.
      *
      * A normal insertion/deletion is more expensive than
-     * a duplicated character or an adjacent transposition.
+     * a duplicated character or adjacent transposition.
      */
     private static final int INSERTION_PENALTY = 3;
     private static final int DELETION_PENALTY = 3;
@@ -50,21 +50,47 @@ public final class CorrectionEngine {
     private static final int REPETITION_PENALTY = 1;
 
     /*
-     * Length differences matter, but must not dominate the
-     * actual edit distance.
+     * We deliberately DO NOT apply a general word-length penalty.
+     *
+     * A longer word is not inherently worse than a shorter word.
+     * The edit distance already accounts for insertions/deletions.
+     *
+     * This is important for:
+     *
+     *     haci -> hacia
+     *     haci -> hacer
+     *     escribistes -> escribiste
+     *
+     * The correct result must be decided by accuracy, not length.
      */
-    private static final int LENGTH_PENALTY = 1;
+
+    private static final int COMMON_PREFIX_THRESHOLD = 3;
 
     /*
-     * Words sharing at least four initial characters are
-     * generally much more plausible corrections.
+     * Prefix preservation is useful for both corrections and
+     * incomplete typing, but it must not overpower edit quality.
      */
-    private static final int COMMON_PREFIX_LENGTH = 4;
-    private static final int COMMON_PREFIX_BONUS = 1;
+    private static final int COMMON_PREFIX_BONUS = 2;
 
     /*
-     * A very short word should not accept a correction that
-     * differs by almost the entire word.
+     * Preserve a correct ending as a secondary signal.
+     */
+    private static final int COMMON_SUFFIX_THRESHOLD = 2;
+    private static final int COMMON_SUFFIX_BONUS = 1;
+
+    /*
+     * Language variants receive a small additional preference.
+     */
+    private static final int LANGUAGE_VARIANT_BONUS = 2;
+
+    /*
+     * A candidate with a realistic keyboard substitution should
+     * beat an equally distant arbitrary substitution.
+     */
+    private static final int KEYBOARD_ERROR_BONUS = 1;
+
+    /*
+     * Very short words require stricter correction.
      */
     private static final int SHORT_WORD_LENGTH = 4;
 
@@ -73,6 +99,18 @@ public final class CorrectionEngine {
 
     /**
      * Rank dictionary candidates and return the best corrections.
+     *
+     * Lower base score is better.
+     *
+     * The final ordering additionally considers:
+     *
+     *  - edit distance
+     *  - language relationship
+     *  - keyboard plausibility
+     *  - common prefix
+     *  - common suffix
+     *
+     * Word length is NOT used as a preference.
      */
     public List<String> rankCandidates(
             String input,
@@ -133,7 +171,7 @@ public final class CorrectionEngine {
             }
 
             /*
-             * Never suggest the exact word as a correction.
+             * An exact match is not a correction.
              */
             if (normalizedInput.equals(
                     normalizedCandidate
@@ -142,14 +180,14 @@ public final class CorrectionEngine {
                 continue;
             }
 
-            int score =
-                    scoreCandidate(
+            ScoreBreakdown breakdown =
+                    scoreBreakdown(
                             normalizedInput,
                             normalizedCandidate,
                             language
                     );
 
-            if (score <=
+            if (breakdown.totalScore <=
                     getMaximumUsefulScore(
                             normalizedInput
                     )) {
@@ -157,7 +195,7 @@ public final class CorrectionEngine {
                 scored.add(
                         new ScoredCandidate(
                                 normalizedCandidate,
-                                score
+                                breakdown
                         )
                 );
             }
@@ -194,7 +232,7 @@ public final class CorrectionEngine {
     }
 
     /**
-     * Score one candidate.
+     * Public score API retained for compatibility.
      *
      * Lower is better.
      */
@@ -203,10 +241,55 @@ public final class CorrectionEngine {
             String candidate,
             String languageTag) {
 
+        ScoreBreakdown breakdown =
+                createScoreBreakdown(
+                        input,
+                        candidate,
+                        languageTag
+                );
+
+        if (breakdown == null) {
+            return Integer.MAX_VALUE;
+        }
+
+        return breakdown.totalScore;
+    }
+
+    /*
+     * ============================================================
+     * SCORE
+     * ============================================================
+     */
+
+    private ScoreBreakdown scoreBreakdown(
+            String input,
+            String candidate,
+            String language) {
+
+        ScoreBreakdown breakdown =
+                createScoreBreakdown(
+                        input,
+                        candidate,
+                        language
+                );
+
+        if (breakdown == null) {
+
+            return ScoreBreakdown.invalid();
+        }
+
+        return breakdown;
+    }
+
+    private ScoreBreakdown createScoreBreakdown(
+            String input,
+            String candidate,
+            String languageTag) {
+
         if (input == null ||
                 candidate == null) {
 
-            return Integer.MAX_VALUE;
+            return null;
         }
 
         String first =
@@ -218,17 +301,26 @@ public final class CorrectionEngine {
         if (first.isEmpty() ||
                 second.isEmpty()) {
 
-            return Integer.MAX_VALUE;
-        }
-
-        if (first.equals(second)) {
-            return 0;
+            return null;
         }
 
         String language =
                 LanguageRules.normalizeLanguage(
                         languageTag
                 );
+
+        if (first.equals(second)) {
+
+            return new ScoreBreakdown(
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false
+            );
+        }
 
         int distance =
                 weightedDamerauLevenshtein(
@@ -240,68 +332,131 @@ public final class CorrectionEngine {
         if (distance >
                 MAX_CANDIDATE_DISTANCE) {
 
-            return distance;
+            return new ScoreBreakdown(
+                    distance,
+                    distance,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false
+            );
         }
 
         /*
-         * Length difference is useful as a secondary signal,
-         * but the edit distance already accounts for insertions
-         * and deletions. Keep this contribution deliberately small.
+         * The primary score starts with the actual weighted edit
+         * distance.
+         *
+         * There is intentionally NO generic length penalty.
          */
-        int lengthDifference =
-                Math.abs(
-                        first.length() -
-                                second.length()
-                );
-
         int score =
-                distance +
-                        lengthDifference *
-                                LENGTH_PENALTY;
+                distance;
 
-        /*
-         * Strongly prefer candidates that preserve the beginning
-         * of the word. This is especially useful for natural typing
-         * mistakes where the user got the beginning right.
-         */
-        score -=
-                commonPrefixBonus(
+        int prefixLength =
+                commonPrefixLength(
                         first,
                         second
                 );
 
-        /*
-         * Diacritic/language variants are very plausible.
-         *
-         * LanguageRules provides the language-specific knowledge;
-         * the edit distance remains the final authority.
-         */
-        if (isLanguageVariant(
-                first,
-                second,
-                language
-        )) {
+        int suffixLength =
+                commonSuffixLength(
+                        first,
+                        second
+                );
 
-            score = Math.max(
-                    0,
-                    score - 1
-            );
+        boolean languageVariant =
+                isLanguageVariant(
+                        first,
+                        second,
+                        language
+                );
+
+        int keyboardEvidence =
+                keyboardEvidence(
+                        first,
+                        second,
+                        language
+                );
+
+        /*
+         * Prefix bonus.
+         *
+         * Three or more preserved characters indicate that the
+         * candidate belongs strongly to the same word stem.
+         */
+        if (prefixLength >=
+                COMMON_PREFIX_THRESHOLD) {
+
+            score -=
+                    COMMON_PREFIX_BONUS;
         }
 
-        return score;
+        /*
+         * Suffix bonus.
+         *
+         * Useful for mistakes in the middle of a word where the
+         * ending remains correct.
+         */
+        if (suffixLength >=
+                COMMON_SUFFIX_THRESHOLD) {
+
+            score -=
+                    COMMON_SUFFIX_BONUS;
+        }
+
+        /*
+         * Language-aware variants are highly plausible.
+         *
+         * Example:
+         *
+         * manana -> mañana
+         */
+        if (languageVariant) {
+
+            score -=
+                    LANGUAGE_VARIANT_BONUS;
+        }
+
+        /*
+         * A realistic keyboard error receives a small bonus.
+         *
+         * This is deliberately weaker than edit distance so that
+         * keyboard proximity cannot turn an otherwise bad candidate
+         * into the best result.
+         */
+        if (keyboardEvidence > 0) {
+
+            score -=
+                    KEYBOARD_ERROR_BONUS;
+        }
+
+        /*
+         * Never allow heuristic bonuses to make a candidate
+         * artificially negative.
+         */
+        score =
+                Math.max(
+                        0,
+                        score
+                );
+
+        return new ScoreBreakdown(
+                score,
+                distance,
+                prefixLength,
+                suffixLength,
+                keyboardEvidence,
+                languageVariant ? 1 : 0,
+                true
+        );
     }
 
-    /**
-     * Weighted Damerau-Levenshtein distance.
-     *
-     * Includes:
-     *
-     *  - insertion
-     *  - deletion
-     *  - substitution
-     *  - duplicated character
-     *  - adjacent transposition
+    /*
+     * ============================================================
+     * WEIGHTED DAMERAU-LEVENSHTEIN
+     * ============================================================
      */
+
     private int weightedDamerauLevenshtein(
             String first,
             String second,
@@ -318,17 +473,19 @@ public final class CorrectionEngine {
                 second.length();
 
         if (n == 0) {
+
             return m *
                     INSERTION_PENALTY;
         }
 
         if (m == 0) {
+
             return n *
                     DELETION_PENALTY;
         }
 
         /*
-         * Fast rejection for extremely different short words.
+         * Fast rejection for extremely different words.
          */
         if (Math.abs(n - m) >
                 MAX_CANDIDATE_DISTANCE) {
@@ -409,10 +566,11 @@ public final class CorrectionEngine {
                         );
 
                 /*
-                 * Repeated character:
+                 * Repeated character.
                  *
                  * helllo -> hello
                  * comming -> coming
+                 * mañana with duplicated character, etc.
                  */
                 if (i >= 2 &&
                         j >= 1 &&
@@ -430,10 +588,9 @@ public final class CorrectionEngine {
                 }
 
                 /*
-                 * Adjacent transposition:
+                 * Adjacent transposition.
                  *
                  * teh -> the
-                 * que -> qeu
                  * qeu -> que
                  */
                 if (i >= 2 &&
@@ -465,16 +622,12 @@ public final class CorrectionEngine {
         return dp[n][m];
     }
 
-    /**
-     * Character substitution cost.
-     *
-     * Priority:
-     *
-     *  1. exact character
-     *  2. language-specific relationship
-     *  3. physical keyboard relationship
-     *  4. normal substitution
+    /*
+     * ============================================================
+     * CHARACTER COSTS
+     * ============================================================
      */
+
     private int getSubstitutionCost(
             char typed,
             char candidate,
@@ -484,6 +637,15 @@ public final class CorrectionEngine {
             return 0;
         }
 
+        /*
+         * Language relationship has priority over generic keyboard
+         * proximity.
+         *
+         * Example:
+         *
+         * n <-> ñ
+         * accented/unaccented variants
+         */
         int languageCost =
                 LanguageRules
                         .getCharacterSubstitutionCost(
@@ -496,6 +658,12 @@ public final class CorrectionEngine {
             return languageCost;
         }
 
+        /*
+         * Keyboard proximity is intentionally strong.
+         *
+         * A user hitting an adjacent key is much more likely than
+         * an arbitrary substitution.
+         */
         int keyboardCost =
                 KeyboardErrorModel
                         .getSubstitutionCost(
@@ -511,17 +679,15 @@ public final class CorrectionEngine {
         return NORMAL_SUBSTITUTION_PENALTY;
     }
 
-    /**
-     * Deletion cost.
-     *
-     * Removing a duplicated character is cheap.
-     */
     private int getDeletionCost(
             char character,
             String first,
             int position,
             String languageTag) {
 
+        /*
+         * Removing a duplicated character is extremely plausible.
+         */
         if (position > 0 &&
                 first.charAt(
                         position - 1
@@ -530,13 +696,25 @@ public final class CorrectionEngine {
             return REPETITION_PENALTY;
         }
 
+        /*
+         * Language-specific omissions can be slightly cheaper.
+         */
+        if (position > 0 &&
+                LanguageRules
+                        .getCharacterSubstitutionCost(
+                                first.charAt(
+                                        position - 1
+                                ),
+                                character,
+                                languageTag
+                        ) <= 2) {
+
+            return DELETION_PENALTY;
+        }
+
         return DELETION_PENALTY;
     }
 
-    /**
-     * Adjacent transpositions are highly likely typing errors,
-     * especially on small mobile keyboards.
-     */
     private int getTranspositionCost(
             char first,
             char second,
@@ -557,10 +735,72 @@ public final class CorrectionEngine {
         return TRANSPOSITION_PENALTY;
     }
 
-    /**
-     * Reward a strong common prefix.
+    /*
+     * ============================================================
+     * KEYBOARD / LINGUISTIC SIGNALS
+     * ============================================================
      */
-    private int commonPrefixBonus(
+
+    /**
+     * Detect whether the candidate contains at least one
+     * substitution that is strongly supported by the keyboard model.
+     *
+     * This is intentionally only a secondary signal.
+     */
+    private int keyboardEvidence(
+            String first,
+            String second,
+            String languageTag) {
+
+        int limit =
+                Math.min(
+                        first.length(),
+                        second.length()
+                );
+
+        int evidence = 0;
+
+        for (int i = 0;
+             i < limit;
+             i++) {
+
+            char typed =
+                    first.charAt(i);
+
+            char candidate =
+                    second.charAt(i);
+
+            if (typed == candidate) {
+                continue;
+            }
+
+            int keyboardCost =
+                    KeyboardErrorModel
+                            .getSubstitutionCost(
+                                    typed,
+                                    candidate,
+                                    languageTag
+                            );
+
+            if (keyboardCost <= 2) {
+
+                evidence++;
+
+                /*
+                 * One strong keyboard relationship is enough for
+                 * the ranking bonus.
+                 */
+                break;
+            }
+        }
+
+        return evidence;
+    }
+
+    /**
+     * Count the exact common prefix.
+     */
+    private int commonPrefixLength(
             String first,
             String second) {
 
@@ -581,46 +821,42 @@ public final class CorrectionEngine {
             common++;
         }
 
-        if (common >=
-                COMMON_PREFIX_LENGTH) {
-
-            return COMMON_PREFIX_BONUS;
-        }
-
-        return 0;
+        return common;
     }
 
     /**
-     * Determine how much distance is acceptable for a word.
-     *
-     * Short words need to be treated more strictly than long words.
+     * Count the exact common suffix.
      */
-    private int getMaximumUsefulScore(
-            String input) {
+    private int commonSuffixLength(
+            String first,
+            String second) {
 
-        int length =
-                input.length();
+        int firstIndex =
+                first.length() - 1;
 
-        if (length <= 2) {
-            return 2;
+        int secondIndex =
+                second.length() - 1;
+
+        int common = 0;
+
+        while (
+                firstIndex >= 0 &&
+                secondIndex >= 0 &&
+                first.charAt(firstIndex) ==
+                        second.charAt(secondIndex)
+        ) {
+
+            common++;
+
+            firstIndex--;
+            secondIndex--;
         }
 
-        if (length <= SHORT_WORD_LENGTH) {
-            return 4;
-        }
-
-        if (length <= 7) {
-            return 6;
-        }
-
-        return MAX_CANDIDATE_DISTANCE;
+        return common;
     }
 
     /**
-     * Detect a language-specific variant.
-     *
-     * We intentionally keep this conservative. LanguageRules remains
-     * responsible for defining which variants are valid.
+     * Determine whether the candidate is a language-specific variant.
      */
     private boolean isLanguageVariant(
             String first,
@@ -657,6 +893,47 @@ public final class CorrectionEngine {
         return false;
     }
 
+    /*
+     * ============================================================
+     * MAXIMUM ACCEPTABLE SCORE
+     * ============================================================
+     */
+
+    /**
+     * Short words are inherently ambiguous.
+     *
+     * We therefore reject distant candidates aggressively.
+     *
+     * This is NOT a length preference between two valid candidates.
+     * It only limits obviously bad corrections.
+     */
+    private int getMaximumUsefulScore(
+            String input) {
+
+        int length =
+                input.length();
+
+        if (length <= 2) {
+            return 2;
+        }
+
+        if (length <= SHORT_WORD_LENGTH) {
+            return 4;
+        }
+
+        if (length <= 7) {
+            return 6;
+        }
+
+        return MAX_CANDIDATE_DISTANCE;
+    }
+
+    /*
+     * ============================================================
+     * NORMALIZATION
+     * ============================================================
+     */
+
     private String normalize(
             String value) {
 
@@ -671,23 +948,99 @@ public final class CorrectionEngine {
                 );
     }
 
+    /*
+     * ============================================================
+     * SCORE OBJECT
+     * ============================================================
+     */
+
+    private static final class ScoreBreakdown {
+
+        private final int totalScore;
+        private final int editDistance;
+        private final int prefixLength;
+        private final int suffixLength;
+        private final int keyboardEvidence;
+        private final int languageEvidence;
+        private final boolean valid;
+
+        private ScoreBreakdown(
+                int totalScore,
+                int editDistance,
+                int prefixLength,
+                int suffixLength,
+                int keyboardEvidence,
+                int languageEvidence,
+                boolean valid) {
+
+            this.totalScore =
+                    totalScore;
+
+            this.editDistance =
+                    editDistance;
+
+            this.prefixLength =
+                    prefixLength;
+
+            this.suffixLength =
+                    suffixLength;
+
+            this.keyboardEvidence =
+                    keyboardEvidence;
+
+            this.languageEvidence =
+                    languageEvidence;
+
+            this.valid =
+                    valid;
+        }
+
+        private static ScoreBreakdown invalid() {
+
+            return new ScoreBreakdown(
+                    Integer.MAX_VALUE,
+                    Integer.MAX_VALUE,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false
+            );
+        }
+    }
+
     private static final class ScoredCandidate {
 
         private final String word;
-        private final int score;
+        private final ScoreBreakdown breakdown;
 
         private ScoredCandidate(
                 String word,
-                int score) {
+                ScoreBreakdown breakdown) {
 
             this.word =
                     word;
 
-            this.score =
-                    score;
+            this.breakdown =
+                    breakdown;
         }
     }
 
+    /*
+     * ============================================================
+     * FINAL RANKING
+     * ============================================================
+     *
+     * IMPORTANT:
+     *
+     * There is deliberately NO:
+     *
+     *     "shorter word wins"
+     *
+     * rule here.
+     *
+     * Accuracy comes first.
+     */
     private static final class CandidateComparator
             implements Comparator<ScoredCandidate> {
 
@@ -696,10 +1049,15 @@ public final class CorrectionEngine {
                 ScoredCandidate first,
                 ScoredCandidate second) {
 
+            /*
+             * 1. Overall score.
+             *
+             * This is the main accuracy signal.
+             */
             int score =
                     Integer.compare(
-                            first.score,
-                            second.score
+                            first.breakdown.totalScore,
+                            second.breakdown.totalScore
                     );
 
             if (score != 0) {
@@ -707,22 +1065,80 @@ public final class CorrectionEngine {
             }
 
             /*
-             * If scores are equal, prefer the shorter correction.
-             * This helps avoid unexpectedly replacing a typo with
-             * a much longer dictionary word.
+             * 2. Raw edit distance.
+             *
+             * If heuristic bonuses produced the same total score,
+             * prefer the candidate requiring fewer actual edits.
              */
-            int length =
+            int distance =
                     Integer.compare(
-                            first.word.length(),
-                            second.word.length()
+                            first.breakdown.editDistance,
+                            second.breakdown.editDistance
                     );
 
-            if (length != 0) {
-                return length;
+            if (distance != 0) {
+                return distance;
             }
 
             /*
-             * Deterministic final ordering.
+             * 3. Language relationship.
+             */
+            int language =
+                    Integer.compare(
+                            second.breakdown.languageEvidence,
+                            first.breakdown.languageEvidence
+                    );
+
+            if (language != 0) {
+                return language;
+            }
+
+            /*
+             * 4. Keyboard plausibility.
+             */
+            int keyboard =
+                    Integer.compare(
+                            second.breakdown.keyboardEvidence,
+                            first.breakdown.keyboardEvidence
+                    );
+
+            if (keyboard != 0) {
+                return keyboard;
+            }
+
+            /*
+             * 5. Preserve more of the typed beginning.
+             */
+            int prefix =
+                    Integer.compare(
+                            second.breakdown.prefixLength,
+                            first.breakdown.prefixLength
+                    );
+
+            if (prefix != 0) {
+                return prefix;
+            }
+
+            /*
+             * 6. Preserve more of the typed ending.
+             */
+            int suffix =
+                    Integer.compare(
+                            second.breakdown.suffixLength,
+                            first.breakdown.suffixLength
+                    );
+
+            if (suffix != 0) {
+                return suffix;
+            }
+
+            /*
+             * 7. Deterministic final ordering only.
+             *
+             * Alphabetical order is used solely as a final
+             * deterministic tie-breaker.
+             *
+             * Word length is intentionally absent.
              */
             return first.word.compareTo(
                     second.word
