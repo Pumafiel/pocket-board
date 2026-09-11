@@ -65,15 +65,18 @@ jobs:
           command -v wordforms || true
 
       # -------------------------------------------------------
-      # Dictionary generator permissions
+      # Prepare build scripts
       # -------------------------------------------------------
 
-      - name: Prepare dictionary generator
+      - name: Prepare build scripts
         shell: bash
         run: |
           set -euo pipefail
 
+          chmod +x ./gradlew
           chmod +x scripts/generate-dictionaries.sh
+
+          test -x ./gradlew
           test -x scripts/generate-dictionaries.sh
 
       # -------------------------------------------------------
@@ -149,11 +152,7 @@ jobs:
             app/src/main/assets/dictionaries/es-AR.dict
 
       # -------------------------------------------------------
-      # Build signed release APK
-      #
-      # If the repository already contains its release signing
-      # configuration, Gradle uses that configuration exactly
-      # as before.
+      # Build release APK
       # -------------------------------------------------------
 
       - name: Build release APK
@@ -166,7 +165,7 @@ jobs:
             assembleRelease
 
       # -------------------------------------------------------
-      # Also build debug APK for diagnostics.
+      # Build debug APK
       # -------------------------------------------------------
 
       - name: Build debug APK
