@@ -1,7 +1,6 @@
 name: PocketBoard Build
 
-on:
-  workflow_dispatch:
+on: { workflow_dispatch: {} }
 
 permissions:
   contents: read
@@ -66,7 +65,6 @@ jobs:
           do
             echo ""
             echo "FILE: ${file}"
-            echo "SIZE:"
             du -h "${file}"
             echo "WORDS:"
             tail -n +2 "${file}" | wc -l
