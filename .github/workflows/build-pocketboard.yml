@@ -1,4 +1,4 @@
-name: PocketBoard Manual Build
+name: PocketBoard Build
 
 on:
   workflow_dispatch:
@@ -8,21 +8,109 @@ permissions:
 
 jobs:
   build:
-    name: Build PocketBoard
-    runs-on: ubuntu-latest
+    name: Build Pocketboard-E
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
+      - name: Checkout Pocketboard-E
         uses: actions/checkout@v4
+        with:
+          ref: Pocketboard-E
+          fetch-depth: 0
 
-      - name: Set up JDK
+      - name: Show source revision
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "PocketBoard source"
+          echo "=========================================="
+          echo "Branch:"
+          git branch --show-current
+          echo "Commit:"
+          git rev-parse HEAD
+          echo "Commit message:"
+          git log -1 --pretty=%B
+          echo "=========================================="
+
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Grant execute permission for Gradle
-        run: chmod +x ./gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Build APK
-        run: ./gradlew assembleDebug
+      - name: Install Hunspell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y hunspell-tools curl
+
+          echo "Hunspell:"
+          hunspell --version
+
+          echo "unmunch:"
+          command -v unmunch
+
+      - name: Prepare dictionary generator
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x scripts/generate-dictionaries.sh
+          test -x scripts/generate-dictionaries.sh
+
+      - name: Build release and debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew --no-daemon assembleRelease assembleDebug
+
+      - name: Dictionary report
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "PocketBoard dictionaries"
+          echo "=========================================="
+
+          found=0
+
+          for file in app/src/main/assets/dictionaries/*.dict; do
+            if [ -f "${file}" ]; then
+              found=1
+
+              echo ""
+              echo "FILE: ${file}"
+              echo "SIZE:"
+              du -h "${file}"
+              echo "WORDS:"
+              tail -n +2 "${file}" | wc -l
+            fi
+          done
+
+          if [ "${found}" -eq 0 ]; then
+            echo "ERROR: No dictionary files were generated."
+            exit 1
+          fi
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pocketboard-E-release
+          path: app/build/outputs/apk/release/Pocketboard-E-release.apk
+          if-no-files-found: error
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pocketboard-E-debug
+          path: app/build/outputs/apk/debug/Pocketboard-E-debug.apk
+          if-no-files-found: error
