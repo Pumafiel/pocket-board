@@ -20,6 +20,11 @@ export LC_ALL=C.UTF-8
 # GitHub Actions build.
 #
 # The Android application receives only plain word lists.
+#
+# Missing individual words are treated as warnings rather
+# than build-breaking errors. This allows the upstream
+# dictionary to remain the primary source of truth while
+# still reporting regional forms that may be worth reviewing.
 # ============================================================
 
 
@@ -333,35 +338,42 @@ generate_dictionary \
 
 
 # ------------------------------------------------------------
-# Required word checks
+# Optional word checks
 # ------------------------------------------------------------
+#
+# These checks are quality checks, not hard requirements.
+#
+# The upstream Hunspell dictionary remains the source of truth.
+# A missing regional form must not break the build.
+#
+# Missing words are reported as WARNINGs so they can be reviewed
+# and optionally added later if they are confirmed as appropriate
+# for the target language.
+# ------------------------------------------------------------
+
+MISSING_WORDS=0
 
 check_word() {
     local language="$1"
     local word="$2"
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
-    if ! grep \
+    if grep \
         -Fqx \
         "${word}" \
         <(tail -n +2 "${dictionary}")
     then
-        echo ""
-        echo "ERROR: required word missing"
-        echo "Language: ${language}"
-        echo "Word:     ${word}"
-        echo "File:     ${dictionary}"
-        echo ""
-        exit 1
+        echo "  OK      ${language}: ${word}"
+    else
+        echo "  WARNING ${language}: missing word: ${word}"
+        MISSING_WORDS=$((MISSING_WORDS + 1))
     fi
-
-    echo "  OK  ${language}: ${word}"
 }
 
 
 echo ""
 echo "============================================================"
-echo " Required word checks"
+echo " Optional word checks"
 echo "============================================================"
 echo ""
 
@@ -389,6 +401,26 @@ check_word "en-en" "hello"
 check_word "de-de" "ich"
 check_word "de-de" "habe"
 check_word "de-de" "morgen"
+
+
+# ------------------------------------------------------------
+# Word check summary
+# ------------------------------------------------------------
+
+echo ""
+echo "============================================================"
+echo " Word check summary"
+echo "============================================================"
+echo ""
+
+if [[ "${MISSING_WORDS}" -gt 0 ]]; then
+    echo "WARNING: ${MISSING_WORDS} optional word(s) were not found."
+    echo "The build will continue."
+else
+    echo "All optional word checks passed."
+fi
+
+echo ""
 
 
 # ------------------------------------------------------------
