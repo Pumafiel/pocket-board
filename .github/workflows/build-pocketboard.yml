@@ -1,123 +1,158 @@
 name: PocketBoard Build
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    name: Build Pocketboard-E
-    runs-on: ubuntu-24.04
+build:
+name: Build Pocketboard-E
+runs-on: ubuntu-24.04
 
-    steps:
+steps:
 
-      # -------------------------------------------------------
-      # Checkout
-      # -------------------------------------------------------
+  # -------------------------------------------------------
+  # Checkout
+  # -------------------------------------------------------
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      # -------------------------------------------------------
-      # Java 17
-      # -------------------------------------------------------
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+  # -------------------------------------------------------
+  # Java 17
+  # -------------------------------------------------------
 
-      # -------------------------------------------------------
-      # Gradle
-      # -------------------------------------------------------
+  - name: Set up JDK 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
 
-      # -------------------------------------------------------
-      # Hunspell tools
-      # -------------------------------------------------------
+  # -------------------------------------------------------
+  # Gradle
+  # -------------------------------------------------------
 
-      - name: Install Hunspell tools
-        shell: bash
-        run: |
-          set -euo pipefail
+  - name: Setup Gradle
+    uses: gradle/actions/setup-gradle@v4
 
-          sudo apt-get update
 
-          sudo apt-get install -y \
-            hunspell-tools \
-            curl
+  # -------------------------------------------------------
+  # Hunspell tools
+  # -------------------------------------------------------
 
-          echo ""
-          echo "Hunspell tools:"
-          command -v unmunch
-          command -v wordforms || true
+  - name: Install Hunspell tools
+    shell: bash
+    run: |
+      set -euo pipefail
 
-      # -------------------------------------------------------
-      # Prepare build scripts
-      # -------------------------------------------------------
+      sudo apt-get update
 
-      - name: Prepare build scripts
-        shell: bash
-        run: |
-          set -euo pipefail
+      sudo apt-get install -y \
+        hunspell-tools \
+        curl
 
-          chmod +x ./gradlew
-          chmod +x ./scripts/generate-dictionaries.sh
+      echo ""
+      echo "Hunspell tools:"
+      command -v unmunch
 
-          test -x ./gradlew
-          test -x ./scripts/generate-dictionaries.sh
 
-      # -------------------------------------------------------
-      # Build release APK
-      # -------------------------------------------------------
+  # -------------------------------------------------------
+  # Prepare build scripts
+  # -------------------------------------------------------
 
-      - name: Build release APK
-        shell: bash
-        run: |
-          set -euo pipefail
+  - name: Prepare build scripts
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          ./gradlew \
-            --no-daemon \
-            assembleRelease
+      chmod +x ./gradlew
+      chmod +x scripts/generate-dictionaries.sh
 
-      # -------------------------------------------------------
-      # Build debug APK
-      # -------------------------------------------------------
+      test -x ./gradlew
+      test -x scripts/generate-dictionaries.sh
 
-      - name: Build debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
 
-          ./gradlew \
-            --no-daemon \
-            assembleDebug
+  # -------------------------------------------------------
+  # Generate dictionaries
+  # -------------------------------------------------------
 
-      # -------------------------------------------------------
-      # APK report
-      # -------------------------------------------------------
+  - name: Generate PocketBoard dictionaries
+    shell: bash
+    run: |
+      set -euo pipefail
 
-      - name: APK report
-        shell: bash
-        run: |
-          set -euo pipefail
+      ./gradlew \
+        --no-daemon \
+        generatePocketBoardDictionaries
 
-          echo "=========================================="
-          echo "PocketBoard APKs generated"
-          echo "=========================================="
 
-          echo ""
-          echo "Release APK:"
-          ls -lh app/build/outputs/apk/release/*.apk
+  # -------------------------------------------------------
+  # Validate dictionaries
+  # -------------------------------------------------------
 
-          echo ""
-          echo "Debug APK:"
-          ls -lh app/build/outputs/apk/debug/*.apk
+  - name: Validate PocketBoard dictionaries
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          echo ""
-          echo "Build completed successfully."
+      ./gradlew \
+        --no-daemon \
+        validatePocketBoardDictionaries
+
+
+  # -------------------------------------------------------
+  # Dictionary report
+  # -------------------------------------------------------
+
+  - name: Dictionary report
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      echo "=========================================="
+      echo "PocketBoard dictionaries"
+      echo "=========================================="
+
+      for file in app/src/main/assets/dictionaries/*.dict
+      do
+        echo ""
+        echo "FILE: ${file}"
+
+        echo "SIZE:"
+        du -h "${file}"
+
+        echo "WORDS:"
+        tail -n +2 "${file}" | wc -l
+      done
+
+
+  # -------------------------------------------------------
+  # Build release APK
+  # -------------------------------------------------------
+
+  - name: Build release APK
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      ./gradlew \
+        --no-daemon \
+        assembleRelease
+
+
+  # -------------------------------------------------------
+  # Build debug APK
+  # -------------------------------------------------------
+
+  - name: Build debug APK
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      ./gradlew \
+        --no-daemon \
+        assembleDebug
