@@ -345,19 +345,14 @@ doLast {
 
 /*
 
-Dictionaries must exist before Android processes assets.
-*/
-tasks.named("preBuild") {
-
-dependsOn(
-"validatePocketBoardDictionaries"
-)
-}
-
-/*
-
 ============================================================
 KEYBOARD MAPPING XML VALIDATION
+============================================================
+Validates all keyboard_mapping_*.xml files against:
+app/keyboard-mapping.xsd
+
+If the schema file does not exist, validation is skipped.
+Invalid XML causes the build to fail.
 ============================================================
 */
 
@@ -445,6 +440,30 @@ doLast {
         )
     }
 }
+
+
+}
+
+/*
+
+============================================================
+PRE-BUILD VALIDATION
+============================================================
+Dictionaries and keyboard mappings are validated before
+Android starts processing the application.
+Dictionary generation is therefore part of the normal build.
+Missing individual words remain warnings.
+Invalid/missing required dictionary files remain fatal.
+Invalid keyboard mapping XML remains fatal.
+============================================================
+*/
+
+tasks.named("preBuild") {
+
+dependsOn(
+        "validatePocketBoardDictionaries",
+        "validateKeyboardMappings"
+)
 
 
 }
