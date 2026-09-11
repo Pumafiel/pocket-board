@@ -1,51 +1,27 @@
 package com.sinux.pocketboard.spellchecker;
 
 import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public final class LanguageRules {
 
-    private LanguageRules() {
-    }
-
-    /*
-     * ------------------------------------------------------------
-     * Costos base
-     * ------------------------------------------------------------
-     *
-     * Los valores no representan probabilidades absolutas.
-     * Son pesos relativos utilizados por CorrectionEngine.
-     */
-
     private static final int COST_EXACT = 0;
-
     private static final int COST_DIACRITIC = 1;
-
-    private static final int COST_SPANISH_N_NTILDE = 1;
-
-    private static final int COST_GERMAN_UMLAUT = 1;
-
-    private static final int COST_GERMAN_SHARP_S = 1;
-
-    private static final int COST_NORMALIZED_DIFFERENCE = 2;
-
-    private static final int COST_LANGUAGE_SPECIFIC = 3;
-
+    private static final int COST_LANGUAGE = 1;
     private static final int COST_UNKNOWN = 5;
 
-
-    /*
-     * ------------------------------------------------------------
-     * Idiomas soportados por PocketBoard
-     * ------------------------------------------------------------
-     */
+    private LanguageRules() {
+    }
 
     public static String normalizeLanguage(
             String languageTag) {
 
         if (languageTag == null ||
                 languageTag.trim().isEmpty()) {
-
             return "en";
         }
 
@@ -75,21 +51,6 @@ public final class LanguageRules {
         return "en";
     }
 
-
-    /*
-     * ------------------------------------------------------------
-     * Comparación lingüística
-     * ------------------------------------------------------------
-     *
-     * Devuelve un costo para sustituir "typed" por "candidate".
-     *
-     * 0 = iguales
-     * 1 = diferencia muy probable / tolerable
-     * 2 = diferencia lingüística moderada
-     * 3 = diferencia específica
-     * 5 = diferencia no relacionada
-     */
-
     public static int getCharacterSubstitutionCost(
             char typed,
             char candidate,
@@ -118,51 +79,22 @@ public final class LanguageRules {
             return COST_EXACT;
         }
 
-        /*
-         * --------------------------------------------------------
-         * Español
-         * --------------------------------------------------------
-         *
-         * n <-> ñ merece un tratamiento especial.
-         *
-         * "manana" -> "mañana"
-         *
-         * No se considera una sustitución normal.
-         */
-
         if ("es-AR".equals(language)) {
 
             if (isSpanishNPair(
                     first,
                     second
             )) {
-
-                return COST_SPANISH_N_NTILDE;
+                return COST_LANGUAGE;
             }
 
-            if (isDiacriticPair(
+            if (areDiacriticVariants(
                     first,
                     second
             )) {
-
                 return COST_DIACRITIC;
             }
         }
-
-        /*
-         * --------------------------------------------------------
-         * Alemán
-         * --------------------------------------------------------
-         *
-         * ä -> a
-         * ö -> o
-         * ü -> u
-         * ß -> ss
-         *
-         * Las equivalencias de un carácter contra dos caracteres
-         * serán tratadas por CorrectionEngine como inserción/
-         * eliminación o transformación especial.
-         */
 
         if ("de".equals(language)) {
 
@@ -170,94 +102,34 @@ public final class LanguageRules {
                     first,
                     second
             )) {
-
-                return COST_GERMAN_UMLAUT;
+                return COST_LANGUAGE;
             }
 
             if (isGermanSharpSPair(
                     first,
                     second
             )) {
-
-                return COST_GERMAN_SHARP_S;
+                return COST_LANGUAGE;
             }
 
-            if (isDiacriticPair(
+            if (areDiacriticVariants(
                     first,
                     second
             )) {
-
                 return COST_DIACRITIC;
             }
         }
 
-        /*
-         * --------------------------------------------------------
-         * Inglés
-         * --------------------------------------------------------
-         *
-         * No damos una ventaja especial a diacríticos en inglés.
-         * Se mantiene una tolerancia pequeña para que palabras
-         * internacionales no queden completamente descartadas.
-         */
-
-        if ("en".equals(language)) {
-
-            if (isDiacriticPair(
-                    first,
-                    second
-            )) {
-
-                return COST_NORMALIZED_DIFFERENCE;
-            }
+        if ("en".equals(language) &&
+                areDiacriticVariants(
+                        first,
+                        second
+                )) {
+            return 2;
         }
 
         return COST_UNKNOWN;
     }
-
-
-    /*
-     * ------------------------------------------------------------
-     * Diacríticos
-     * ------------------------------------------------------------
-     *
-     * Determina si dos caracteres son iguales salvo por
-     * diacríticos.
-     */
-
-    public static boolean areDiacriticVariants(
-            char first,
-            char second) {
-
-        if (first == second) {
-            return true;
-        }
-
-        String firstString =
-                String.valueOf(
-                        first
-                );
-
-        String secondString =
-                String.valueOf(
-                        second
-                );
-
-        String normalizedFirst =
-                removeDiacritics(
-                        firstString
-                );
-
-        String normalizedSecond =
-                removeDiacritics(
-                        secondString
-                );
-
-        return normalizedFirst.equals(
-                normalizedSecond
-        );
-    }
-
 
     public static int getDiacriticCost(
             char typed,
@@ -272,7 +144,6 @@ public final class LanguageRules {
                 typed,
                 candidate
         )) {
-
             return COST_UNKNOWN;
         }
 
@@ -283,19 +154,32 @@ public final class LanguageRules {
 
         if ("es-AR".equals(language) ||
                 "de".equals(language)) {
-
             return COST_DIACRITIC;
         }
 
-        return COST_NORMALIZED_DIFFERENCE;
+        return 2;
     }
 
+    public static boolean areDiacriticVariants(
+            char first,
+            char second) {
 
-    /*
-     * ------------------------------------------------------------
-     * Ñ
-     * ------------------------------------------------------------
-     */
+        if (first == second) {
+            return true;
+        }
+
+        String a =
+                removeDiacritics(
+                        String.valueOf(first)
+                );
+
+        String b =
+                removeDiacritics(
+                        String.valueOf(second)
+                );
+
+        return a.equalsIgnoreCase(b);
+    }
 
     public static boolean isSpanishNPair(
             char first,
@@ -315,7 +199,6 @@ public final class LanguageRules {
                 (a == 'ñ' && b == 'n');
     }
 
-
     public static boolean isSpanishLanguage(
             String languageTag) {
 
@@ -326,13 +209,6 @@ public final class LanguageRules {
         );
     }
 
-
-    /*
-     * ------------------------------------------------------------
-     * Alemán
-     * ------------------------------------------------------------
-     */
-
     public static boolean isGermanLanguage(
             String languageTag) {
 
@@ -342,7 +218,6 @@ public final class LanguageRules {
                 )
         );
     }
-
 
     public static boolean isGermanUmlautPair(
             char first,
@@ -367,7 +242,6 @@ public final class LanguageRules {
                 (a == 'ü' && b == 'u');
     }
 
-
     public static boolean isGermanSharpSPair(
             char first,
             char second) {
@@ -387,29 +261,18 @@ public final class LanguageRules {
                 (a == 's' && b == 'ß');
     }
 
-
-    /*
-     * ------------------------------------------------------------
-     * Clasificación de errores
-     * ------------------------------------------------------------
-     */
-
     public static boolean isLikelyAccentError(
             char typed,
             char candidate,
             String languageTag) {
 
-        if (typed == candidate) {
-            return false;
-        }
-
-        return getDiacriticCost(
-                typed,
-                candidate,
-                languageTag
-        ) <= COST_DIACRITIC;
+        return typed != candidate &&
+                getDiacriticCost(
+                        typed,
+                        candidate,
+                        languageTag
+                ) <= COST_DIACRITIC;
     }
-
 
     public static boolean isLikelyLanguageSpecificError(
             char typed,
@@ -422,7 +285,6 @@ public final class LanguageRules {
                 );
 
         if ("es-AR".equals(language)) {
-
             return isSpanishNPair(
                     typed,
                     candidate
@@ -430,31 +292,18 @@ public final class LanguageRules {
         }
 
         if ("de".equals(language)) {
-
             return isGermanUmlautPair(
-                        typed,
-                        candidate
-                ) ||
-                isGermanSharpSPair(
-                        typed,
-                        candidate
-                );
+                    typed,
+                    candidate
+            ) ||
+                    isGermanSharpSPair(
+                            typed,
+                            candidate
+                    );
         }
 
         return false;
     }
-
-
-    /*
-     * ------------------------------------------------------------
-     * Normalización para comparación
-     * ------------------------------------------------------------
-     *
-     * Se utiliza únicamente para encontrar similitudes.
-     *
-     * NO debe utilizarse para reemplazar directamente la palabra
-     * que escribió el usuario.
-     */
 
     public static String normalizeForComparison(
             String text,
@@ -464,50 +313,16 @@ public final class LanguageRules {
             return "";
         }
 
-        String language =
-                normalizeLanguage(
-                        languageTag
-                );
-
-        String normalized =
-                text.toLowerCase(
-                        Locale.ROOT
-                );
-
-        /*
-         * Para español mantenemos ñ como carácter distinto.
-         *
-         * Esto es importante:
-         *
-         *     n != ñ
-         *
-         * pero CorrectionEngine puede darles un costo bajo.
-         */
-
-        if ("es-AR".equals(language)) {
-            return normalized;
-        }
-
-        /*
-         * Para alemán tampoco destruimos las diferencias
-         * lingüísticas. Se conservan para que el ranking pueda
-         * decidir si realmente corresponde tratarlas como error.
-         */
-
-        if ("de".equals(language)) {
-            return normalized;
-        }
-
-        return normalized;
+        return text.toLowerCase(
+                Locale.ROOT
+        );
     }
-
 
     public static String removeDiacritics(
             String text) {
 
         if (text == null ||
                 text.isEmpty()) {
-
             return "";
         }
 
@@ -522,27 +337,20 @@ public final class LanguageRules {
                         normalized.length()
                 );
 
-        for (int i = 0;
-             i < normalized.length();
-             i++) {
-
-            char character =
+        for (
+                int i = 0;
+                i < normalized.length();
+                i++
+        ) {
+            char c =
                     normalized.charAt(i);
 
-            int type =
-                    Character.getType(
-                            character
-                    );
-
-            if (type ==
+            if (Character.getType(c) ==
                     Character.NON_SPACING_MARK) {
-
                 continue;
             }
 
-            result.append(
-                    character
-            );
+            result.append(c);
         }
 
         return Normalizer.normalize(
@@ -551,16 +359,6 @@ public final class LanguageRules {
         );
     }
 
-
-    /*
-     * ------------------------------------------------------------
-     * Comparación de dos palabras
-     * ------------------------------------------------------------
-     *
-     * Ayuda a CorrectionEngine a detectar si dos palabras son
-     * esencialmente iguales salvo por acentos o reglas lingüísticas.
-     */
-
     public static boolean equivalentIgnoringDiacritics(
             String first,
             String second,
@@ -568,124 +366,167 @@ public final class LanguageRules {
 
         if (first == null ||
                 second == null) {
-
             return false;
         }
 
         if (first.equalsIgnoreCase(
                 second
         )) {
-
             return true;
         }
 
-        String normalizedFirst =
+        String a =
                 removeDiacritics(
                         first.toLowerCase(
                                 Locale.ROOT
                         )
                 );
 
-        String normalizedSecond =
+        String b =
                 removeDiacritics(
                         second.toLowerCase(
                                 Locale.ROOT
                         )
                 );
 
-        if (normalizedFirst.equals(
-                normalizedSecond
-        )) {
-
+        if (a.equals(b)) {
             return true;
         }
-
-        /*
-         * Español:
-         *
-         * "manana" y "mañana"
-         *
-         * deben poder reconocerse como variantes cercanas.
-         */
 
         if (isSpanishLanguage(
                 languageTag
         )) {
-
-            String spanishFirst =
-                    replaceSpanishN(
-                            normalizedFirst
+            return replaceSpanishN(a)
+                    .equals(
+                            replaceSpanishN(b)
                     );
-
-            String spanishSecond =
-                    replaceSpanishN(
-                            normalizedSecond
-                    );
-
-            return spanishFirst.equals(
-                    spanishSecond
-            );
         }
 
         return false;
     }
-
-
-    private static String replaceSpanishN(
-            String text) {
-
-        if (text == null ||
-                text.isEmpty()) {
-
-            return "";
-        }
-
-        return text.replace(
-                'ñ',
-                'n'
-        );
-    }
-
-
-    /*
-     * ------------------------------------------------------------
-     * Costo de transformación de palabra
-     * ------------------------------------------------------------
-     *
-     * Este método no calcula una distancia completa.
-     * Sirve para que CorrectionEngine pueda consultar cuánto
-     * debería penalizar una diferencia lingüística concreta.
-     */
 
     public static int getLanguageAdjustment(
             char typed,
             char candidate,
             String languageTag) {
 
-        if (typed == candidate) {
-            return COST_EXACT;
-        }
-
-        int cost =
-                getCharacterSubstitutionCost(
-                        typed,
-                        candidate,
-                        languageTag
-                );
-
-        if (cost <= COST_DIACRITIC) {
-            return cost;
-        }
-
-        if (isLikelyLanguageSpecificError(
+        return getCharacterSubstitutionCost(
                 typed,
                 candidate,
                 languageTag
-        )) {
+        );
+    }
 
-            return COST_LANGUAGE_SPECIFIC;
+    /*
+     * Generates only one-character language variants.
+     *
+     * This is intentionally bounded. The dictionary manager verifies
+     * every generated word against the real dictionary.
+     */
+    public static List<String> getDiacriticVariants(
+            String input,
+            String languageTag) {
+
+        Set<String> variants =
+                new LinkedHashSet<>();
+
+        if (input == null ||
+                input.isEmpty()) {
+            return new ArrayList<>();
         }
 
-        return COST_UNKNOWN;
+        String language =
+                normalizeLanguage(
+                        languageTag
+                );
+
+        for (
+                int i = 0;
+                i < input.length();
+                i++
+        ) {
+            char current =
+                    input.charAt(i);
+
+            addVariantsForCharacter(
+                    input,
+                    i,
+                    current,
+                    language,
+                    variants
+            );
+        }
+
+        variants.remove(input);
+
+        return new ArrayList<>(
+                variants
+        );
+    }
+
+    private static void addVariantsForCharacter(
+            String input,
+            int index,
+            char current,
+            String language,
+            Set<String> variants) {
+
+        char[] replacements;
+
+        if ("es-AR".equals(language)) {
+            replacements = new char[] {
+                    'a', 'á',
+                    'e', 'é',
+                    'i', 'í',
+                    'o', 'ó',
+                    'u', 'ú',
+                    'n', 'ñ'
+            };
+        } else if ("de".equals(language)) {
+            replacements = new char[] {
+                    'a', 'ä',
+                    'o', 'ö',
+                    'u', 'ü',
+                    's', 'ß'
+            };
+        } else {
+            replacements = new char[] {
+                    'a', 'á',
+                    'e', 'é',
+                    'i', 'í',
+                    'o', 'ó',
+                    'u', 'ú'
+            };
+        }
+
+        for (char replacement : replacements) {
+
+            if (replacement == current) {
+                continue;
+            }
+
+            StringBuilder builder =
+                    new StringBuilder(
+                            input
+                    );
+
+            builder.setCharAt(
+                    index,
+                    replacement
+            );
+
+            variants.add(
+                    builder.toString()
+            );
+        }
+    }
+
+    private static String replaceSpanishN(
+            String text) {
+
+        return text.replace(
+                'ñ',
+                'n'
+        );
     }
 }
