@@ -5,7 +5,7 @@
 
     <!-- Multilingual string resources -->
 
-    <string name="ime_name">PocketBoard</string>
+    <string name="ime_name">PocketBoard-E</string>
     <string name="ime_settings">PocketBoard Settings</string>
     <string name="ime_subtypes">Input types</string>
     <string name="ime_subtypes_select">Select input types</string>
