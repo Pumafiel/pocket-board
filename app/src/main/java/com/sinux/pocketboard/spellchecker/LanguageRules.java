@@ -19,7 +19,7 @@ public final class LanguageRules {
 
     /*
      * ============================================================
-     * LANGUAGE NORMALIZATION
+     * LANGUAGE
      * ============================================================
      */
 
@@ -35,13 +35,8 @@ public final class LanguageRules {
         String normalized =
                 languageTag
                         .trim()
-                        .replace(
-                                '_',
-                                '-'
-                        )
-                        .toLowerCase(
-                                Locale.ROOT
-                        );
+                        .replace('_', '-')
+                        .toLowerCase(Locale.ROOT);
 
         if (normalized.startsWith("es")) {
             return "es-AR";
@@ -55,16 +50,35 @@ public final class LanguageRules {
             return "en";
         }
 
-        /*
-         * Keep the existing PocketBoard fallback.
-         */
         return "en";
+    }
+
+    public static boolean isSpanishLanguage(
+            String languageTag) {
+
+        return "es-AR".equals(
+                normalizeLanguage(languageTag)
+        );
+    }
+
+    public static boolean isGermanLanguage(
+            String languageTag) {
+
+        return "de".equals(
+                normalizeLanguage(languageTag)
+        );
     }
 
     /*
      * ============================================================
      * CHARACTER SUBSTITUTION
      * ============================================================
+     *
+     * This is intentionally character-level.
+     *
+     * The CorrectionEngine decides whether the complete word is
+     * a good candidate. LanguageRules only says how plausible a
+     * particular character substitution is.
      */
 
     public static int getCharacterSubstitutionCost(
@@ -76,30 +90,23 @@ public final class LanguageRules {
             return COST_EXACT;
         }
 
-        String language =
-                normalizeLanguage(
-                        languageTag
-                );
-
         char first =
-                Character.toLowerCase(
-                        typed
-                );
+                Character.toLowerCase(typed);
 
         char second =
-                Character.toLowerCase(
-                        candidate
-                );
+                Character.toLowerCase(candidate);
 
         if (first == second) {
             return COST_EXACT;
         }
 
+        String language =
+                normalizeLanguage(languageTag);
+
         /*
-         * Spanish-specific relationships.
+         * Spanish.
          *
-         * n <-> ñ is NOT a generic Unicode diacritic relation.
-         * It is explicitly handled as a Spanish language rule.
+         * n <-> ñ is explicitly Spanish-specific.
          */
         if ("es-AR".equals(language)) {
 
@@ -121,7 +128,7 @@ public final class LanguageRules {
         }
 
         /*
-         * German-specific relationships.
+         * German.
          */
         if ("de".equals(language)) {
 
@@ -151,8 +158,8 @@ public final class LanguageRules {
         }
 
         /*
-         * English can still tolerate an accented character as a
-         * low-cost variation, but it does NOT get Spanish ñ rules.
+         * English may tolerate accented variants, but does not
+         * inherit Spanish or German-specific rules.
          */
         if ("en".equals(language) &&
                 areDiacriticVariants(
@@ -184,9 +191,7 @@ public final class LanguageRules {
         }
 
         String language =
-                normalizeLanguage(
-                        languageTag
-                );
+                normalizeLanguage(languageTag);
 
         if ("es-AR".equals(language) ||
                 "de".equals(language)) {
@@ -197,9 +202,21 @@ public final class LanguageRules {
         return 2;
     }
 
+    public static int getLanguageAdjustment(
+            char typed,
+            char candidate,
+            String languageTag) {
+
+        return getCharacterSubstitutionCost(
+                typed,
+                candidate,
+                languageTag
+        );
+    }
+
     /*
      * ============================================================
-     * DIACRITIC RELATION
+     * DIACRITICS
      * ============================================================
      */
 
@@ -212,26 +229,17 @@ public final class LanguageRules {
         }
 
         char a =
-                Character.toLowerCase(
-                        first
-                );
+                Character.toLowerCase(first);
 
         char b =
-                Character.toLowerCase(
-                        second
-                );
+                Character.toLowerCase(second);
 
         /*
-         * ñ is a distinct Spanish letter, not merely an accented n
-         * for the purposes of generic Unicode comparison.
+         * ñ is NOT a generic n diacritic for our engine.
          *
-         * Spanish n <-> ñ is handled explicitly by isSpanishNPair().
+         * Spanish n <-> ñ is handled explicitly above.
          */
-        if (isSpanishNPair(
-                a,
-                b
-        )) {
-
+        if (isSpanishNPair(a, b)) {
             return false;
         }
 
@@ -249,105 +257,6 @@ public final class LanguageRules {
                 secondBase
         );
     }
-
-    /*
-     * ============================================================
-     * SPANISH
-     * ============================================================
-     */
-
-    public static boolean isSpanishNPair(
-            char first,
-            char second) {
-
-        char a =
-                Character.toLowerCase(
-                        first
-                );
-
-        char b =
-                Character.toLowerCase(
-                        second
-                );
-
-        return
-                (a == 'n' && b == 'ñ') ||
-                (a == 'ñ' && b == 'n');
-    }
-
-    public static boolean isSpanishLanguage(
-            String languageTag) {
-
-        return "es-AR".equals(
-                normalizeLanguage(
-                        languageTag
-                )
-        );
-    }
-
-    /*
-     * ============================================================
-     * GERMAN
-     * ============================================================
-     */
-
-    public static boolean isGermanLanguage(
-            String languageTag) {
-
-        return "de".equals(
-                normalizeLanguage(
-                        languageTag
-                )
-        );
-    }
-
-    public static boolean isGermanUmlautPair(
-            char first,
-            char second) {
-
-        char a =
-                Character.toLowerCase(
-                        first
-                );
-
-        char b =
-                Character.toLowerCase(
-                        second
-                );
-
-        return
-                (a == 'a' && b == 'ä') ||
-                (a == 'ä' && b == 'a') ||
-                (a == 'o' && b == 'ö') ||
-                (a == 'ö' && b == 'o') ||
-                (a == 'u' && b == 'ü') ||
-                (a == 'ü' && b == 'u');
-    }
-
-    public static boolean isGermanSharpSPair(
-            char first,
-            char second) {
-
-        char a =
-                Character.toLowerCase(
-                        first
-                );
-
-        char b =
-                Character.toLowerCase(
-                        second
-                );
-
-        return
-                (a == 'ß' && b == 's') ||
-                (a == 's' && b == 'ß');
-    }
-
-    /*
-     * ============================================================
-     * ERROR CLASSIFICATION
-     * ============================================================
-     */
 
     public static boolean isLikelyAccentError(
             char typed,
@@ -368,9 +277,7 @@ public final class LanguageRules {
             String languageTag) {
 
         String language =
-                normalizeLanguage(
-                        languageTag
-                );
+                normalizeLanguage(languageTag);
 
         if ("es-AR".equals(language)) {
 
@@ -397,8 +304,74 @@ public final class LanguageRules {
 
     /*
      * ============================================================
+     * SPANISH
+     * ============================================================
+     */
+
+    public static boolean isSpanishNPair(
+            char first,
+            char second) {
+
+        char a =
+                Character.toLowerCase(first);
+
+        char b =
+                Character.toLowerCase(second);
+
+        return
+                (a == 'n' && b == 'ñ') ||
+                (a == 'ñ' && b == 'n');
+    }
+
+    /*
+     * ============================================================
+     * GERMAN
+     * ============================================================
+     */
+
+    public static boolean isGermanUmlautPair(
+            char first,
+            char second) {
+
+        char a =
+                Character.toLowerCase(first);
+
+        char b =
+                Character.toLowerCase(second);
+
+        return
+                (a == 'a' && b == 'ä') ||
+                (a == 'ä' && b == 'a') ||
+                (a == 'o' && b == 'ö') ||
+                (a == 'ö' && b == 'o') ||
+                (a == 'u' && b == 'ü') ||
+                (a == 'ü' && b == 'u');
+    }
+
+    public static boolean isGermanSharpSPair(
+            char first,
+            char second) {
+
+        char a =
+                Character.toLowerCase(first);
+
+        char b =
+                Character.toLowerCase(second);
+
+        return
+                (a == 'ß' && b == 's') ||
+                (a == 's' && b == 'ß');
+    }
+
+    /*
+     * ============================================================
      * TEXT NORMALIZATION
      * ============================================================
+     *
+     * This method does NOT remove accents.
+     *
+     * It is used only to obtain a stable comparison form while
+     * preserving the actual spelling.
      */
 
     public static String normalizeForComparison(
@@ -411,10 +384,19 @@ public final class LanguageRules {
 
         return text
                 .trim()
-                .toLowerCase(
-                        Locale.ROOT
-                );
+                .toLowerCase(Locale.ROOT);
     }
+
+    /*
+     * ============================================================
+     * REMOVE DIACRITICS
+     * ============================================================
+     *
+     * Utility only.
+     *
+     * Do not use this method as the spelling equality test for
+     * Spanish, because Unicode normalization turns ñ into n.
+     */
 
     public static String removeDiacritics(
             String text) {
@@ -449,9 +431,7 @@ public final class LanguageRules {
                 continue;
             }
 
-            result.append(
-                    c
-            );
+            result.append(c);
         }
 
         return Normalizer.normalize(
@@ -462,8 +442,19 @@ public final class LanguageRules {
 
     /*
      * ============================================================
-     * EQUIVALENCE
+     * COMPLETE-WORD EQUIVALENCE
      * ============================================================
+     *
+     * IMPORTANT:
+     *
+     * This method is intentionally conservative.
+     *
+     * It does NOT transform n <-> ñ.
+     *
+     * It is only an "ignoring accent marks" comparison.
+     *
+     * The CorrectionEngine should normally prefer its
+     * character-level scoring instead of relying on this method.
      */
 
     public static boolean equivalentIgnoringDiacritics(
@@ -477,66 +468,67 @@ public final class LanguageRules {
             return false;
         }
 
-        if (first.equalsIgnoreCase(
-                second
-        )) {
-
-            return true;
-        }
-
         String a =
-                removeDiacritics(
-                        first.toLowerCase(
-                                Locale.ROOT
-                        )
-                );
+                first
+                        .trim()
+                        .toLowerCase(Locale.ROOT);
 
         String b =
-                removeDiacritics(
-                        second.toLowerCase(
-                                Locale.ROOT
-                        )
-                );
-
-        /*
-         * Do not allow Unicode normalization to erase the semantic
-         * distinction between Spanish n and ñ.
-         */
-        if (isSpanishLanguage(
-                languageTag
-        )) {
-
-            boolean firstHasN =
-                    first.indexOf('ñ') >= 0 ||
-                    first.indexOf('Ñ') >= 0;
-
-            boolean secondHasN =
-                    second.indexOf('ñ') >= 0 ||
-                    second.indexOf('Ñ') >= 0;
-
-            if (firstHasN != secondHasN) {
-
-                return false;
-            }
-        }
+                second
+                        .trim()
+                        .toLowerCase(Locale.ROOT);
 
         if (a.equals(b)) {
             return true;
         }
 
         /*
-         * Spanish comparison may optionally tolerate n/ñ as a
-         * language-specific relation, but only when both strings
-         * actually represent the corresponding Spanish spelling.
+         * Spanish n/ñ must remain distinct.
          */
         if (isSpanishLanguage(
                 languageTag
-        )) {
+        ) &&
+                containsSpanishNDifference(
+                        a,
+                        b
+                )) {
 
-            return replaceSpanishN(a)
-                    .equals(
-                            replaceSpanishN(b)
-                    );
+            return false;
+        }
+
+        return removeDiacritics(a)
+                .equals(
+                        removeDiacritics(b)
+                );
+    }
+
+    private static boolean containsSpanishNDifference(
+            String first,
+            String second) {
+
+        if (first.length() !=
+                second.length()) {
+
+            return false;
+        }
+
+        for (int i = 0;
+             i < first.length();
+             i++) {
+
+            char a =
+                    first.charAt(i);
+
+            char b =
+                    second.charAt(i);
+
+            if (a == b) {
+                continue;
+            }
+
+            if (isSpanishNPair(a, b)) {
+                return true;
+            }
         }
 
         return false;
@@ -544,37 +536,12 @@ public final class LanguageRules {
 
     /*
      * ============================================================
-     * LANGUAGE ADJUSTMENT
-     * ============================================================
-     */
-
-    public static int getLanguageAdjustment(
-            char typed,
-            char candidate,
-            String languageTag) {
-
-        return getCharacterSubstitutionCost(
-                typed,
-                candidate,
-                languageTag
-        );
-    }
-
-    /*
-     * ============================================================
      * DIACRITIC VARIANT GENERATION
      * ============================================================
      *
-     * Generates only meaningful one-character variants.
+     * Only generates meaningful one-character variants.
      *
-     * The old implementation tried every vowel/letter replacement
-     * at every position. For example, an 'a' could generate:
-     *
-     *     á, é, í, ó, ú
-     *
-     * even though only a/á is linguistically related.
-     *
-     * That creates unnecessary candidate work for DictionaryManager.
+     * It does NOT generate arbitrary vowel substitutions.
      */
 
     public static List<String> getDiacriticVariants(
@@ -591,9 +558,7 @@ public final class LanguageRules {
         }
 
         String language =
-                normalizeLanguage(
-                        languageTag
-                );
+                normalizeLanguage(languageTag);
 
         for (int i = 0;
              i < input.length();
@@ -604,83 +569,55 @@ public final class LanguageRules {
                             input.charAt(i)
                     );
 
-            addVariantsForCharacter(
-                    input,
-                    i,
-                    current,
-                    language,
-                    variants
-            );
-        }
+            char[] replacements;
 
-        variants.remove(
-                input
-        );
+            if ("es-AR".equals(language)) {
 
-        return new ArrayList<>(
-                variants
-        );
-    }
+                replacements =
+                        getSpanishVariants(current);
 
-    private static void addVariantsForCharacter(
-            String input,
-            int index,
-            char current,
-            String language,
-            Set<String> variants) {
+            } else if ("de".equals(language)) {
 
-        char[] replacements;
+                replacements =
+                        getGermanVariants(current);
 
-        if ("es-AR".equals(
-                language
-        )) {
+            } else {
 
-            replacements =
-                    getSpanishVariants(
-                            current
-                    );
-
-        } else if ("de".equals(
-                language
-        )) {
-
-            replacements =
-                    getGermanVariants(
-                            current
-                    );
-
-        } else {
-
-            replacements =
-                    getEnglishVariants(
-                            current
-                    );
-        }
-
-        for (char replacement :
-                replacements) {
-
-            if (replacement ==
-                    current) {
-
-                continue;
+                replacements =
+                        getEnglishVariants(current);
             }
 
-            StringBuilder builder =
-                    new StringBuilder(
-                            input
-                    );
+            for (char replacement :
+                    replacements) {
 
-            builder.setCharAt(
-                    index,
-                    replacement
-            );
+                if (replacement == current) {
+                    continue;
+                }
 
-            variants.add(
-                    builder.toString()
-            );
+                StringBuilder builder =
+                        new StringBuilder(input);
+
+                builder.setCharAt(
+                        i,
+                        replacement
+                );
+
+                variants.add(
+                        builder.toString()
+                );
+            }
         }
+
+        variants.remove(input);
+
+        return new ArrayList<>(variants);
     }
+
+    /*
+     * ============================================================
+     * SPANISH VARIANTS
+     * ============================================================
+     */
 
     private static char[] getSpanishVariants(
             char current) {
@@ -723,7 +660,10 @@ public final class LanguageRules {
                 };
 
             /*
-             * n <-> ñ is handled as a language-specific pair.
+             * n <-> ñ is a language-specific relation.
+             *
+             * It is intentionally included here because this
+             * method is used to generate dictionary candidates.
              */
             case 'n':
             case 'ñ':
@@ -736,6 +676,12 @@ public final class LanguageRules {
                 return new char[0];
         }
     }
+
+    /*
+     * ============================================================
+     * GERMAN VARIANTS
+     * ============================================================
+     */
 
     private static char[] getGermanVariants(
             char current) {
@@ -763,10 +709,6 @@ public final class LanguageRules {
                         'ü'
                 };
 
-            /*
-             * Keep ß/s available because the rest of the engine
-             * already treats this as a German-specific relation.
-             */
             case 's':
             case 'ß':
                 return new char[] {
@@ -778,6 +720,12 @@ public final class LanguageRules {
                 return new char[0];
         }
     }
+
+    /*
+     * ============================================================
+     * ENGLISH VARIANTS
+     * ============================================================
+     */
 
     private static char[] getEnglishVariants(
             char current) {
@@ -822,20 +770,5 @@ public final class LanguageRules {
             default:
                 return new char[0];
         }
-    }
-
-    /*
-     * ============================================================
-     * SPANISH NORMALIZATION HELPER
-     * ============================================================
-     */
-
-    private static String replaceSpanishN(
-            String text) {
-
-        return text.replace(
-                'ñ',
-                'n'
-        );
     }
 }
