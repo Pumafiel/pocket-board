@@ -1,4 +1,4 @@
-ackage com.sinux.pocketboard.spellchecker;
+package com.sinux.pocketboard.spellchecker;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,19 +14,18 @@ import java.util.Set;
  * DictionaryManager supplies the candidates.
  *
  * The engine does not decide which words exist in a language.
- * It only ranks the candidates supplied by DictionaryManager.
+ * It ranks the candidates supplied by DictionaryManager.
  *
  * Lower score = better candidate.
  *
- * The ranking is based primarily on the actual transformation
- * required to turn the typed text into the candidate.
+ * Ranking is based on:
  *
- * Secondary signals:
- *
- * - keyboard proximity
- * - language-specific spelling relationships
- * - preserved prefix
- * - preserved suffix
+ * 1. Actual transformation cost.
+ * 2. Language-specific evidence used by that transformation.
+ * 3. Keyboard evidence used by that transformation.
+ * 4. Preserved prefix.
+ * 5. Preserved suffix.
+ * 6. Completion quality.
  *
  * There is deliberately no global preference for short or long
  * words.
@@ -36,9 +35,9 @@ public final class CorrectionEngine {
     private static final int DEFAULT_MAX_RESULTS = 3;
 
     /*
-     * ------------------------------------------------------------
-     * Base edit costs
-     * ------------------------------------------------------------
+     * ============================================================
+     * BASE EDIT COSTS
+     * ============================================================
      */
 
     private static final int INSERTION_COST = 3;
@@ -52,74 +51,49 @@ public final class CorrectionEngine {
     private static final int REPEATED_CHARACTER_COST = 1;
 
     /*
-     * Maximum cost for a normal correction.
+     * Maximum correction cost.
      */
     private static final int MAX_CORRECTION_COST = 12;
 
     /*
-     * Short input is inherently ambiguous.
-     *
-     * We therefore become conservative rather than guessing wildly.
+     * Conservative handling for very short input.
      */
     private static final int SHORT_INPUT_LENGTH = 4;
 
     /*
-     * ------------------------------------------------------------
-     * Completion scoring
-     * ------------------------------------------------------------
+     * ============================================================
+     * COMPLETION
+     * ============================================================
      *
-     * Completion is fundamentally different from correction.
+     * A prefix completion is not a spelling error.
      *
-     * If the user typed:
+     * Example:
      *
-     *     "auto"
+     *     auto -> automóvil
      *
-     * then:
+     * The added characters therefore do not accumulate normal
+     * edit costs.
      *
-     *     "automovil"
-     *     "automatico"
-     *
-     * are both legitimate completions.
-     *
-     * The additional characters therefore must NOT be treated as
-     * spelling errors.
-     *
-     * However, a completion with an extremely large addition should
-     * not automatically dominate a more natural candidate.
+     * There is no frequency information in CorrectionEngine, so
+     * completion length is used only as a late tie-breaker.
      */
-    private static final int COMPLETION_BASE_COST = 1;
+    private static final int COMPLETION_BASE_COST = 0;
+    private static final int MAX_COMPLETION_ADDITION = 32;
 
     /*
-     * The first few added characters are cheap.
-     * Later additions become progressively less influential.
-     *
-     * This is intentionally much weaker than a linear
-     * "one point per character" penalty.
-     */
-    private static final int COMPLETION_FIRST_CHARS = 3;
-    private static final int COMPLETION_LATER_COST = 1;
-
-    private static final int MAX_COMPLETION_ADDITION = 16;
-
-    /*
-     * Prefix evidence.
+     * A prefix of four or more characters is considered strong.
      */
     private static final int STRONG_PREFIX_LENGTH = 4;
-
-    /*
-     * ------------------------------------------------------------
-     * Public API
-     * ------------------------------------------------------------
-     */
 
     public CorrectionEngine() {
     }
 
-    /**
-     * Ranks dictionary candidates.
-     *
-     * The input list can contain corrections and prefix completions.
+    /*
+     * ============================================================
+     * PUBLIC API
+     * ============================================================
      */
+
     public List<String> rankCandidates(
             String input,
             List<String> candidates,
@@ -174,9 +148,6 @@ public final class CorrectionEngine {
                 continue;
             }
 
-            /*
-             * Do not rank the same normalized candidate twice.
-             */
             if (!seen.add(
                     normalizedCandidate
             )) {
@@ -184,7 +155,9 @@ public final class CorrectionEngine {
             }
 
             /*
-             * Exact matches are handled by DictionaryManager.
+             * Exact matches are intentionally not returned by this
+             * method. DictionaryManager handles them separately and
+             * places the exact word at position zero.
              */
             if (normalizedInput.equals(
                     normalizedCandidate
@@ -319,7 +292,7 @@ public final class CorrectionEngine {
 
         /*
          * --------------------------------------------------------
-         * Completion
+         * COMPLETION
          * --------------------------------------------------------
          */
 
@@ -332,14 +305,13 @@ public final class CorrectionEngine {
                     first,
                     second,
                     prefixLength,
-                    suffixLength,
-                    language
+                    suffixLength
             );
         }
 
         /*
          * --------------------------------------------------------
-         * Correction
+         * CORRECTION
          * --------------------------------------------------------
          */
 
@@ -354,7 +326,7 @@ public final class CorrectionEngine {
 
     /*
      * ============================================================
-     * COMPLETION
+     * COMPLETION SCORE
      * ============================================================
      */
 
@@ -362,8 +334,7 @@ public final class CorrectionEngine {
             String input,
             String candidate,
             int prefixLength,
-            int suffixLength,
-            String languageTag) {
+            int suffixLength) {
 
         int added =
                 candidate.length() -
@@ -377,133 +348,29 @@ public final class CorrectionEngine {
         }
 
         /*
-         * Every completion starts with a very small base cost.
+         * All valid prefix completions begin with an exact prefix.
+         *
+         * We therefore do not punish the added letters as spelling
+         * errors.
          */
-        int score =
-                COMPLETION_BASE_COST;
-
-        /*
-         * The first few characters added are expected.
-         * Longer additions have only a mild influence.
-         *
-         * This avoids:
-         *
-         *     "longer = automatically worse"
-         *
-         * while still preventing absurdly long candidates from
-         * receiving exactly the same score as short natural ones.
-         */
-        if (added >
-                COMPLETION_FIRST_CHARS) {
-
-            score +=
-                    (added -
-                            COMPLETION_FIRST_CHARS)
-                            *
-                            COMPLETION_LATER_COST;
-        }
-
-        /*
-         * Strong prefix evidence is extremely important.
-         *
-         * This is not a negative bonus. It is a tie-breaking
-         * quality signal kept separate from the actual score.
-         */
-        boolean strongPrefix =
-                prefixLength >=
-                        STRONG_PREFIX_LENGTH;
-
-        /*
-         * The completion has no edit error inside the typed prefix.
-         *
-         * Check whether the candidate's completed portion contains
-         * useful linguistic information. We do NOT punish ordinary
-         * accented words here.
-         */
-        int languageEvidence =
-                completionLanguageEvidence(
-                        input,
-                        candidate,
-                        languageTag
-                );
-
-        /*
-         * A completion must not receive keyboard evidence merely
-         * because some newly-added character happens to be adjacent
-         * to something on the keyboard.
-         *
-         * Only the typed prefix matters.
-         */
-        int keyboardEvidence = 0;
-
         return new ScoreBreakdown(
-                score,
-                added,
+                COMPLETION_BASE_COST,
+                0,
                 prefixLength,
                 suffixLength,
-                keyboardEvidence,
-                languageEvidence,
-                strongPrefix,
+                0,
+                0,
+                prefixLength >=
+                        STRONG_PREFIX_LENGTH,
                 true,
-                true
+                true,
+                added
         );
-    }
-
-    /**
-     * A completion does not need to be a language variant.
-     *
-     * This method only records useful evidence when the candidate
-     * preserves a meaningful language-specific spelling relation
-     * inside the already typed portion.
-     */
-    private int completionLanguageEvidence(
-            String input,
-            String candidate,
-            String languageTag) {
-
-        int limit =
-                Math.min(
-                        input.length(),
-                        candidate.length()
-                );
-
-        int evidence = 0;
-
-        for (int i = 0;
-             i < limit;
-             i++) {
-
-            char typed =
-                    input.charAt(i);
-
-            char target =
-                    candidate.charAt(i);
-
-            if (typed == target) {
-                continue;
-            }
-
-            int cost =
-                    LanguageRules
-                            .getCharacterSubstitutionCost(
-                                    typed,
-                                    target,
-                                    languageTag
-                            );
-
-            if (cost <
-                    KeyboardErrorModel.getUnknownCost()) {
-
-                evidence++;
-            }
-        }
-
-        return evidence;
     }
 
     /*
      * ============================================================
-     * CORRECTION
+     * CORRECTION SCORE
      * ============================================================
      */
 
@@ -514,88 +381,50 @@ public final class CorrectionEngine {
             int suffixLength,
             String languageTag) {
 
-        int editCost =
+        EditResult edit =
                 weightedDamerauLevenshtein(
                         input,
                         candidate,
                         languageTag
                 );
 
-        if (editCost >
-                MAX_CORRECTION_COST) {
+        if (!edit.valid ||
+                edit.cost >
+                        MAX_CORRECTION_COST) {
 
             return ScoreBreakdown.invalid();
         }
 
         /*
-         * No arbitrary global bonuses.
+         * Short input is inherently ambiguous.
          *
-         * The edit distance already contains:
-         *
-         * - language-aware substitutions
-         * - keyboard-aware substitutions
-         * - insertions
-         * - deletions
-         * - repetitions
-         * - transpositions
-         */
-        int score =
-                editCost;
-
-        /*
-         * Prefix and suffix are evidence for the comparator, not
-         * artificial score subtraction.
-         *
-         * This is important:
-         *
-         * "score = distance - bonus"
-         *
-         * can make unrelated candidates tie at zero.
-         *
-         * Keeping the signals separate preserves information.
-         */
-
-        int languageEvidence =
-                countLanguageEvidence(
-                        input,
-                        candidate,
-                        languageTag
-                );
-
-        int keyboardEvidence =
-                countKeyboardEvidence(
-                        input,
-                        candidate,
-                        languageTag
-                );
-
-        /*
-         * Short input needs conservative correction.
+         * Do not perform aggressive guesses.
          */
         if (input.length() <= 2 &&
-                editCost > 2) {
+                edit.cost > 2) {
 
             return ScoreBreakdown.invalid();
         }
 
         if (input.length() <=
                 SHORT_INPUT_LENGTH &&
-                editCost > 6) {
+                edit.cost > 6) {
 
             return ScoreBreakdown.invalid();
         }
 
         return new ScoreBreakdown(
-                score,
-                editCost,
+                edit.cost,
+                edit.cost,
                 prefixLength,
                 suffixLength,
-                keyboardEvidence,
-                languageEvidence,
+                edit.keyboardEvidence,
+                edit.languageEvidence,
                 prefixLength >=
                         STRONG_PREFIX_LENGTH,
                 false,
-                true
+                true,
+                0
         );
     }
 
@@ -603,15 +432,22 @@ public final class CorrectionEngine {
      * ============================================================
      * WEIGHTED DAMERAU-LEVENSHTEIN
      * ============================================================
+     *
+     * This version does more than return a number.
+     *
+     * It also preserves which operations were actually selected
+     * by the optimal path.
+     *
+     * That is important because secondary evidence must describe
+     * the transformation that actually produced the score.
      */
-
-    private int weightedDamerauLevenshtein(
+    private EditResult weightedDamerauLevenshtein(
             String first,
             String second,
             String languageTag) {
 
         if (first.equals(second)) {
-            return 0;
+            return EditResult.exact();
         }
 
         int n =
@@ -621,40 +457,73 @@ public final class CorrectionEngine {
                 second.length();
 
         if (n == 0) {
-            return m *
-                    INSERTION_COST;
+
+            return EditResult.simple(
+                    m * INSERTION_COST
+            );
         }
 
         if (m == 0) {
-            return n *
-                    DELETION_COST;
+
+            return EditResult.simple(
+                    n * DELETION_COST
+            );
         }
 
         if (Math.abs(n - m) >
                 MAX_CORRECTION_COST) {
 
-            return MAX_CORRECTION_COST + 1;
+            return EditResult.invalid();
         }
 
-        int[][] dp =
-                new int[n + 1][m + 1];
+        PathCell[][] dp =
+                new PathCell[n + 1][m + 1];
 
-        for (int i = 0;
+        dp[0][0] =
+                PathCell.start();
+
+        /*
+         * Deletions from the typed word.
+         */
+        for (int i = 1;
              i <= n;
              i++) {
 
+            int cost =
+                    getDeletionCost(
+                            first,
+                            i - 1
+                    );
+
+            PathCell previous =
+                    dp[i - 1][0];
+
             dp[i][0] =
-                    i *
-                            DELETION_COST;
+                    previous.extend(
+                            cost,
+                            Operation.DELETION,
+                            0,
+                            0
+                    );
         }
 
-        for (int j = 0;
+        /*
+         * Insertions into the candidate.
+         */
+        for (int j = 1;
              j <= m;
              j++) {
 
+            PathCell previous =
+                    dp[0][j - 1];
+
             dp[0][j] =
-                    j *
-                            INSERTION_COST;
+                    previous.extend(
+                            INSERTION_COST,
+                            Operation.INSERTION,
+                            0,
+                            0
+                    );
         }
 
         for (int i = 1;
@@ -675,48 +544,101 @@ public final class CorrectionEngine {
                                 j - 1
                         );
 
-                /*
-                 * 1. Substitution.
-                 */
-                int substitution =
-                        dp[i - 1][j - 1] +
-                                getSubstitutionCost(
-                                        typed,
-                                        target,
-                                        languageTag
-                                );
+                PathCell best =
+                        null;
 
                 /*
-                 * 2. Insertion into the candidate.
+                 * ------------------------------------------------
+                 * 1. Substitution / exact character
+                 * ------------------------------------------------
                  */
-                int insertion =
-                        dp[i][j - 1] +
-                                INSERTION_COST;
 
-                /*
-                 * 3. Deletion from the typed input.
-                 */
-                int deletion =
-                        dp[i - 1][j] +
-                                getDeletionCost(
-                                        first,
-                                        i - 1
-                                );
+                int substitutionCost =
+                        getSubstitutionCost(
+                                typed,
+                                target,
+                                languageTag
+                        );
 
-                int best =
-                        Math.min(
-                                substitution,
-                                Math.min(
-                                        insertion,
-                                        deletion
+                int substitutionLanguage =
+                        getLanguageEvidence(
+                                typed,
+                                target,
+                                languageTag
+                        );
+
+                int substitutionKeyboard =
+                        getKeyboardEvidence(
+                                typed,
+                                target,
+                                languageTag
+                        );
+
+                best =
+                        chooseBetter(
+                                best,
+                                dp[i - 1][j - 1].extend(
+                                        substitutionCost,
+                                        substitutionCost == 0
+                                                ? Operation.EXACT
+                                                : Operation.SUBSTITUTION,
+                                        substitutionLanguage,
+                                        substitutionKeyboard
                                 )
                         );
 
                 /*
-                 * 4. Repeated character.
+                 * ------------------------------------------------
+                 * 2. Insertion
+                 * ------------------------------------------------
+                 */
+
+                best =
+                        chooseBetter(
+                                best,
+                                dp[i][j - 1].extend(
+                                        INSERTION_COST,
+                                        Operation.INSERTION,
+                                        0,
+                                        0
+                                )
+                        );
+
+                /*
+                 * ------------------------------------------------
+                 * 3. Deletion
+                 * ------------------------------------------------
+                 */
+
+                int deletionCost =
+                        getDeletionCost(
+                                first,
+                                i - 1
+                        );
+
+                Operation deletionOperation =
+                        deletionCost ==
+                                REPEATED_CHARACTER_COST
+                                ? Operation.REPETITION
+                                : Operation.DELETION;
+
+                best =
+                        chooseBetter(
+                                best,
+                                dp[i - 1][j].extend(
+                                        deletionCost,
+                                        deletionOperation,
+                                        0,
+                                        0
+                                )
+                        );
+
+                /*
+                 * ------------------------------------------------
+                 * 4. Repeated character
+                 * ------------------------------------------------
                  *
                  * helllo -> hello
-                 * commming -> comming
                  */
                 if (i >= 2 &&
                         j >= 1 &&
@@ -726,15 +648,21 @@ public final class CorrectionEngine {
                                 target) {
 
                     best =
-                            Math.min(
+                            chooseBetter(
                                     best,
-                                    dp[i - 2][j - 1] +
-                                            REPEATED_CHARACTER_COST
+                                    dp[i - 2][j - 1].extend(
+                                            REPEATED_CHARACTER_COST,
+                                            Operation.REPETITION,
+                                            0,
+                                            0
+                                    )
                             );
                 }
 
                 /*
-                 * 5. Adjacent transposition.
+                 * ------------------------------------------------
+                 * 5. Adjacent transposition
+                 * ------------------------------------------------
                  *
                  * teh -> the
                  * adn -> and
@@ -744,19 +672,48 @@ public final class CorrectionEngine {
                         first.charAt(i - 2) ==
                                 target &&
                         typed ==
-                                second.charAt(j - 2)) {
+                                second.charAt(
+                                        j - 2
+                                )) {
+
+                    char firstTransposed =
+                            first.charAt(
+                                    i - 2
+                            );
+
+                    char secondTransposed =
+                            typed;
+
+                    int transpositionCost =
+                            getTranspositionCost(
+                                    firstTransposed,
+                                    secondTransposed,
+                                    languageTag
+                            );
+
+                    int transpositionLanguage =
+                            getLanguageEvidence(
+                                    firstTransposed,
+                                    secondTransposed,
+                                    languageTag
+                            );
+
+                    int transpositionKeyboard =
+                            getKeyboardEvidence(
+                                    firstTransposed,
+                                    secondTransposed,
+                                    languageTag
+                            );
 
                     best =
-                            Math.min(
+                            chooseBetter(
                                     best,
-                                    dp[i - 2][j - 2] +
-                                            getTranspositionCost(
-                                                    first.charAt(
-                                                            i - 2
-                                                    ),
-                                                    typed,
-                                                    languageTag
-                                            )
+                                    dp[i - 2][j - 2].extend(
+                                            transpositionCost,
+                                            Operation.TRANSPOSITION,
+                                            transpositionLanguage,
+                                            transpositionKeyboard
+                                    )
                             );
                 }
 
@@ -765,7 +722,113 @@ public final class CorrectionEngine {
             }
         }
 
-        return dp[n][m];
+        PathCell result =
+                dp[n][m];
+
+        if (result == null) {
+            return EditResult.invalid();
+        }
+
+        return new EditResult(
+                result.cost,
+                result.languageEvidence,
+                result.keyboardEvidence,
+                true
+        );
+    }
+
+    /*
+     * ============================================================
+     * PATH SELECTION
+     * ============================================================
+     *
+     * When two edit paths have the same total cost, preserve the
+     * path with stronger linguistic evidence.
+     *
+     * This means:
+     *
+     *     n -> ñ
+     *
+     * can beat:
+     *
+     *     n -> b
+     *
+     * when both happen to have the same numeric cost.
+     *
+     * Keyboard evidence is considered after language evidence.
+     */
+    private PathCell chooseBetter(
+            PathCell current,
+            PathCell candidate) {
+
+        if (candidate == null) {
+            return current;
+        }
+
+        if (current == null) {
+            return candidate;
+        }
+
+        int comparison =
+                comparePathQuality(
+                        candidate,
+                        current
+                );
+
+        return comparison < 0
+                ? candidate
+                : current;
+    }
+
+    private int comparePathQuality(
+            PathCell first,
+            PathCell second) {
+
+        int result =
+                Integer.compare(
+                        first.cost,
+                        second.cost
+                );
+
+        if (result != 0) {
+            return result;
+        }
+
+        /*
+         * More language evidence is better when actual cost is equal.
+         */
+        result =
+                Integer.compare(
+                        second.languageEvidence,
+                        first.languageEvidence
+                );
+
+        if (result != 0) {
+            return result;
+        }
+
+        /*
+         * More keyboard evidence is better when language evidence
+         * is also equal.
+         */
+        result =
+                Integer.compare(
+                        second.keyboardEvidence,
+                        first.keyboardEvidence
+                );
+
+        if (result != 0) {
+            return result;
+        }
+
+        /*
+         * Prefer fewer operations when the numerical result is
+         * identical.
+         */
+        return Integer.compare(
+                first.operationCount,
+                second.operationCount
+        );
     }
 
     /*
@@ -784,7 +847,7 @@ public final class CorrectionEngine {
         }
 
         /*
-         * Language-specific spelling relation first.
+         * Language rules have priority.
          *
          * Examples:
          *
@@ -824,9 +887,73 @@ public final class CorrectionEngine {
         }
 
         /*
-         * Completely unrelated substitutions remain expensive.
+         * Completely unrelated substitution.
          */
         return NORMAL_SUBSTITUTION_COST;
+    }
+
+    private int getLanguageEvidence(
+            char typed,
+            char target,
+            String languageTag) {
+
+        if (typed == target) {
+            return 0;
+        }
+
+        int cost =
+                LanguageRules
+                        .getCharacterSubstitutionCost(
+                                typed,
+                                target,
+                                languageTag
+                        );
+
+        return cost <
+                KeyboardErrorModel.getUnknownCost()
+                ? 1
+                : 0;
+    }
+
+    private int getKeyboardEvidence(
+            char typed,
+            char target,
+            String languageTag) {
+
+        if (typed == target) {
+            return 0;
+        }
+
+        /*
+         * A language-specific relation should not also count as
+         * keyboard evidence.
+         */
+        int languageCost =
+                LanguageRules
+                        .getCharacterSubstitutionCost(
+                                typed,
+                                target,
+                                languageTag
+                        );
+
+        if (languageCost <
+                KeyboardErrorModel.getUnknownCost()) {
+
+            return 0;
+        }
+
+        int keyboardCost =
+                KeyboardErrorModel
+                        .getSubstitutionCost(
+                                typed,
+                                target,
+                                languageTag
+                        );
+
+        return keyboardCost <
+                KeyboardErrorModel.getUnknownCost()
+                ? 1
+                : 0;
     }
 
     private int getDeletionCost(
@@ -834,7 +961,7 @@ public final class CorrectionEngine {
             int position) {
 
         /*
-         * If the character being removed is one of a duplicated
+         * If the character being removed belongs to a repeated
          * pair, this is a very common typing mistake.
          */
         if (position > 0 &&
@@ -867,138 +994,6 @@ public final class CorrectionEngine {
         }
 
         return TRANSPOSE_COST;
-    }
-
-    /*
-     * ============================================================
-     * LANGUAGE EVIDENCE
-     * ============================================================
-     *
-     * This is measured separately from edit distance.
-     *
-     * A candidate can therefore be:
-     *
-     *   distance = 1
-     *   languageEvidence = 1
-     *
-     * without changing the distance into zero.
-     */
-
-    private int countLanguageEvidence(
-            String first,
-            String second,
-            String languageTag) {
-
-        int limit =
-                Math.min(
-                        first.length(),
-                        second.length()
-                );
-
-        int evidence = 0;
-
-        for (int i = 0;
-             i < limit;
-             i++) {
-
-            char typed =
-                    first.charAt(i);
-
-            char target =
-                    second.charAt(i);
-
-            if (typed == target) {
-                continue;
-            }
-
-            int cost =
-                    LanguageRules
-                            .getCharacterSubstitutionCost(
-                                    typed,
-                                    target,
-                                    languageTag
-                            );
-
-            if (cost <
-                    KeyboardErrorModel.getUnknownCost()) {
-
-                evidence++;
-            }
-        }
-
-        return evidence;
-    }
-
-    /*
-     * ============================================================
-     * KEYBOARD EVIDENCE
-     * ============================================================
-     *
-     * Count actual keyboard substitutions inside the word.
-     *
-     * This is intentionally NOT a global bonus.
-     */
-    private int countKeyboardEvidence(
-            String first,
-            String second,
-            String languageTag) {
-
-        int limit =
-                Math.min(
-                        first.length(),
-                        second.length()
-                );
-
-        int evidence = 0;
-
-        for (int i = 0;
-             i < limit;
-             i++) {
-
-            char typed =
-                    first.charAt(i);
-
-            char target =
-                    second.charAt(i);
-
-            if (typed == target) {
-                continue;
-            }
-
-            /*
-             * Language-specific relationships should not also count
-             * as keyboard evidence.
-             */
-            int languageCost =
-                    LanguageRules
-                            .getCharacterSubstitutionCost(
-                                    typed,
-                                    target,
-                                    languageTag
-                            );
-
-            if (languageCost <
-                    KeyboardErrorModel.getUnknownCost()) {
-
-                continue;
-            }
-
-            int keyboardCost =
-                    KeyboardErrorModel
-                            .getSubstitutionCost(
-                                    typed,
-                                    target,
-                                    languageTag
-                            );
-
-            if (keyboardCost <
-                    KeyboardErrorModel.getUnknownCost()) {
-
-                evidence++;
-            }
-        }
-
-        return evidence;
     }
 
     /*
@@ -1102,42 +1097,32 @@ public final class CorrectionEngine {
 
     /*
      * ============================================================
-     * SCORE OBJECT
+     * SCORE BREAKDOWN
      * ============================================================
      */
 
     private static final class ScoreBreakdown {
 
         private final int totalScore;
-
-        /*
-         * Actual transformation effort.
-         */
         private final int editDistance;
 
-        /*
-         * Number of preserved characters at the beginning/end.
-         */
         private final int prefixLength;
         private final int suffixLength;
 
-        /*
-         * Actual keyboard/language evidence.
-         */
         private final int keyboardEvidence;
         private final int languageEvidence;
 
-        /*
-         * Whether the candidate preserves a strong prefix.
-         */
         private final boolean strongPrefix;
-
-        /*
-         * Correction or completion.
-         */
         private final boolean completion;
 
         private final boolean valid;
+
+        /*
+         * Number of characters added by a completion.
+         *
+         * Used only as a late completion tie-breaker.
+         */
+        private final int completionAddition;
 
         private ScoreBreakdown(
                 int totalScore,
@@ -1148,7 +1133,8 @@ public final class CorrectionEngine {
                 int languageEvidence,
                 boolean strongPrefix,
                 boolean completion,
-                boolean valid) {
+                boolean valid,
+                int completionAddition) {
 
             this.totalScore =
                     totalScore;
@@ -1176,6 +1162,9 @@ public final class CorrectionEngine {
 
             this.valid =
                     valid;
+
+            this.completionAddition =
+                    completionAddition;
         }
 
         private static ScoreBreakdown invalid() {
@@ -1189,10 +1178,166 @@ public final class CorrectionEngine {
                     0,
                     false,
                     false,
+                    false,
+                    Integer.MAX_VALUE
+            );
+        }
+    }
+
+    /*
+     * ============================================================
+     * EDIT PATH
+     * ============================================================
+     */
+
+    private enum Operation {
+        EXACT,
+        SUBSTITUTION,
+        INSERTION,
+        DELETION,
+        REPETITION,
+        TRANSPOSITION
+    }
+
+    private static final class PathCell {
+
+        private final int cost;
+
+        private final int languageEvidence;
+        private final int keyboardEvidence;
+
+        private final int operationCount;
+
+        private final Operation operation;
+
+        private PathCell(
+                int cost,
+                int languageEvidence,
+                int keyboardEvidence,
+                int operationCount,
+                Operation operation) {
+
+            this.cost =
+                    cost;
+
+            this.languageEvidence =
+                    languageEvidence;
+
+            this.keyboardEvidence =
+                    keyboardEvidence;
+
+            this.operationCount =
+                    operationCount;
+
+            this.operation =
+                    operation;
+        }
+
+        private static PathCell start() {
+
+            return new PathCell(
+                    0,
+                    0,
+                    0,
+                    0,
+                    Operation.EXACT
+            );
+        }
+
+        private PathCell extend(
+                int addedCost,
+                Operation operation,
+                int languageEvidence,
+                int keyboardEvidence) {
+
+            return new PathCell(
+                    safeAdd(
+                            this.cost,
+                            addedCost
+                    ),
+                    safeAdd(
+                            this.languageEvidence,
+                            languageEvidence
+                    ),
+                    safeAdd(
+                            this.keyboardEvidence,
+                            keyboardEvidence
+                    ),
+                    safeAdd(
+                            this.operationCount,
+                            operation ==
+                                    Operation.EXACT
+                                    ? 0
+                                    : 1
+                    ),
+                    operation
+            );
+        }
+    }
+
+    private static final class EditResult {
+
+        private final int cost;
+        private final int languageEvidence;
+        private final int keyboardEvidence;
+        private final boolean valid;
+
+        private EditResult(
+                int cost,
+                int languageEvidence,
+                int keyboardEvidence,
+                boolean valid) {
+
+            this.cost =
+                    cost;
+
+            this.languageEvidence =
+                    languageEvidence;
+
+            this.keyboardEvidence =
+                    keyboardEvidence;
+
+            this.valid =
+                    valid;
+        }
+
+        private static EditResult exact() {
+
+            return new EditResult(
+                    0,
+                    0,
+                    0,
+                    true
+            );
+        }
+
+        private static EditResult simple(
+                int cost) {
+
+            return new EditResult(
+                    cost,
+                    0,
+                    0,
+                    true
+            );
+        }
+
+        private static EditResult invalid() {
+
+            return new EditResult(
+                    Integer.MAX_VALUE,
+                    0,
+                    0,
                     false
             );
         }
     }
+
+    /*
+     * ============================================================
+     * SCORED CANDIDATE
+     * ============================================================
+     */
 
     private static final class ScoredCandidate {
 
@@ -1216,25 +1361,20 @@ public final class CorrectionEngine {
      * FINAL RANKING
      * ============================================================
      *
-     * The ordering is intentionally hierarchical.
+     * Accuracy hierarchy:
      *
-     * 1. Actual plausibility/effort.
-     * 2. Actual edit distance.
-     * 3. Language-specific evidence.
-     * 4. Keyboard evidence.
-     * 5. Preserved prefix.
-     * 6. Preserved suffix.
-     * 7. Completion quality.
-     * 8. Deterministic lexical ordering.
+     * 1. Actual transformation cost.
+     * 2. Language evidence used by that transformation.
+     * 3. Keyboard evidence used by that transformation.
+     * 4. Preserved prefix.
+     * 5. Preserved suffix.
+     * 6. Strong prefix.
+     * 7. Completion addition length, only for otherwise equal
+     *    completions.
+     * 8. Deterministic lexical order.
      *
-     * There is NO:
-     *
-     * - global shortest-word preference
-     * - global longest-word preference
-     * - global completion preference
-     * - global correction preference
+     * There is NO universal preference for short or long words.
      */
-
     private static final class CandidateComparator
             implements Comparator<ScoredCandidate> {
 
@@ -1245,7 +1385,7 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 1. Primary score
+             * 1. Actual score
              * ----------------------------------------------------
              */
             int result =
@@ -1260,11 +1400,11 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 2. Actual transformation effort
+             * 2. Actual edit distance
              * ----------------------------------------------------
              *
-             * This is especially important for preventing
-             * secondary signals from overpowering accuracy.
+             * Kept separate for clarity and for future scoring
+             * extensions.
              */
             result =
                     Integer.compare(
@@ -1278,7 +1418,7 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 3. Language-specific evidence
+             * 3. Language evidence
              * ----------------------------------------------------
              */
             result =
@@ -1310,8 +1450,6 @@ public final class CorrectionEngine {
              * ----------------------------------------------------
              * 5. Preserved prefix
              * ----------------------------------------------------
-             *
-             * Especially important for completions.
              */
             result =
                     Integer.compare(
@@ -1340,7 +1478,7 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 7. Strong-prefix evidence
+             * 7. Strong prefix
              * ----------------------------------------------------
              */
             if (first.breakdown.strongPrefix !=
@@ -1353,23 +1491,38 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 8. Completion vs correction
+             * 8. Completion-specific tie-breaker
              * ----------------------------------------------------
              *
-             * No universal preference.
+             * Only applies when everything above is identical.
              *
-             * If everything else is equal, preserve the original
-             * candidate type deterministically.
+             * This is NOT a global preference for short words.
+             */
+            if (first.breakdown.completion &&
+                    second.breakdown.completion) {
+
+                result =
+                        Integer.compare(
+                                first.breakdown.completionAddition,
+                                second.breakdown.completionAddition
+                        );
+
+                if (result != 0) {
+                    return result;
+                }
+            }
+
+            /*
+             * ----------------------------------------------------
+             * 9. Completion vs correction
+             * ----------------------------------------------------
+             *
+             * Only reached after all meaningful quality signals
+             * are equal.
              */
             if (first.breakdown.completion !=
                     second.breakdown.completion) {
 
-                /*
-                 * A prefix completion is slightly preferable only
-                 * when every real quality signal is exactly equal.
-                 *
-                 * This is NOT a global completion bonus.
-                 */
                 return first.breakdown.completion
                         ? -1
                         : 1;
@@ -1377,14 +1530,38 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 9. Deterministic final ordering.
-             *
-             * No length preference.
+             * 10. Deterministic final ordering
              * ----------------------------------------------------
              */
             return first.word.compareTo(
                     second.word
             );
         }
+    }
+
+    /*
+     * ============================================================
+     * SAFE INTEGER ADDITION
+     * ============================================================
+     */
+
+    private static int safeAdd(
+            int first,
+            int second) {
+
+        if (first == Integer.MAX_VALUE ||
+                second == Integer.MAX_VALUE) {
+
+            return Integer.MAX_VALUE;
+        }
+
+        if (second > 0 &&
+                first >
+                        Integer.MAX_VALUE - second) {
+
+            return Integer.MAX_VALUE;
+        }
+
+        return first + second;
     }
 }
