@@ -1,0 +1,83 @@
+name: PocketBoard Build
+
+on: { workflow_dispatch: {} }
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Pocketboard-E
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Hunspell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y hunspell-tools curl
+          command -v unmunch
+
+      - name: Prepare build scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          chmod +x scripts/generate-dictionaries.sh
+          test -x ./gradlew
+          test -x scripts/generate-dictionaries.sh
+
+      - name: Generate PocketBoard dictionaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon generatePocketBoardDictionaries
+
+      - name: Validate PocketBoard dictionaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon validatePocketBoardDictionaries
+
+      - name: Dictionary report
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "PocketBoard dictionaries"
+          echo "=========================================="
+
+          for file in app/src/main/assets/dictionaries/*.dict
+          do
+            echo ""
+            echo "FILE: ${file}"
+            du -h "${file}"
+            echo "WORDS:"
+            tail -n +2 "${file}" | wc -l
+          done
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon assembleDebug
