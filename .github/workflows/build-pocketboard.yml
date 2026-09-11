@@ -51,9 +51,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y hunspell-tools curl
 
-          echo "Hunspell:"
-          hunspell --version
-
           echo "unmunch:"
           command -v unmunch
 
