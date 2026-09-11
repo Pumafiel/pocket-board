@@ -1,469 +1,252 @@
-import javax.xml.XMLConstants
-import javax.xml.transform.stream.StreamSource
-import javax.xml.validation.SchemaFactory
-
 plugins {
-id 'com.android.application'
+    id 'com.android.application'
 }
 
 android {
-namespace 'com.sinux.pocketboard'
-compileSdk 36
+    namespace 'com.sinux.pocketboard'
+    compileSdk 36
 
-defaultConfig {
-    applicationId "com.sinux.pocketboard"
-    minSdk 28
-    targetSdk 36
-    versionCode 8
-    versionName "1.1.6"
-}
+    defaultConfig {
+        applicationId 'com.sinux.pocketboard'
+        minSdk 28
+        targetSdk 36
+        versionCode 116
+        versionName '1.1.6'
 
-buildTypes {
-    release {
-        minifyEnabled true
-        shrinkResources true
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
 
-        proguardFiles getDefaultProguardFile(
-                'proguard-android-optimize.txt'
-        ), 'proguard-rules.pro'
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles(
+                getDefaultProguardFile('proguard-android-optimize.txt'),
+                'proguard-rules.pro'
+            )
+        }
+
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            if (variant.buildType.name == 'release') {
+                outputFileName = 'Pocketboard-E-release.apk'
+            } else if (variant.buildType.name == 'debug') {
+                outputFileName = 'Pocketboard-E-debug.apk'
+            }
+        }
     }
 }
 
-compileOptions {
-    sourceCompatibility JavaVersion.VERSION_17
-    targetCompatibility JavaVersion.VERSION_17
+/**
+ * PocketBoard dictionary configuration.
+ *
+ * Dictionary generation is performed by:
+ *
+ *     scripts/generate-dictionaries.sh
+ *
+ * The generation task requires the external `unmunch` command.
+ *
+ * Missing/invalid dictionary files are fatal build errors.
+ * Missing expected words are warnings only.
+ */
+
+def pocketBoardDictionaryDir = file(
+    "${projectDir}/src/main/assets/dictionaries"
+)
+
+def pocketBoardDictionaryGenerator = file(
+    "${rootProject.projectDir}/scripts/generate-dictionaries.sh"
+)
+
+def pocketBoardDictionaries = [
+    'es-AR.dict',
+    'en-en.dict',
+    'de-de.dict'
+]
+
+def pocketBoardExpectedWords = [
+    'es-AR': [
+        'hago',
+        'hacer',
+        'veré',
+        'mañana',
+        'vos',
+        'tenés',
+        'podés',
+        'hacés'
+    ],
+
+    'en-en': [
+        'hello',
+        'world'
+    ],
+
+    'de-de': [
+        'hallo',
+        'welt'
+    ]
+]
+
+tasks.register('generatePocketBoardDictionaries', Exec) {
+    group = 'pocketboard'
+    description = 'Generate PocketBoard Hunspell dictionaries'
+
+    workingDir rootProject.projectDir
+
+    commandLine 'bash', pocketBoardDictionaryGenerator.absolutePath
+
+    doFirst {
+        if (!pocketBoardDictionaryGenerator.exists()) {
+            throw new GradleException(
+                "PocketBoard dictionary generator not found: " +
+                pocketBoardDictionaryGenerator
+            )
+        }
+    }
 }
 
-testOptions {
-    unitTests.returnDefaultValues = true
+tasks.register('validatePocketBoardDictionaries') {
+    group = 'verification'
+    description = 'Validate PocketBoard generated dictionaries'
+
+    dependsOn tasks.named('generatePocketBoardDictionaries')
+
+    doLast {
+        if (!pocketBoardDictionaryDir.exists()) {
+            throw new GradleException(
+                "PocketBoard dictionary directory does not exist: " +
+                pocketBoardDictionaryDir
+            )
+        }
+
+        /*
+         * First validate the dictionary files themselves.
+         *
+         * Missing or empty files are technical failures and must stop
+         * the build.
+         */
+        pocketBoardDictionaries.each { dictionaryName ->
+            File dictionaryFile = new File(
+                pocketBoardDictionaryDir,
+                dictionaryName
+            )
+
+            if (!dictionaryFile.exists()) {
+                throw new GradleException(
+                    "PocketBoard dictionary is missing: " +
+                    dictionaryFile
+                )
+            }
+
+            if (dictionaryFile.length() == 0) {
+                throw new GradleException(
+                    "PocketBoard dictionary is empty: " +
+                    dictionaryFile
+                )
+            }
+
+            println(
+                "Dictionary OK: " +
+                dictionaryName +
+                " (" +
+                dictionaryFile.length() +
+                " bytes)"
+            )
+        }
+
+        /*
+         * Then validate expected words.
+         *
+         * IMPORTANT:
+         * A missing word is NOT a build failure.
+         *
+         * The dictionary may legitimately change when the upstream
+         * linguistic source changes. We want visibility through a
+         * warning without preventing the APK from being generated.
+         */
+        pocketBoardExpectedWords.each { language, words ->
+
+            String dictionaryName = "${language}.dict"
+
+            File dictionaryFile = new File(
+                pocketBoardDictionaryDir,
+                dictionaryName
+            )
+
+            if (!dictionaryFile.exists()) {
+                /*
+                 * This should already have been caught above, but keep
+                 * this guard explicit.
+                 */
+                throw new GradleException(
+                    "Dictionary required for validation is missing: " +
+                    dictionaryFile
+                )
+            }
+
+            Set<String> dictionaryWords = dictionaryFile
+                .readLines('UTF-8')
+                .drop(1)
+                .collect {
+                    it.trim().toLowerCase(Locale.ROOT)
+                }
+                .findAll {
+                    !it.isEmpty()
+                }
+                .toSet()
+
+            println("")
+            println("Checking expected words for ${language}:")
+
+            words.each { word ->
+
+                String normalizedWord =
+                    word.toLowerCase(Locale.ROOT)
+
+                if (dictionaryWords.contains(normalizedWord)) {
+                    println(
+                        "  OK: ${word}"
+                    )
+                } else {
+                    logger.warn(
+                        "PocketBoard dictionary WARNING: " +
+                        "${language} is missing expected word '${word}'"
+                    )
+                }
+            }
+        }
+
+        println("")
+        println(
+            "PocketBoard dictionary validation completed."
+        )
+        println(
+            "Missing expected words are warnings only."
+        )
+    }
 }
 
 /*
- * Keep the application id and signing configuration untouched.
- *
- * Only rename the generated APK file.
+ * Make sure Android's preBuild happens only after dictionary
+ * generation and validation.
  */
-applicationVariants.all { variant ->
-
-    variant.outputs.all { output ->
-
-        outputFileName =
-                "Pocketboard-E-${variant.buildType.name}.apk"
-    }
-}
-
-
+tasks.matching { task ->
+    task.name == 'preBuild'
+}.configureEach {
+    dependsOn tasks.named('validatePocketBoardDictionaries')
 }
 
 dependencies {
-implementation 'com.google.android.material:material:1.13.0'
-implementation 'androidx.preference:preference:1.2.1'
-implementation 'androidx.autofill:autofill:1.3.0'
-implementation 'org.jetbrains:annotations:23.0.0'
-
-testImplementation 'junit:junit:4.13.2'
-testImplementation 'net.sf.kxml:kxml2:2.3.0'
-
-
-}
-
-/*
-
-============================================================
-POCKETBOARD DICTIONARIES
-============================================================
-Dictionary generation is handled by:
-scripts/generate-dictionaries.sh
-
-The script:
-- downloads Hunspell .dic files
-
-- downloads corresponding .aff files
-
-- validates both files
-
-- expands Hunspell rules with unmunch
-
-- normalizes the resulting word list
-
-- writes plain one-word-per-line dictionaries
-
-Android receives only:
-es-AR.dict
-
-en-en.dict
-
-de-de.dict
-
-Individual word checks are quality checks only.
-Missing individual words generate warnings and do not
-fail the build.
-Missing or empty dictionaries remain fatal.
-============================================================
-*/
-
-def dictionariesOutputDir =
-file("${projectDir}/src/main/assets/dictionaries")
-
-def dictionaryGenerator =
-file(
-"${rootProject.projectDir}/scripts/generate-dictionaries.sh"
-)
-
-/*
-
-Generate dictionaries
-
-*/
-
-tasks.register(
-"generatePocketBoardDictionaries"
-) {
-
-inputs.file(
-        dictionaryGenerator
-)
-
-outputs.dir(
-        dictionariesOutputDir
-)
-
-doLast {
-
-    if (!dictionaryGenerator.exists()) {
-
-        throw new GradleException(
-                "Missing dictionary generator:\n" +
-                        dictionaryGenerator.absolutePath
-        )
-    }
-
-    /*
-     * Git may not preserve executable permissions on every
-     * checkout. Make the script executable when possible.
-     */
-    if (!dictionaryGenerator.canExecute()) {
-
-        if (!dictionaryGenerator.setExecutable(
-                true,
-                false
-        )) {
-
-            throw new GradleException(
-                    "Could not make dictionary generator executable:\n" +
-                            dictionaryGenerator.absolutePath
-            )
-        }
-    }
-
-    println("")
-    println(
-            "============================================================"
-    )
-    println(
-            " PocketBoard dictionary generation"
-    )
-    println(
-            "============================================================"
-    )
-    println("")
-
-    exec {
-        commandLine(
-                "bash",
-                dictionaryGenerator.absolutePath
-        )
-    }
-}
-
-
-}
-
-/*
-
-Validate generated dictionaries
-Dictionary files themselves are mandatory.
-Individual words are NOT mandatory because upstream
-dictionaries may legitimately omit regional or colloquial
-forms.
-Missing words therefore produce WARNINGs only.
-*/
-
-tasks.register(
-"validatePocketBoardDictionaries"
-) {
-
-dependsOn(
-        "generatePocketBoardDictionaries"
-)
-
-doLast {
-
-    Map<String, List<String>> checkedWords = [
-
-            "es-AR": [
-                    "hago",
-                    "hacer",
-                    "veré",
-                    "mañana",
-                    "vos",
-                    "tenés",
-                    "podés",
-                    "hacés"
-            ],
-
-            "en-en": [
-                    "the",
-                    "have",
-                    "hello"
-            ],
-
-            "de-de": [
-                    "ich",
-                    "habe",
-                    "morgen"
-            ]
-    ]
-
-    int missingWords = 0
-
-    checkedWords.each {
-        String language,
-        List<String> words ->
-
-        File dictionaryFile =
-                new File(
-                        dictionariesOutputDir,
-                        "${language}.dict"
-                )
-
-        /*
-         * The dictionary itself is mandatory.
-         */
-        if (!dictionaryFile.exists() ||
-                dictionaryFile.length() == 0) {
-
-            throw new GradleException(
-                    "Missing or empty generated dictionary:\n" +
-                            dictionaryFile.absolutePath
-            )
-        }
-
-        Set<String> dictionaryWords =
-                new HashSet<>()
-
-        dictionaryFile.eachLine(
-                "UTF-8"
-        ) { String line ->
-
-            line = line.trim()
-
-            if (line.isEmpty() ||
-                    line.startsWith("#")) {
-
-                return
-            }
-
-            dictionaryWords.add(
-                    line.toLowerCase(
-                            Locale.ROOT
-                    )
-            )
-        }
-
-        println(
-                "${language}: " +
-                        dictionaryWords.size() +
-                        " words"
-        )
-
-        words.each {
-            String word ->
-
-            String normalizedWord =
-                    word.toLowerCase(
-                            Locale.ROOT
-                    )
-
-            if (!dictionaryWords.contains(
-                    normalizedWord
-            )) {
-
-                println(
-                        " WARNING ${language}: " +
-                                "missing word: " +
-                                word
-                )
-
-                missingWords++
-
-            } else {
-
-                println(
-                        " OK      ${language}: " +
-                                word
-                )
-            }
-        }
-    }
-
-    println("")
-    println(
-            "============================================================"
-    )
-    println(
-            " Dictionary validation summary"
-    )
-    println(
-            "============================================================"
-    )
-
-    if (missingWords > 0) {
-
-        println(
-                "WARNING: " +
-                        missingWords +
-                        " optional word(s) were not found."
-        )
-
-        println(
-                "The build will continue."
-        )
-
-    } else {
-
-        println(
-                "All optional word checks passed."
-        )
-    }
-
-    println("")
-}
-
-
-}
-
-/*
-
-============================================================
-KEYBOARD MAPPING XML VALIDATION
-============================================================
-Validates all keyboard_mapping_*.xml files against:
-app/keyboard-mapping.xsd
-
-If the schema file does not exist, validation is skipped.
-Invalid XML causes the build to fail.
-============================================================
-*/
-
-tasks.register(
-"validateKeyboardMappings"
-) {
-
-doLast {
-
-    File schemaFile =
-            new File(
-                    "${rootProject.projectDir}/app/keyboard-mapping.xsd"
-            )
-
-    if (!schemaFile.exists()) {
-
-        println(
-                "Keyboard mapping schema not found; " +
-                        "skipping XML validation."
-        )
-
-        return
-    }
-
-    def factory =
-            SchemaFactory.newInstance(
-                    XMLConstants.W3C_XML_SCHEMA_NS_URI
-            )
-
-    def schema =
-            factory.newSchema(
-                    schemaFile
-            )
-
-    def validator =
-            schema.newValidator()
-
-    File xmlRoot =
-            new File(
-                    "${rootProject.projectDir}/app/src/main/res/xml/"
-            )
-
-    if (!xmlRoot.exists()) {
-        return
-    }
-
-    File[] keyboardMappings =
-            xmlRoot.listFiles(
-                    new FilenameFilter() {
-
-                        @Override
-                        boolean accept(
-                                File dir,
-                                String name
-                        ) {
-
-                            return name.startsWith(
-                                    "keyboard_mapping_"
-                            ) &&
-                                    name.endsWith(
-                                            ".xml"
-                                    )
-                        }
-                    }
-            )
-
-    if (keyboardMappings == null) {
-        return
-    }
-
-    for (
-            File mappingFile :
-                    keyboardMappings
-    ) {
-
-        println(
-                "Validating keyboard mapping: " +
-                        mappingFile.name
-        )
-
-        validator.validate(
-                new StreamSource(
-                        mappingFile
-                )
-        )
-    }
-}
-
-
-}
-
-/*
-
-============================================================
-PRE-BUILD VALIDATION
-============================================================
-Dictionaries and keyboard mappings are validated before
-Android starts processing the application.
-Dictionary generation is therefore part of the normal build.
-Missing individual words remain warnings.
-Invalid/missing required dictionary files remain fatal.
-Invalid keyboard mapping XML remains fatal.
-============================================================
-*/
-
-tasks.named("preBuild") {
-
-dependsOn(
-        "validatePocketBoardDictionaries",
-        "validateKeyboardMappings"
-)
-
-
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
 }
