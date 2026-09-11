@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
 # ============================================================
 # PocketBoard dictionary generator
 # ============================================================
@@ -267,10 +270,8 @@ generate_dictionary() {
     # - retain hyphens
     # - sort unique
     #
-    # IMPORTANT:
-    # Do not use LC_ALL=C while filtering because that would
-    # cause accented UTF-8 letters such as á, é, í, ó, ú and
-    # ñ to fail [[:alpha:]].
+    # UTF-8 locale is explicitly configured at the top of this
+    # script so accented characters are handled consistently.
     # --------------------------------------------------------
 
     sed \
