@@ -31,17 +31,27 @@ public class SuggestionsManager
 
     private final int suggestionsCount;
 
-    private final List<CharSequence> dictionarySuggestions;
-    private final List<CharSequence> spellcheckerSuggestions;
+    /*
+     * Single unified suggestion list.
+     *
+     * Position 0 is always the best candidate.
+     * InputView places position 0 in the center.
+     */
+    private final List<CharSequence> suggestions;
 
     private InputView inputView;
 
-    private boolean dictionarySuggestionsAllowed;
-    private boolean spellcheckerSuggestionsAllowed;
+    private boolean suggestionsAllowed;
 
-    private boolean hasRecommendedSpellcheckerSuggestion;
-
+    /*
+     * The best candidate returned by the native engine.
+     *
+     * Kept separately because other PocketBoard components may ask
+     * for the current recommended suggestion.
+     */
     private CharSequence lastRecommendedSuggestion;
+
+    private boolean hasRecommendedSuggestion;
 
     private boolean isPaused;
 
@@ -81,12 +91,7 @@ public class SuggestionsManager
                                 R.integer.suggestions_count
                         );
 
-        dictionarySuggestions =
-                new ArrayList<>(
-                        suggestionsCount
-                );
-
-        spellcheckerSuggestions =
+        suggestions =
                 new ArrayList<>(
                         suggestionsCount
                 );
@@ -125,24 +130,12 @@ public class SuggestionsManager
                 );
 
         /*
-         * Normal dictionary suggestions.
-         */
-        dictionarySuggestionsAllowed =
-                suggestionAllowedEditor
-                        && (
-                        preferencesHolder
-                                .isShowSuggestionsEnabled()
-                                || preferencesHolder
-                                .isDictShortcutsEnabled()
-                );
-
-        /*
-         * Native spelling correction.
+         * PocketBoard uses its own native dictionary/suggestion
+         * engine.
          *
-         * PocketBoard does not use Android's external
-         * SpellCheckerSession here.
+         * No Android SpellCheckerSession is involved.
          */
-        spellcheckerSuggestionsAllowed =
+        suggestionsAllowed =
                 suggestionAllowedEditor
                         && (
                         preferencesHolder
@@ -169,17 +162,13 @@ public class SuggestionsManager
 
         clear();
 
-        dictionarySuggestionsAllowed =
-                false;
-
-        spellcheckerSuggestionsAllowed =
+        suggestionsAllowed =
                 false;
     }
 
     public boolean isSuggestionsAllowed() {
 
-        return dictionarySuggestionsAllowed
-                || spellcheckerSuggestionsAllowed;
+        return suggestionsAllowed;
     }
 
     /*
@@ -190,11 +179,9 @@ public class SuggestionsManager
 
     public void clear() {
 
-        dictionarySuggestions.clear();
+        suggestions.clear();
 
-        spellcheckerSuggestions.clear();
-
-        hasRecommendedSpellcheckerSuggestion =
+        hasRecommendedSuggestion =
                 false;
 
         lastRecommendedSuggestion =
@@ -231,6 +218,13 @@ public class SuggestionsManager
             return;
         }
 
+        if (!suggestionsAllowed) {
+
+            clear();
+
+            return;
+        }
+
         CharSequence composing =
                 keyboardInputHandler
                         .getCurrentComposingText();
@@ -248,97 +242,54 @@ public class SuggestionsManager
                 composing.toString();
 
         /*
-         * DictionaryManager owns the complete native
-         * suggestion/correction pipeline.
+         * DictionaryManager owns candidate generation and ranking.
          *
-         * It decides internally between:
+         * SuggestionsManager deliberately does NOT try to decide
+         * whether a result is:
          *
-         *     1. prefix completion
-         *     2. exact dictionary word
-         *     3. spelling correction
+         *     - completion
+         *     - correction
+         *     - spelling variant
+         *     - keyboard correction
+         *
+         * The native engine decides the order.
+         *
+         * Position 0 is therefore the best candidate.
          */
-        boolean exactDictionaryWord =
-                dictionaryManager.contains(
-                        composingText,
-                        currentLanguageTag
-                );
-
-        List<String> suggestions =
+        List<String> nativeSuggestions =
                 dictionaryManager.getSuggestions(
                         composingText,
                         currentLanguageTag,
                         suggestionsCount
                 );
 
-        if (suggestions == null) {
+        suggestions.clear();
 
-            suggestions =
-                    new ArrayList<>();
-        }
-
-        /*
-         * Reset current state.
-         */
-        dictionarySuggestions.clear();
-
-        spellcheckerSuggestions.clear();
-
-        hasRecommendedSpellcheckerSuggestion =
-                false;
-
-        lastRecommendedSuggestion =
-                null;
+        addUniqueSuggestions(
+                suggestions,
+                nativeSuggestions
+        );
 
         /*
-         * ========================================================
-         * NORMAL DICTIONARY SUGGESTIONS
-         * ========================================================
+         * The first result is the recommendation.
+         *
+         * InputView puts result 0 in the center.
          */
+        if (!suggestions.isEmpty()) {
 
-        if (dictionarySuggestionsAllowed) {
+            lastRecommendedSuggestion =
+                    suggestions.get(0);
 
-            addUniqueSuggestions(
-                    dictionarySuggestions,
-                    suggestions
-            );
-        }
+            hasRecommendedSuggestion =
+                    true;
 
-        /*
-         * ========================================================
-         * SPELLING CORRECTION
-         * ========================================================
-         *
-         * Exact dictionary words are already correct.
-         *
-         * Prefix completion must remain completion and must not
-         * become an automatic correction.
-         *
-         * Example:
-         *
-         *     hol -> hola
-         *
-         * is completion, not correction.
-         */
-        if (spellcheckerSuggestionsAllowed
-                && !exactDictionaryWord
-                && !isPrefixCompletion(
-                composingText,
-                suggestions
-        )) {
+        } else {
 
-            addUniqueSuggestions(
-                    spellcheckerSuggestions,
-                    suggestions
-            );
+            lastRecommendedSuggestion =
+                    null;
 
-            if (!spellcheckerSuggestions.isEmpty()) {
-
-                lastRecommendedSuggestion =
-                        spellcheckerSuggestions.get(0);
-
-                hasRecommendedSpellcheckerSuggestion =
-                        true;
-            }
+            hasRecommendedSuggestion =
+                    false;
         }
 
         showSuggestions();
@@ -365,69 +316,9 @@ public class SuggestionsManager
 
     /*
      * ============================================================
-     * SUGGESTION CLASSIFICATION
+     * SUGGESTION LIST
      * ============================================================
      */
-
-    private boolean isPrefixCompletion(
-            String composingText,
-            List<String> suggestions) {
-
-        if (TextUtils.isEmpty(
-                composingText
-        )) {
-
-            return false;
-        }
-
-        String normalizedInput =
-                composingText
-                        .trim()
-                        .toLowerCase(
-                                Locale.ROOT
-                        );
-
-        if (normalizedInput.isEmpty()) {
-
-            return false;
-        }
-
-        if (suggestions == null ||
-                suggestions.isEmpty()) {
-
-            return false;
-        }
-
-        for (String suggestion :
-                suggestions) {
-
-            if (TextUtils.isEmpty(
-                    suggestion
-            )) {
-
-                continue;
-            }
-
-            String normalizedSuggestion =
-                    suggestion
-                            .trim()
-                            .toLowerCase(
-                                    Locale.ROOT
-                            );
-
-            if (normalizedSuggestion.startsWith(
-                    normalizedInput
-            )
-                    && !normalizedSuggestion.equals(
-                    normalizedInput
-            )) {
-
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     private void addUniqueSuggestions(
             List<CharSequence> target,
@@ -448,7 +339,9 @@ public class SuggestionsManager
             if (existing != null) {
 
                 unique.add(
-                        existing.toString()
+                        normalizeSuggestionKey(
+                                existing.toString()
+                        )
                 );
             }
         }
@@ -463,9 +356,16 @@ public class SuggestionsManager
                 continue;
             }
 
-            if (unique.add(
-                    suggestion
-            )) {
+            String key =
+                    normalizeSuggestionKey(
+                            suggestion
+                    );
+
+            if (key.isEmpty()) {
+                continue;
+            }
+
+            if (unique.add(key)) {
 
                 target.add(
                         suggestion
@@ -480,17 +380,31 @@ public class SuggestionsManager
         }
     }
 
+    private String normalizeSuggestionKey(
+            String value) {
+
+        if (value == null) {
+            return "";
+        }
+
+        return value
+                .trim()
+                .toLowerCase(
+                        Locale.ROOT
+                );
+    }
+
     /*
      * ============================================================
-     * CURRENT SUGGESTIONS
+     * CURRENT RECOMMENDATION
      * ============================================================
      */
 
     public CharSequence getCurrentDictSuggestion() {
 
-        if (!dictionarySuggestions.isEmpty()) {
+        if (!suggestions.isEmpty()) {
 
-            return dictionarySuggestions.get(0);
+            return suggestions.get(0);
         }
 
         return null;
@@ -499,11 +413,11 @@ public class SuggestionsManager
     public CharSequence
     getCurrentSpellcheckerRecommendedSuggestion() {
 
-        if (hasRecommendedSpellcheckerSuggestion
-                && !spellcheckerSuggestions.isEmpty()) {
+        if (hasRecommendedSuggestion
+                && !suggestions.isEmpty()) {
 
             lastRecommendedSuggestion =
-                    spellcheckerSuggestions.get(0);
+                    suggestions.get(0);
 
             return lastRecommendedSuggestion;
         }
@@ -635,81 +549,25 @@ public class SuggestionsManager
     private void showSuggestions() {
 
         if (inputView == null) {
-
             return;
         }
 
-        List<CharSequence> merged =
-                new ArrayList<>(
-                        suggestionsCount
-                );
-
-        Set<String> unique =
-                new LinkedHashSet<>();
-
         /*
-         * Normal dictionary suggestions have priority.
+         * IMPORTANT:
+         *
+         * We pass the native engine's order unchanged.
+         *
+         * InputView places element 0 in the CENTER.
+         *
+         * Therefore:
+         *
+         *     suggestions[0] = best candidate
+         *     suggestions[1] = alternative
+         *     suggestions[2] = alternative
          */
-        for (CharSequence suggestion :
-                dictionarySuggestions) {
-
-            if (suggestion == null) {
-                continue;
-            }
-
-            if (unique.add(
-                    suggestion.toString()
-            )) {
-
-                merged.add(
-                        suggestion
-                );
-            }
-
-            if (merged.size()
-                    >= suggestionsCount) {
-
-                break;
-            }
-        }
-
-        /*
-         * Add correction candidates if there is still room.
-         */
-        if (merged.size()
-                < suggestionsCount) {
-
-            for (CharSequence suggestion :
-                    spellcheckerSuggestions) {
-
-                if (suggestion == null) {
-                    continue;
-                }
-
-                if (unique.add(
-                        suggestion.toString()
-                )) {
-
-                    merged.add(
-                            suggestion
-                    );
-                }
-
-                if (merged.size()
-                        >= suggestionsCount) {
-
-                    break;
-                }
-            }
-        }
-
-        boolean hasRecommended =
-                !dictionarySuggestions.isEmpty()
-                        || hasRecommendedSpellcheckerSuggestion;
-
         inputView.setSuggestions(
-                merged,
-                hasRecommended
+                suggestions,
+                hasRecommendedSuggestion
         );
     }
 
@@ -736,7 +594,6 @@ public class SuggestionsManager
             CharSequence text) {
 
         if (isPaused) {
-
             return;
         }
 
