@@ -5,58 +5,6 @@ set -euo pipefail
 export LC_ALL=C
 export LANG=C
 
-# ============================================================
-# PocketBoard dictionary generator
-# ============================================================
-#
-# Build-time only.
-#
-# Languages:
-#   es-AR
-#   en-en
-#   de-de
-#
-# Sources:
-#   wooorm/dictionaries       -> Hunspell validation
-#   FrequencyWords 2018       -> Spanish / English frequency
-#   Leipzig Wortschatz 2025   -> German frequency
-#
-# IMPORTANT:
-#
-# The runtime correction/suggestion engine already exists.
-# This script ONLY prepares optimized runtime dictionaries.
-#
-# We deliberately separate:
-#
-#   1. vocabulary selection
-#   2. correction/delete index selection
-#
-# A word can therefore be:
-#
-#   - included in the dictionary
-#   - NOT included in the correction index
-#
-# This is intentional.
-#
-# Example:
-#
-#   entschuldigung
-#
-# may be an important German vocabulary word even though
-# generating every possible SymSpell delete for it is expensive.
-#
-# The dictionary is optimized for real-world frequency.
-# The delete index is optimized independently for usefulness.
-#
-# Runtime formats remain compatible:
-#
-#   #POCKETBOARD-DICT-1
-#   #POCKETBOARD-META-1
-#   #POCKETBOARD-DELETES-1
-#
-# ============================================================
-
-
 ROOT_DIR="$(
     cd "$(dirname "${BASH_SOURCE[0]}")/.." &&
     pwd
@@ -73,63 +21,10 @@ ES_DIR="${WORK_DIR}/es-AR"
 EN_DIR="${WORK_DIR}/en-en"
 DE_DIR="${WORK_DIR}/de-de"
 
-mkdir -p "${WORK_DIR}"
-mkdir -p "${ES_DIR}"
-mkdir -p "${EN_DIR}"
-mkdir -p "${DE_DIR}"
-mkdir -p "${OUTPUT_DIR}"
-
+mkdir -p "${ES_DIR}" "${EN_DIR}" "${DE_DIR}" "${OUTPUT_DIR}"
 
 # ============================================================
-# Runtime dictionary budgets
-# ============================================================
-#
-# These are BYTE budgets, not word-count limits.
-#
-# This is intentional:
-#
-#   frequent short words use little space
-#   frequent long words use more space
-#
-# Therefore the selection is based on the actual resulting
-# dictionary size rather than an arbitrary "50k words".
-#
-# Total target:
-#
-#   1.2 MB ES
-#   1.4 MB EN
-#   1.4 MB DE
-#
-# Total:
-#
-#   4.0 MB
-#
-# This leaves room in the APK for the rest of the application.
-#
-# ============================================================
-
-ES_DICTIONARY_BUDGET=1228800
-EN_DICTIONARY_BUDGET=1433600
-DE_DICTIONARY_BUDGET=1433600
-
-GLOBAL_DICTIONARY_BUDGET=4194304
-
-
-# ============================================================
-# Delete-index budgets
-# ============================================================
-#
-# IMPORTANT:
-#
-# The old generator created tens/hundreds of MB because it
-# generated distance-2 deletes for practically every word.
-#
-# The runtime already performs the error/suggestion logic.
-#
-# We therefore keep only the most useful correction mappings.
-#
-# These budgets are deliberately small.
-#
+# DELETE INDEX BUDGETS
 # ============================================================
 
 ES_DELETE_BUDGET=700000
@@ -138,47 +33,32 @@ DE_DELETE_BUDGET=850000
 
 GLOBAL_DELETE_BUDGET=2250000
 
-
 # ============================================================
-# Delete generation policy
+# VOCABULARY SOURCE
 # ============================================================
 #
-# The most frequent words receive the strongest correction
-# coverage.
+# No arbitrary 10k / 20k / 50k word limit.
 #
-# TOP_DISTANCE2_WORDS:
+# We use the frequency source to determine what is common.
+# Hunspell is used to validate the vocabulary.
 #
-#   top N frequent words may receive distance 2 deletes.
-#
-# After that:
-#
-#   distance 1 only.
-#
-# This prevents the combinatorial explosion caused by distance 2
-# on the entire vocabulary.
-#
-# There is intentionally NO general "long words are bad" rule.
-#
-# Long frequent words can be indexed.
+# The number of final words is a RESULT, not a target.
 #
 # ============================================================
 
-TOP_DISTANCE2_WORDS=25000
+SOURCE_MAX_ENTRIES=250000
 
+# ============================================================
+# DELETE POLICY
+# ============================================================
+
+TOP_DISTANCE2_WORDS=12000
 MAX_DELETE_DISTANCE=2
-
 MAX_DELETE_WORD_LENGTH=32
-
-# Number of candidates retained for a single delete key.
-#
-# Candidates are processed in frequency order, therefore the
-# first candidates are the most frequent words.
-#
-MAX_CANDIDATES_PER_DELETE=4
-
+MAX_CANDIDATES_PER_DELETE=3
 
 # ============================================================
-# Required commands
+# REQUIRED COMMANDS
 # ============================================================
 
 require_command() {
@@ -199,13 +79,12 @@ require_command head
 require_command tail
 require_command wc
 require_command cut
-require_command awk
 require_command python3
 require_command tar
-
+require_command find
 
 # ============================================================
-# Download
+# DOWNLOAD
 # ============================================================
 
 download() {
@@ -236,9 +115,8 @@ download() {
     fi
 }
 
-
 # ============================================================
-# Download Hunspell dictionaries
+# HUNSPELL
 # ============================================================
 
 echo ""
@@ -270,9 +148,8 @@ download \
     "${WOOORM_BASE}/de/index.aff" \
     "${DE_DIR}/index.aff"
 
-
 # ============================================================
-# Download frequency sources
+# FREQUENCY SOURCES
 # ============================================================
 
 echo ""
@@ -288,10 +165,9 @@ download \
     "${FREQUENCY_BASE}/en/en_full.txt" \
     "${EN_DIR}/frequency.txt"
 
-
-# ------------------------------------------------------------
-# Leipzig German
-# ------------------------------------------------------------
+# ============================================================
+# LEIPZIG GERMAN
+# ============================================================
 
 LEIPZIG_ARCHIVE="${DE_DIR}/deu_news_2025_1M.tar.gz"
 LEIPZIG_DIR="${DE_DIR}/leipzig"
@@ -315,8 +191,8 @@ tar \
 LEIPZIG_WORDS_FILE="$(
     find "${LEIPZIG_DIR}" \
         -type f \
-        -name '*-words.txt' \
-        | head -n 1
+        -name '*-words.txt' |
+        head -n 1
 )"
 
 if [[ -z "${LEIPZIG_WORDS_FILE}" ]]; then
@@ -329,27 +205,8 @@ echo ""
 echo "Leipzig frequency file:"
 echo "  ${LEIPZIG_WORDS_FILE}"
 
-
 # ============================================================
-# Normalize frequency lists
-# ============================================================
-#
-# FrequencyWords format:
-#
-#   word count
-#
-# Leipzig format can contain:
-#
-#   rank word frequency
-#
-# We only need the word ordering.
-#
-# The output is:
-#
-#   one normalized word per line
-#
-# in frequency order.
-#
+# NORMALIZE FREQUENCYWORDS
 # ============================================================
 
 normalize_frequency_frequencywords() {
@@ -388,21 +245,21 @@ for raw in sys.stdin:
     seen.add(word)
     print(word)
 ' |
-        head -n 500000 \
+        head -n "${SOURCE_MAX_ENTRIES}" \
         > "${output}"
 
-    local count
-    count="$(wc -l < "${output}")"
-
-    echo "Normalized frequency entries: ${count}"
-
-    if [[ "${count}" -eq 0 ]]; then
+    if [[ ! -s "${output}" ]]; then
         echo "ERROR: normalized frequency list is empty:"
         echo "  ${input}"
         exit 1
     fi
+
+    echo "Entries: $(wc -l < "${output}")"
 }
 
+# ============================================================
+# NORMALIZE LEIPZIG
+# ============================================================
 
 normalize_frequency_leipzig() {
     local input="$1"
@@ -412,22 +269,15 @@ normalize_frequency_leipzig() {
     echo "Normalizing Leipzig frequency list:"
     echo "  ${input}"
 
-    #
-    # Leipzig word lists normally contain:
-    #
-    #   rank  word  frequency
-    #
-    # We deliberately detect the word column instead of assuming
-    # a single fixed format.
-    #
-
     python3 - \
         "${input}" \
-        "${output}" <<'PY'
+        "${output}" \
+        "${SOURCE_MAX_ENTRIES}" <<'PY'
 import sys
 
 source = sys.argv[1]
 destination = sys.argv[2]
+maximum_entries = int(sys.argv[3])
 
 seen = set()
 entries = []
@@ -444,10 +294,6 @@ with open(source, encoding="utf-8", errors="replace") as f:
         if len(parts) < 2:
             continue
 
-        #
-        # Leipzig word lists use numeric rank/frequency fields.
-        # Find the first non-numeric token.
-        #
         word = None
 
         for part in parts:
@@ -474,7 +320,7 @@ with open(source, encoding="utf-8", errors="replace") as f:
         seen.add(word)
         entries.append(word)
 
-        if len(entries) >= 500000:
+        if len(entries) >= maximum_entries:
             break
 
 with open(destination, "w", encoding="utf-8") as out:
@@ -486,11 +332,9 @@ PY
 
     if [[ ! -s "${output}" ]]; then
         echo "ERROR: normalized Leipzig frequency list is empty:"
-        echo "  ${input}"
         exit 1
     fi
 }
-
 
 normalize_frequency_frequencywords \
     "${ES_DIR}/frequency.txt" \
@@ -504,9 +348,8 @@ normalize_frequency_leipzig \
     "${LEIPZIG_WORDS_FILE}" \
     "${DE_DIR}/frequency.normalized"
 
-
 # ============================================================
-# Extract Hunspell base words
+# EXTRACT HUNSPELL WORDS
 # ============================================================
 
 extract_hunspell_words() {
@@ -530,7 +373,6 @@ extract_hunspell_words() {
     fi
 }
 
-
 extract_hunspell_words \
     "${ES_DIR}/index.dic" \
     "${ES_DIR}/hunspell.words"
@@ -543,16 +385,13 @@ extract_hunspell_words \
     "${DE_DIR}/index.dic" \
     "${DE_DIR}/hunspell.words"
 
-
 # ============================================================
-# PocketBoard regional / common whitelist
+# IMPORTANT EVERYDAY WORDS
 # ============================================================
 #
-# These are NOT mandatory words.
-#
-# They are simply additional candidates.
-#
-# The final vocabulary is still controlled by the byte budget.
+# These are not a size limit.
+# They guarantee useful forms that can be poorly represented
+# by a generic corpus.
 #
 # ============================================================
 
@@ -574,7 +413,29 @@ oís
 reís
 acá
 allá
-che
+ahí
+aquí
+cómo
+cuándo
+cuánto
+cuánta
+cuántos
+cuántas
+qué
+quién
+quiénes
+dónde
+adónde
+también
+más
+sí
+tú
+él
+día
+días
+mañana
+año
+años
 EOF
 
 cat > "${EN_DIR}/whitelist.txt" <<'EOF'
@@ -622,32 +483,54 @@ er
 sie
 wir
 ihr
+mir
+mich
+dir
+dich
+uns
+euch
 nicht
 kein
 keine
+keinen
+keinem
+keiner
 einen
 einem
 einer
 über
 für
+mit
+von
+zum
+zur
 dass
 daß
+wie
+was
+wer
+wann
+wo
+warum
+heute
+morgen
+gestern
 entschuldigung
 wahrscheinlich
 möglicherweise
+natürlich
+wirklich
+schon
+noch
+sehr
+bitte
+danke
+hallo
+tschüss
 EOF
 
-
 # ============================================================
-# Build candidate vocabulary
-# ============================================================
-#
-# The candidate file retains FREQUENCY ORDER.
-#
-# We do NOT impose a word-count limit.
-#
-# The final selector below works against a BYTE budget.
-#
+# BUILD CANDIDATES
 # ============================================================
 
 build_candidates() {
@@ -659,7 +542,7 @@ build_candidates() {
 
     echo ""
     echo "============================================================"
-    echo " Building candidates: ${language}"
+    echo " Building everyday vocabulary: ${language}"
     echo "============================================================"
 
     python3 - \
@@ -681,8 +564,10 @@ with open(hunspell_file, encoding="utf-8") as f:
         if line.strip()
     }
 
-frequency_words = []
+seen = set()
+result = []
 
+# Frequency-ranked vocabulary.
 with open(frequency_file, encoding="utf-8") as f:
     for raw in f:
         word = raw.strip().lower()
@@ -693,18 +578,13 @@ with open(frequency_file, encoding="utf-8") as f:
         if word not in valid:
             continue
 
-        frequency_words.append(word)
+        if word in seen:
+            continue
 
-seen = set()
-result = []
+        seen.add(word)
+        result.append(word)
 
-for word in frequency_words:
-    if word in seen:
-        continue
-
-    seen.add(word)
-    result.append(word)
-
+# Important everyday / regional / orthographic forms.
 with open(whitelist_file, encoding="utf-8") as f:
     for raw in f:
         word = raw.strip().lower()
@@ -725,8 +605,7 @@ with open(output_file, "w", encoding="utf-8") as out:
     for word in result:
         out.write(word + "\n")
 
-print(f"Valid frequency candidates: {len(frequency_words)}")
-print(f"Final candidates: {len(result)}")
+print(f"Everyday vocabulary candidates: {len(result)}")
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -735,7 +614,6 @@ PY
         exit 1
     fi
 }
-
 
 build_candidates \
     "es-AR" \
@@ -758,164 +636,74 @@ build_candidates \
     "${DE_DIR}/whitelist.txt" \
     "${DE_DIR}/candidates.txt"
 
-
 # ============================================================
-# Select vocabulary by BYTE budget
+# WRITE RUNTIME DICTIONARIES
 # ============================================================
 #
-# The candidate list is frequency-ranked.
+# No arbitrary byte limit here.
 #
-# Therefore we simply walk it from most frequent to least
-# frequent and stop when the dictionary byte budget is reached.
-#
-# IMPORTANT:
-#
-# We do not reject long words merely because they are long.
-#
-# A long frequent word can therefore be selected.
+# The vocabulary is determined by frequency + Hunspell +
+# explicit everyday words.
 #
 # ============================================================
 
-select_vocabulary() {
+write_dictionary() {
     local language="$1"
     local candidates="$2"
-    local budget="$3"
-    local output="$4"
+    local output="$3"
 
     echo ""
     echo "============================================================"
-    echo " Optimizing vocabulary: ${language}"
-    echo " Budget: ${budget} bytes"
+    echo " Writing runtime vocabulary: ${language}"
     echo "============================================================"
 
-    python3 - \
-        "${candidates}" \
-        "${budget}" \
-        "${output}" <<'PY'
-import sys
-
-source = sys.argv[1]
-budget = int(sys.argv[2])
-output = sys.argv[3]
-
-header = "#POCKETBOARD-DICT-1\n"
-used = len(header.encode("utf-8"))
-
-selected = []
-selected_set = set()
-
-with open(source, encoding="utf-8") as f:
-    for raw in f:
-        word = raw.strip()
-
-        if not word:
-            continue
-
-        if word in selected_set:
-            continue
-
-        encoded = (word + "\n").encode("utf-8")
-
-        if used + len(encoded) > budget:
-            break
-
-        selected.append(word)
-        selected_set.add(word)
-        used += len(encoded)
-
-with open(output, "w", encoding="utf-8") as out:
-    out.write(header)
-
-    for word in selected:
-        out.write(word + "\n")
-
-print(f"Selected words: {len(selected)}")
-print(f"Dictionary bytes: {used}")
-PY
+    {
+        echo "#POCKETBOARD-DICT-1"
+        cat "${candidates}"
+    } > "${output}"
 
     if [[ ! -s "${output}" ]]; then
-        echo "ERROR: selected dictionary is empty:"
+        echo "ERROR: dictionary is empty:"
         echo "  ${language}"
         exit 1
     fi
 
-    local count
-    count="$(tail -n +2 "${output}" | wc -l)"
-
-    local size
-    size="$(wc -c < "${output}")"
-
-    echo " Final words: ${count}"
-    echo " Final bytes: ${size}"
-
-    if (( size > budget )); then
-        echo "ERROR: dictionary exceeded budget:"
-        echo "  ${language}"
-        exit 1
-    fi
-
-    #
-    # Useful diagnostics.
-    #
-
-    echo ""
-    echo " Long frequent words retained:"
-
-    grep -E '^.{10,}$' \
-        <(tail -n +2 "${output}") |
-        head -n 10 |
-        while IFS= read -r word
-        do
-            echo "  ${word}"
-        done || true
+    echo "Words: $(tail -n +2 "${output}" | wc -l)"
+    echo "Bytes: $(wc -c < "${output}")"
 }
 
-
-select_vocabulary \
+write_dictionary \
     "es-AR" \
     "${ES_DIR}/candidates.txt" \
-    "${ES_DICTIONARY_BUDGET}" \
     "${OUTPUT_DIR}/es-AR.dict"
 
-select_vocabulary \
+write_dictionary \
     "en-en" \
     "${EN_DIR}/candidates.txt" \
-    "${EN_DICTIONARY_BUDGET}" \
     "${OUTPUT_DIR}/en-en.dict"
 
-select_vocabulary \
+write_dictionary \
     "de-de" \
     "${DE_DIR}/candidates.txt" \
-    "${DE_DICTIONARY_BUDGET}" \
     "${OUTPUT_DIR}/de-de.dict"
-
-
-# ============================================================
-# Generate optimized Symmetric Delete index
+    # ============================================================
+# GENERATE OPTIMIZED SYMMETRIC DELETE INDEX
 # ============================================================
 #
-# IMPORTANT DIFFERENCE FROM THE OLD GENERATOR:
+# The vocabulary is kept.
 #
-# We DO NOT generate deletes for the entire dictionary.
+# Only the correction index is aggressively optimized.
 #
-# Words are processed in frequency order.
-#
-# Top words:
-#
+# Top frequent words:
 #   distance 2
 #
 # Remaining words:
-#
 #   distance 1
 #
-# Each delete key keeps only the most frequent candidates.
+# Each delete:
+#   maximum 3 candidates
 #
-# The total serialized output is strictly limited by the
-# per-language byte budget.
-#
-# This keeps the runtime format unchanged:
-#
-#   delete<TAB>word
+# The index has a strict byte budget.
 #
 # ============================================================
 
@@ -941,10 +729,8 @@ generate_delete_index() {
 
     echo ""
     echo "============================================================"
-    echo " Generating optimized correction index: ${language}"
+    echo " Generating correction index: ${language}"
     echo " Budget: ${budget} bytes"
-    echo " Distance 2 words: top ${TOP_DISTANCE2_WORDS}"
-    echo " Max candidates/delete: ${MAX_CANDIDATES_PER_DELETE}"
     echo "============================================================"
 
     tail -n +2 "${dictionary}" > "${words_file}"
@@ -1001,54 +787,33 @@ with open(words_file, encoding="utf-8") as f:
     for raw in f:
         word = raw.strip()
 
-        if not word:
-            continue
-
-        words.append(word)
+        if word:
+            words.append(word)
 
 
-#
-# delete -> ordered list of words
-#
-# Because words are processed in frequency order, the first
-# candidates are always the most frequent ones.
-#
 buckets = {}
 
-#
-# We use a conservative estimate while constructing the index.
-# The final serialized size is checked again after sorting.
-#
-estimated_bytes = 0
-
-header_bytes = (
+header = (
     "#POCKETBOARD-DELETES-1\n"
     f"#MAX_DISTANCE={max_distance}\n"
     f"#MAX_WORD_LENGTH={max_word_length}\n"
     f"#MAX_CANDIDATES={max_candidates}\n"
-).encode("utf-8")
+)
 
-estimated_bytes = len(header_bytes)
-
-accepted_words = 0
+used_bytes = len(header.encode("utf-8"))
 accepted_mappings = 0
+
 
 for rank, word in enumerate(words):
 
     if len(word) > max_word_length:
         continue
 
-    #
-    # Top frequent words get distance 2.
-    # Everything else gets distance 1.
-    #
+    # Frequency order is preserved in the dictionary.
     distance = 2 if rank < top_distance2_words else 1
 
     generated = deletes(word, distance)
 
-    #
-    # Deterministic order.
-    #
     for delete in sorted(generated):
 
         bucket = buckets.get(delete)
@@ -1057,9 +822,6 @@ for rank, word in enumerate(words):
             bucket = []
             buckets[delete] = bucket
 
-        #
-        # A delete key only retains the most frequent candidates.
-        #
         if word in bucket:
             continue
 
@@ -1068,39 +830,31 @@ for rank, word in enumerate(words):
 
         line = f"{delete}\t{word}\n".encode("utf-8")
 
-        #
-        # Reserve space before accepting the mapping.
-        #
-        if estimated_bytes + len(line) > budget:
+        if used_bytes + len(line) > budget:
             continue
 
         bucket.append(word)
-        estimated_bytes += len(line)
+        used_bytes += len(line)
         accepted_mappings += 1
 
-    accepted_words += 1
 
-#
-# Write sorted deterministic output.
-#
 with open(output_file, "w", encoding="utf-8") as out:
 
-    out.write("#POCKETBOARD-DELETES-1\n")
-    out.write(f"#MAX_DISTANCE={max_distance}\n")
-    out.write(f"#MAX_WORD_LENGTH={max_word_length}\n")
-    out.write(f"#MAX_CANDIDATES={max_candidates}\n")
+    out.write(header)
 
     for delete in sorted(buckets):
+
         for word in buckets[delete]:
+
             out.write(delete)
             out.write("\t")
             out.write(word)
             out.write("\n")
 
-print(f"Indexed vocabulary words: {accepted_words}")
+
 print(f"Delete keys: {len(buckets)}")
 print(f"Mappings: {accepted_mappings}")
-print(f"Estimated bytes: {estimated_bytes}")
+print(f"Bytes: {used_bytes}")
 PY
 
     if [[ ! -s "${pairs_file}" ]]; then
@@ -1109,12 +863,11 @@ PY
         exit 1
     fi
 
-    #
-    # The Python generator already creates deterministic order.
-    # Keep a separate grouped file for final validation.
-    #
-
-    LC_ALL=C sort -t $'\t' -k1,1 -k2,2 -u \
+    LC_ALL=C sort \
+        -t $'\t' \
+        -k1,1 \
+        -k2,2 \
+        -u \
         "${pairs_file}" \
         > "${grouped_file}"
 
@@ -1126,23 +879,17 @@ PY
         cat "${grouped_file}"
     } > "${output}"
 
-    if [[ ! -s "${output}" ]]; then
-        echo "ERROR: delete index is empty:"
-        echo "  ${language}"
-        exit 1
-    fi
-
     local size
     size="$(wc -c < "${output}")"
 
-    local pair_count
-    pair_count="$(
+    local mappings
+    mappings="$(
         tail -n +5 "${output}" |
         wc -l
     )"
 
-    local delete_count
-    delete_count="$(
+    local keys
+    keys="$(
         tail -n +5 "${output}" |
         cut -f1 |
         LC_ALL=C uniq |
@@ -1151,9 +898,9 @@ PY
 
     echo ""
     echo "${language}:"
-    echo "  Delete keys:       ${delete_count}"
-    echo "  Word mappings:     ${pair_count}"
-    echo "  Delete index bytes: ${size}"
+    echo "  Delete keys: ${keys}"
+    echo "  Mappings:    ${mappings}"
+    echo "  Bytes:       ${size}"
 
     if (( size > budget )); then
         echo ""
@@ -1164,7 +911,6 @@ PY
         exit 1
     fi
 }
-
 
 generate_delete_index \
     "es-AR" \
@@ -1184,9 +930,8 @@ generate_delete_index \
     "${OUTPUT_DIR}/de-de.deletes" \
     "${DE_DELETE_BUDGET}"
 
-
 # ============================================================
-# Generate metadata
+# METADATA
 # ============================================================
 
 generate_metadata() {
@@ -1232,10 +977,7 @@ generate_metadata() {
         echo "  ${language}"
         exit 1
     fi
-
-    echo "${language} metadata: $(du -h "${output}" | cut -f1)"
 }
-
 
 generate_metadata \
     "es-AR" \
@@ -1252,21 +994,8 @@ generate_metadata \
     "${DE_DIR}/index.aff" \
     "${OUTPUT_DIR}/de-de.meta"
 
-
 # ============================================================
-# Required word checks
-# ============================================================
-#
-# These checks are NON-FATAL.
-#
-# They are diagnostics only.
-#
-# A word missing from the dictionary is reported, but does not
-# fail the build.
-#
-# This is important because frequency selection is the actual
-# authority.
-#
+# WORD CHECKS
 # ============================================================
 
 check_word() {
@@ -1274,20 +1003,18 @@ check_word() {
     local word="$2"
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
-    if ! grep \
+    if grep \
         -Fqx \
         "${word}" \
         <(tail -n +2 "${dictionary}")
     then
+        echo "OK: ${language}: ${word}"
+    else
         echo "WARNING: word not selected"
         echo "  Language: ${language}"
         echo "  Word: ${word}"
-        return 0
     fi
-
-    echo "OK: ${language}: ${word}"
 }
-
 
 echo ""
 echo "============================================================"
@@ -1312,9 +1039,8 @@ check_word "de-de" "entschuldigung"
 check_word "de-de" "wahrscheinlich"
 check_word "de-de" "möglicherweise"
 
-
 # ============================================================
-# Global validation
+# VALIDATION
 # ============================================================
 
 validate_generated_asset() {
@@ -1343,7 +1069,6 @@ validate_generated_asset() {
     fi
 }
 
-
 echo ""
 echo "============================================================"
 echo " Validating generated assets"
@@ -1370,9 +1095,8 @@ do
     echo "OK: ${language}"
 done
 
-
 # ============================================================
-# Final size report
+# FINAL REPORT
 # ============================================================
 
 echo ""
@@ -1422,14 +1146,13 @@ do
 
     echo ""
     echo "${language}"
-    echo "  Words:          ${dictionary_words}"
-    echo "  Dictionary:     ${dictionary_size} bytes"
-    echo "  Delete index:   ${delete_size} bytes"
-    echo "  Delete mappings:${delete_mappings}"
-    echo "  Metadata:       ${metadata_size} bytes"
-    echo "  Total:          $((dictionary_size + delete_size + metadata_size)) bytes"
+    echo "  Words:           ${dictionary_words}"
+    echo "  Dictionary:      ${dictionary_size} bytes"
+    echo "  Delete index:    ${delete_size} bytes"
+    echo "  Delete mappings: ${delete_mappings}"
+    echo "  Metadata:        ${metadata_size} bytes"
+    echo "  Total:           $((dictionary_size + delete_size + metadata_size)) bytes"
 done
-
 
 TOTAL_GENERATED_BYTES=$(
     (
@@ -1438,26 +1161,6 @@ TOTAL_GENERATED_BYTES=$(
         TOTAL_METADATA_BYTES
     )
 )
-
-
-echo ""
-echo "============================================================"
-echo " RUNTIME DICTIONARY BUDGET"
-echo "============================================================"
-
-echo "Dictionary bytes: ${TOTAL_DICTIONARY_BYTES}"
-echo "Budget:           ${GLOBAL_DICTIONARY_BUDGET}"
-
-if (( TOTAL_DICTIONARY_BYTES > GLOBAL_DICTIONARY_BUDGET )); then
-    echo ""
-    echo "ERROR: dictionaries exceed global dictionary budget."
-    echo "  Total:  ${TOTAL_DICTIONARY_BYTES}"
-    echo "  Budget: ${GLOBAL_DICTIONARY_BUDGET}"
-    exit 1
-fi
-
-echo "Status: OK"
-
 
 echo ""
 echo "============================================================"
@@ -1477,17 +1180,16 @@ fi
 
 echo "Status: OK"
 
-
 echo ""
 echo "============================================================"
-echo " TOTAL GENERATED DICTIONARY ASSETS"
+echo " TOTAL GENERATED ASSETS"
 echo "============================================================"
 
 echo "Total:"
 echo "  ${TOTAL_GENERATED_BYTES} bytes"
 
 echo ""
-echo "Dictionary assets:"
+echo "Vocabulary:"
 echo "  ${TOTAL_DICTIONARY_BYTES} bytes"
 
 echo ""
@@ -1497,7 +1199,6 @@ echo "  ${TOTAL_DELETE_BYTES} bytes"
 echo ""
 echo "Metadata:"
 echo "  ${TOTAL_METADATA_BYTES} bytes"
-
 
 echo ""
 echo "============================================================"
