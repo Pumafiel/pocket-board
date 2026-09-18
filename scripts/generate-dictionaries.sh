@@ -18,7 +18,7 @@ export LANG=C
 #
 # Strategy:
 #
-#   frequency sources
+#   Frequency sources
 #       ↓
 #   normalized ranked vocabulary
 #       ↓
@@ -32,10 +32,19 @@ export LANG=C
 #
 # IMPORTANT:
 #
-# Frequency is the primary signal.
-# Hunspell is used only as a spelling vocabulary reference.
+# Frequency is the primary ranking signal.
 #
-# Additional/common words are candidates, NOT mandatory.
+# Hunspell is used as a spelling vocabulary/reference source
+# by the runtime project, but this build does NOT impose an
+# arbitrary 50k word limit.
+#
+# The actual limiting factor is the total generated asset
+# budget:
+#
+#   dictionary + SymSpell delete index + metadata
+#
+# Therefore long/common words can survive when their frequency
+# justifies their storage cost.
 #
 # ============================================================
 
@@ -59,22 +68,27 @@ LEIPZIG_URL="https://downloads.wortschatz-leipzig.de/corpora/deu_news_2025_1M.ta
 SOURCE_MAX_WORDS=500000
 
 # ============================================================
-# Global APK dictionary budget
+# Global generated-assets budget
+# ============================================================
+#
+# Keep this aligned with the existing project budget.
+#
+# The budget is shared between:
+#
+#   es-AR
+#   en-en
+#   de-de
+#
+# Allocation:
+#
+#   Spanish 30%
+#   English 35%
+#   German  35%
+#
 # ============================================================
 
 GLOBAL_BUDGET=4194304
 
-# Approximate per-language allocation.
-#
-# Spanish:
-#   30%
-#
-# English:
-#   35%
-#
-# German:
-#   35%
-#
 ES_BUDGET=1258291
 EN_BUDGET=1468006
 DE_BUDGET=1468007
@@ -87,18 +101,20 @@ DELETE_MAX_DISTANCE=2
 DELETE_MAX_WORD_LENGTH=24
 
 #
-# Distance 2 is considerably more expensive.
-# We only generate distance 2 for words up to this length.
+# Distance 2 is expensive.
+#
+# Short and medium words are the most useful candidates for
+# typo correction, so distance 2 is limited to these lengths.
 #
 DISTANCE_2_MAX_WORD_LENGTH=10
 
 #
-# Each delete key keeps only the highest-frequency candidates.
+# A delete key keeps only the highest-frequency candidates.
 #
 MAX_CANDIDATES_PER_DELETE=4
 
 # ============================================================
-# Directories
+# Language directories
 # ============================================================
 
 ES_DIR="${WORK_DIR}/es-AR"
@@ -348,12 +364,25 @@ with open(
         if not parts:
             continue
 
+        #
+        # FrequencyWords:
+        #
+        #   word frequency
+        #
+        # Leipzig:
+        #
+        #   word frequency rank ...
+        #
+        # In both cases the first field is the word for
+        # FrequencyWords, while Leipzig is handled below.
+        #
+
         if language == "de-de":
 
-            if len(parts) < 2:
+            if len(parts) < 1:
                 continue
 
-            word_raw = parts[1]
+            word_raw = parts[0]
 
         else:
 
@@ -422,7 +451,16 @@ normalize_frequency \
     "${DE_DIR}/frequency.normalized"
 
 # ============================================================
-# PocketBoard additional candidates
+# Additional PocketBoard candidates
+# ============================================================
+#
+# These are NOT mandatory.
+#
+# They are simply injected into the ranked candidate pool.
+#
+# The optimizer may keep or discard them depending on their
+# total storage cost.
+#
 # ============================================================
 
 cat > "${ES_DIR}/whitelist.txt" <<'EOF'
@@ -519,7 +557,7 @@ hallo
 EOF
 
 # ============================================================
-# Build candidates
+# Build candidate pools
 # ============================================================
 
 build_candidates() {
@@ -625,6 +663,7 @@ with open(
         )
 
         next_rank += 1
+
         additional_count += 1
 
 
@@ -692,6 +731,24 @@ build_candidates \
 # ============================================================
 # Budget-aware vocabulary optimizer
 # ============================================================
+#
+# IMPORTANT:
+#
+# The budget is applied to:
+#
+#   dictionary bytes
+#   +
+#   incremental SymSpell delete mappings
+#
+# This means we do NOT first fill the dictionary and then
+# discover that the correction index is enormous.
+#
+# Frequency rank determines priority.
+#
+# A word that appears earlier in the frequency list is considered
+# before a less frequent word.
+#
+# ============================================================
 
 optimize_vocabulary() {
     local language="$1"
@@ -727,13 +784,16 @@ max_candidates = int(sys.argv[7])
 HEADER = "#POCKETBOARD-DICT-1\n"
 
 
-def utf8_len(value):
+def byte_len(value):
     return len(
         value.encode("utf-8")
     )
 
 
-def generate_deletes(word, distance):
+def generate_deletes(
+    word,
+    distance
+):
 
     result = set()
 
@@ -776,17 +836,42 @@ def generate_deletes(word, distance):
 
 def distance_for_word(word):
 
+    #
+    # Very short words:
+    # distance 1 only.
+    #
     if len(word) <= 4:
         return 1
 
+    #
+    # Medium words:
+    # distance 2.
+    #
     if len(word) <= distance_2_max_length:
         return min(
             2,
             max_distance
         )
 
+    #
+    # Long words:
+    # distance 1.
+    #
+    # This is particularly important for words such as:
+    #
+    #   entschuldigung
+    #   wahrscheinlich
+    #   möglicherweise
+    #
+    # We still KEEP the word if frequency justifies it,
+    # but we don't explode the delete index unnecessarily.
+    #
     return 1
 
+
+# ============================================================
+# Read ranked candidates
+# ============================================================
 
 rows = []
 
@@ -831,17 +916,54 @@ rows.sort(
 )
 
 
+# ============================================================
+# Selection state
+# ============================================================
+
 selected = []
 selected_set = set()
 
 delete_buckets = defaultdict(list)
 
-dictionary_bytes = len(
-    HEADER.encode("utf-8")
+dictionary_bytes = byte_len(
+    HEADER
 )
 
 delete_bytes = 0
 
+delete_cache = {}
+
+
+def get_deletes(word):
+
+    cached = delete_cache.get(word)
+
+    if cached is not None:
+        return cached
+
+    if len(word) > max_word_length:
+
+        result = []
+
+    else:
+
+        distance = distance_for_word(
+            word
+        )
+
+        result = generate_deletes(
+            word,
+            distance
+        )
+
+    delete_cache[word] = result
+
+    return result
+
+
+# ============================================================
+# Frequency-first selection
+# ============================================================
 
 for rank, word in rows:
 
@@ -849,85 +971,70 @@ for rank, word in rows:
         continue
 
     dictionary_cost = (
-        utf8_len(word)
+        byte_len(word)
         + 1
     )
 
-    mappings = []
+    incremental_mappings = []
 
-    if len(word) <= max_word_length:
+    for delete in get_deletes(word):
 
-        distance = distance_for_word(
-            word
+        bucket = delete_buckets.get(
+            delete,
+            []
         )
 
-        for delete in generate_deletes(
-            word,
-            distance
-        ):
+        if word in bucket:
+            continue
 
-            bucket = delete_buckets.get(
+        if len(bucket) >= max_candidates:
+            continue
+
+        mapping_cost = (
+            byte_len(delete)
+            + 1
+            + byte_len(word)
+            + 1
+        )
+
+        incremental_mappings.append(
+            (
                 delete,
-                []
+                word,
+                mapping_cost
             )
+        )
 
-            if word in bucket:
-                continue
-
-            if len(bucket) >= max_candidates:
-                continue
-
-            cost = (
-                utf8_len(delete)
-                + 1
-                + utf8_len(word)
-                + 1
-            )
-
-            mappings.append(
-                (
-                    delete,
-                    word,
-                    cost
-                )
-            )
-
-    delete_cost = sum(
+    incremental_delete_cost = sum(
         cost
-        for _, _, cost in mappings
+        for _, _, cost
+        in incremental_mappings
     )
 
-    total_cost = (
+    incremental_total = (
         dictionary_cost
-        + delete_cost
+        + incremental_delete_cost
     )
 
-    if (
+    current_total = (
         dictionary_bytes
-        + total_cost
+        + delete_bytes
+    )
+
+    #
+    # Word doesn't fit in remaining budget.
+    #
+    if (
+        current_total
+        + incremental_total
         > budget
     ):
 
-        if (
-            dictionary_bytes
-            + dictionary_cost
-            <= budget
-        ):
-
-            selected.append(
-                (
-                    rank,
-                    word
-                )
-            )
-
-            selected_set.add(word)
-
-            dictionary_bytes += (
-                dictionary_cost
-            )
-
         continue
+
+    #
+    # Accept.
+    #
 
     selected.append(
         (
@@ -936,17 +1043,19 @@ for rank, word in rows:
         )
     )
 
-    selected_set.add(word)
+    selected_set.add(
+        word
+    )
 
     dictionary_bytes += (
         dictionary_cost
     )
 
     delete_bytes += (
-        delete_cost
+        incremental_delete_cost
     )
 
-    for delete, candidate, cost in mappings:
+    for delete, candidate, cost in incremental_mappings:
 
         bucket = delete_buckets[
             delete
@@ -963,19 +1072,16 @@ for rank, word in rows:
             )
 
 
+# ============================================================
+# Write vocabulary
+# ============================================================
+
 selected.sort(
     key=lambda item: (
         item[0],
         item[1]
     )
 )
-
-
-selected_words = {
-    word
-    for _, word in selected
-}
-
 
 with open(
     output_file,
@@ -986,10 +1092,20 @@ with open(
     for _, word in selected:
 
         out.write(
-            word
-            + "\n"
+            word + "\n"
         )
 
+
+selected_words = {
+    word
+    for _, word in selected
+}
+
+
+estimated_total = (
+    dictionary_bytes
+    + delete_bytes
+)
 
 long_words = sum(
     1
@@ -997,10 +1113,6 @@ long_words = sum(
     if len(word) >= 10
 )
 
-estimated_total = (
-    dictionary_bytes
-    + delete_bytes
-)
 
 print(
     f"Selected words: {len(selected)}"
@@ -1019,18 +1131,39 @@ print(
 )
 
 print(
+    f"Budget remaining: "
+    f"{max(0, budget - estimated_total)}"
+)
+
+print(
     f"Words >= 10 chars: {long_words}"
 )
 
-for word in [
+
+# ============================================================
+# Diagnostics only
+# ============================================================
+
+important_words = [
     "mañana",
+    "vos",
     "tenés",
     "podés",
     "hacés",
+    "acá",
+    "the",
+    "have",
+    "hello",
+    "ich",
+    "nicht",
+    "morgen",
     "entschuldigung",
     "wahrscheinlich",
-    "möglicherweise"
-]:
+    "möglicherweise",
+]
+
+
+for word in important_words:
 
     if word in selected_words:
 
@@ -1047,6 +1180,7 @@ PY
 
     if [[ ! -s "${output}" ]]; then
 
+        echo ""
         echo "ERROR: optimizer produced empty vocabulary:"
         echo "  ${language}"
 
@@ -1108,7 +1242,7 @@ generate_dictionary \
     "${OUTPUT_DIR}/de-de.dict"
 
 # ============================================================
-# Generate SymSpell delete index
+# Generate compact SymSpell delete index
 # ============================================================
 
 generate_delete_index() {
@@ -1149,7 +1283,10 @@ distance_2_max_length = int(sys.argv[5])
 max_candidates = int(sys.argv[6])
 
 
-def deletes(word, distance):
+def deletes(
+    word,
+    distance
+):
 
     result = set()
 
@@ -1284,14 +1421,19 @@ print(
     f"Delete keys: {len(candidates)}"
 )
 
+mapping_count = sum(
+    len(v)
+    for v in candidates.values()
+)
+
 print(
-    f"Mappings: "
-    f"{sum(len(v) for v in candidates.values())}"
+    f"Mappings: {mapping_count}"
 )
 PY
 
     if [[ ! -s "${pairs}" ]]; then
 
+        echo ""
         echo "ERROR: empty delete index: ${language}"
 
         exit 1
@@ -1336,7 +1478,7 @@ generate_delete_index \
     "${OUTPUT_DIR}/de-de.deletes"
 
 # ============================================================
-# Metadata
+# Generate metadata
 # ============================================================
 
 generate_metadata() {
@@ -1378,6 +1520,12 @@ generate_metadata \
 
 # ============================================================
 # Sanity checks
+# ============================================================
+#
+# These are diagnostics.
+#
+# They do NOT force words into the vocabulary.
+#
 # ============================================================
 
 check_word() {
@@ -1458,6 +1606,21 @@ do
         wc -c < "${metadata}"
     )"
 
+    language_total=$(
+        (
+            echo $(
+                (
+                    dictionary_size
+                    + delete_size
+                    + metadata_size
+                )
+            )
+        )
+    )
+
+    #
+    # Bash arithmetic in a reliable form.
+    #
     language_total=$(
         (
             dictionary_size
