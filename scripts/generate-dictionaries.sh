@@ -242,14 +242,6 @@ tar \
     -xzf "${DE_DIR}/leipzig.tar.gz" \
     -C "${LEIPZIG_EXTRACT_DIR}"
 
-#
-# Leipzig *_words.txt:
-#
-#   Wort_ID    Wort    Häufigkeit
-#
-# The files are already sorted by descending frequency.
-#
-
 LEIPZIG_WORD_FILE="$(
     find "${LEIPZIG_EXTRACT_DIR}" \
         -type f \
@@ -351,15 +343,6 @@ with open(
         if not line:
             continue
 
-        #
-        # FrequencyWords format:
-        #
-        # word frequency
-        #
-        # Leipzig format:
-        #
-        # word_id<TAB>word<TAB>frequency
-        #
         parts = line.split()
 
         if not parts:
@@ -367,12 +350,6 @@ with open(
 
         if language == "de-de":
 
-            #
-            # Leipzig:
-            # column 0 = word ID
-            # column 1 = word
-            # column 2 = frequency
-            #
             if len(parts) < 2:
                 continue
 
@@ -380,11 +357,6 @@ with open(
 
         else:
 
-            #
-            # FrequencyWords:
-            # column 0 = word
-            # column 1 = frequency
-            #
             word_raw = parts[0]
 
         word = normalize_word(word_raw)
@@ -451,16 +423,6 @@ normalize_frequency \
 
 # ============================================================
 # PocketBoard additional candidates
-# ============================================================
-#
-# These are NOT mandatory.
-#
-# If a word already exists in the frequency source, the
-# frequency rank wins.
-#
-# If it does not exist, it is appended after the frequency
-# candidates and therefore has lower priority.
-#
 # ============================================================
 
 cat > "${ES_DIR}/whitelist.txt" <<'EOF'
@@ -584,10 +546,6 @@ output_file = sys.argv[3]
 rows = []
 seen = set()
 
-#
-# Frequency candidates.
-#
-
 with open(
     frequency_file,
     encoding="utf-8"
@@ -627,12 +585,6 @@ with open(
 
 
 frequency_count = len(rows)
-
-#
-# Additional candidates.
-#
-# They receive ranks after the frequency source.
-#
 
 next_rank = (
     max(
@@ -940,7 +892,6 @@ for rank, word in rows:
                 )
             )
 
-
     delete_cost = sum(
         cost
         for _, _, cost in mappings
@@ -950,12 +901,6 @@ for rank, word in rows:
         dictionary_cost
         + delete_cost
     )
-
-    #
-    # If the full correction index would exceed the budget,
-    # still allow the word itself when its dictionary entry
-    # fits.
-    #
 
     if (
         dictionary_bytes
@@ -983,7 +928,6 @@ for rank, word in rows:
             )
 
         continue
-
 
     selected.append(
         (
@@ -1047,6 +991,17 @@ with open(
         )
 
 
+long_words = sum(
+    1
+    for _, word in selected
+    if len(word) >= 10
+)
+
+estimated_total = (
+    dictionary_bytes
+    + delete_bytes
+)
+
 print(
     f"Selected words: {len(selected)}"
 )
@@ -1060,16 +1015,11 @@ print(
 )
 
 print(
-    f"Estimated total: "
-    f"{dictionary_bytes + delete_bytes}"
+    f"Estimated total: {estimated_total}"
 )
 
 print(
-    f"Words >= 10 chars: "
-    f"{sum("
-    f"1 for _, w in selected "
-    f"if len(w) >= 10"
-    f")}"
+    f"Words >= 10 chars: {long_words}"
 )
 
 for word in [
