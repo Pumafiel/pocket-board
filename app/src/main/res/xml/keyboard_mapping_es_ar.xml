@@ -55,7 +55,7 @@
 
     <!-- P -->
     <Key code="44" value="p" shiftValue="P">
-        <Alt value=";" />
+        <Alt value=":" />
     </Key>
 
 
