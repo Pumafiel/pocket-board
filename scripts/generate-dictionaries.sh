@@ -45,9 +45,7 @@ SOURCE_MAX_ENTRIES=500000
 TOP_DISTANCE2_WORDS=15000
 
 MAX_DELETE_DISTANCE=2
-
 MAX_DELETE_WORD_LENGTH=24
-
 MAX_CANDIDATES_PER_DELETE=3
 
 # ============================================================
@@ -75,6 +73,28 @@ require_command cut
 require_command python3
 require_command tar
 require_command find
+
+# Hunspell is used only during dictionary generation.
+#
+# GitHub-hosted Ubuntu runners normally have sudo available.
+# Install it automatically if necessary so the workflow does
+# not require another manual change.
+if ! command -v hunspell >/dev/null 2>&1; then
+    echo ""
+    echo "============================================================"
+    echo " Installing Hunspell"
+    echo "============================================================"
+
+    if command -v sudo >/dev/null 2>&1; then
+        sudo apt-get update
+        sudo apt-get install -y hunspell
+    else
+        echo "ERROR: hunspell is not installed and sudo is unavailable."
+        exit 1
+    fi
+fi
+
+require_command hunspell
 
 # ============================================================
 # DOWNLOAD
@@ -377,7 +397,7 @@ print(
 PY
 
     if [[ ! -s "${output}" ]]; then
-        echo "ERROR: Leipzig frequency list is empty:"
+        echo "ERROR: normalized Leipzig frequency list is empty:"
         echo "  ${input}"
         exit 1
     fi
@@ -498,6 +518,141 @@ extract_hunspell_base_words \
     "${DE_DIR}/hunspell.base"
 
 # ============================================================
+# VALIDATE WORDS WITH HUNSPELL
+# ============================================================
+
+validate_with_hunspell() {
+    local language="$1"
+    local dic="$2"
+    local input="$3"
+    local output="$4"
+
+    local dictionary_base
+    dictionary_base="${dic%.dic}"
+
+    echo ""
+    echo "============================================================"
+    echo " Validating vocabulary with Hunspell: ${language}"
+    echo "============================================================"
+
+    python3 - \
+        "${dictionary_base}" \
+        "${input}" \
+        "${output}" <<'PY'
+import sys
+import subprocess
+import unicodedata
+
+dictionary_base = sys.argv[1]
+input_file = sys.argv[2]
+output_file = sys.argv[3]
+
+words = []
+
+with open(
+    input_file,
+    encoding="utf-8",
+    errors="replace"
+) as f:
+
+    for raw in f:
+        word = unicodedata.normalize(
+            "NFC",
+            raw.strip().lower()
+        )
+
+        if word:
+            words.append(word)
+
+if not words:
+    raise SystemExit(
+        "ERROR: no words to validate"
+    )
+
+process = subprocess.Popen(
+    [
+        "hunspell",
+        "-a",
+        "-d",
+        dictionary_base
+    ],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    encoding="utf-8",
+    errors="replace"
+)
+
+stdout, stderr = process.communicate(
+    "\n".join(words) + "\n"
+)
+
+if process.returncode not in (0, 1):
+    print(stderr, file=sys.stderr)
+
+    raise SystemExit(
+        f"ERROR: Hunspell failed with exit code "
+        f"{process.returncode}"
+    )
+
+accepted = set()
+
+for line in stdout.splitlines():
+
+    line = line.strip()
+
+    if not line:
+        continue
+
+    if not line.startswith("* "):
+        continue
+
+    word = line[2:].strip()
+
+    word = unicodedata.normalize(
+        "NFC",
+        word.lower()
+    )
+
+    if word:
+        accepted.add(word)
+
+with open(
+    output_file,
+    "w",
+    encoding="utf-8"
+) as out:
+
+    for word in words:
+
+        if word in accepted:
+            out.write(word + "\n")
+
+print(
+    f"Input candidates: {len(words)}"
+)
+
+print(
+    f"Hunspell accepted: {len(accepted)}"
+)
+
+print(
+    f"Rejected: {len(words) - len(accepted)}"
+)
+PY
+
+    if [[ ! -s "${output}" ]]; then
+        echo ""
+        echo "ERROR: Hunspell rejected the entire vocabulary."
+        echo "  Language: ${language}"
+        exit 1
+    fi
+
+    echo "Validated words: $(wc -l < "${output}")"
+}
+
+# ============================================================
 # BUILD CANDIDATE VOCABULARY
 # ============================================================
 
@@ -506,15 +661,40 @@ build_candidates() {
     local frequency="$2"
     local hunspell="$3"
     local output="$4"
+    local dic="$5"
+
+    local frequency_validated
+    local hunspell_validated
+
+    frequency_validated="${WORK_DIR}/${language}.frequency.validated"
+    hunspell_validated="${WORK_DIR}/${language}.hunspell.validated"
 
     echo ""
     echo "============================================================"
     echo " Building vocabulary: ${language}"
     echo "============================================================"
 
-    python3 - \
+    # FrequencyWords is validated first.
+    #
+    # Frequency controls priority.
+    # Hunspell controls linguistic validity.
+    validate_with_hunspell \
+        "${language}" \
+        "${dic}" \
         "${frequency}" \
+        "${frequency_validated}"
+
+    # Hunspell base vocabulary is also validated before being
+    # used as fallback.
+    validate_with_hunspell \
+        "${language}" \
+        "${dic}" \
         "${hunspell}" \
+        "${hunspell_validated}"
+
+    python3 - \
+        "${frequency_validated}" \
+        "${hunspell_validated}" \
         "${output}" <<'PY'
 import sys
 import unicodedata
@@ -554,7 +734,7 @@ def valid_word(word):
 seen = set()
 result = []
 
-# Frequency-ranked vocabulary first.
+# Frequency-ranked words first.
 with open(
     frequency_file,
     encoding="utf-8"
@@ -573,7 +753,7 @@ with open(
         seen.add(word)
         result.append(word)
 
-# Hunspell base vocabulary as fallback.
+# Hunspell fallback vocabulary.
 with open(
     hunspell_file,
     encoding="utf-8"
@@ -592,7 +772,6 @@ with open(
         seen.add(word)
         result.append(word)
 
-
 with open(
     output_file,
     "w",
@@ -603,36 +782,39 @@ with open(
         out.write(word + "\n")
 
 print(
-    f"Vocabulary candidates: {len(result)}"
+    f"Final validated vocabulary: {len(result)}"
 )
 PY
 
     if [[ ! -s "${output}" ]]; then
-        echo "ERROR: candidate vocabulary is empty:"
+        echo "ERROR: validated vocabulary is empty:"
         echo "  ${language}"
         exit 1
     fi
 
-    echo "Candidates: $(wc -l < "${output}")"
+    echo "Final candidates: $(wc -l < "${output}")"
 }
 
 build_candidates \
     "es-AR" \
     "${ES_DIR}/frequency.normalized" \
     "${ES_DIR}/hunspell.base" \
-    "${ES_DIR}/candidates.txt"
+    "${ES_DIR}/candidates.txt" \
+    "${ES_DIR}/index.dic"
 
 build_candidates \
     "en-en" \
     "${EN_DIR}/frequency.normalized" \
     "${EN_DIR}/hunspell.base" \
-    "${EN_DIR}/candidates.txt"
+    "${EN_DIR}/candidates.txt" \
+    "${EN_DIR}/index.dic"
 
 build_candidates \
     "de-de" \
     "${DE_DIR}/frequency.normalized" \
     "${DE_DIR}/hunspell.base" \
-    "${DE_DIR}/candidates.txt"
+    "${DE_DIR}/candidates.txt" \
+    "${DE_DIR}/index.dic"
 
 # ============================================================
 # WRITE DICTIONARIES
@@ -677,10 +859,10 @@ write_dictionary \
     "de-de" \
     "${DE_DIR}/candidates.txt" \
     "${OUTPUT_DIR}/de-de.dict"
-
 # ============================================================
 # DELETE INDEX
 # ============================================================
+
 generate_delete_index() {
     local language="$1"
     local dictionary="$2"
@@ -709,6 +891,11 @@ generate_delete_index() {
     echo " Max candidates/delete: ${MAX_CANDIDATES_PER_DELETE}"
     echo "============================================================"
 
+    # IMPORTANT:
+    # The delete index is generated ONLY from the final .dict.
+    #
+    # Therefore every target word inside .deletes is guaranteed
+    # to have survived Hunspell validation.
     tail -n +2 "${dictionary}" > "${words_file}"
 
     header_bytes=$(
@@ -758,14 +945,20 @@ def generate_deletes(word, distance):
     current_level = {word}
 
     for _ in range(distance):
+
         next_level = set()
 
         for current in current_level:
+
             if not current:
                 continue
 
             for i in range(len(current)):
-                candidate = current[:i] + current[i + 1:]
+
+                candidate = (
+                    current[:i] +
+                    current[i + 1:]
+                )
 
                 if candidate:
                     result.add(candidate)
@@ -776,11 +969,6 @@ def generate_deletes(word, distance):
     return result
 
 
-# The vocabulary is already ordered by frequency:
-# frequency source first, Hunspell fallback second.
-#
-# Keep the rank explicitly so the delete index can always
-# prefer frequent words.
 words = []
 
 with open(
@@ -789,6 +977,7 @@ with open(
 ) as f:
 
     for rank, raw in enumerate(f):
+
         word = raw.strip()
 
         if not word:
@@ -812,12 +1001,7 @@ with open(
         )
 
 
-# ------------------------------------------------------------
-# Build delete buckets.
-#
-# delete -> [(frequency_rank, word)]
-# ------------------------------------------------------------
-
+# delete -> [(frequency rank, valid dictionary word)]
 buckets = {}
 
 for rank, word, distance in words:
@@ -840,10 +1024,8 @@ for rank, word, distance in words:
         )
 
 
-# ------------------------------------------------------------
-# Keep only the most frequent candidates per delete.
-# ------------------------------------------------------------
-
+# Keep only the highest-frequency valid words for
+# every delete key.
 for delete, bucket in buckets.items():
 
     bucket.sort(
@@ -873,13 +1055,8 @@ for delete, bucket in buckets.items():
     buckets[delete] = unique
 
 
-# ------------------------------------------------------------
-# Flatten candidates.
-#
-# Frequency rank is retained so the byte budget is spent
-# preferentially on frequent words.
-# ------------------------------------------------------------
-
+# Flatten the candidates so the byte budget is spent first
+# on frequent valid words.
 candidates = []
 
 for delete, bucket in buckets.items():
@@ -909,10 +1086,6 @@ candidates.sort(
     )
 )
 
-
-# ------------------------------------------------------------
-# Apply byte budget.
-# ------------------------------------------------------------
 
 selected = []
 used_bytes = 0
@@ -1020,11 +1193,6 @@ PY
     echo "  Budget status:   OK"
 }
 
-
-# ============================================================
-# GENERATE DELETE INDEXES
-# ============================================================
-
 generate_delete_index \
     "es-AR" \
     "${OUTPUT_DIR}/es-AR.dict" \
@@ -1042,7 +1210,6 @@ generate_delete_index \
     "${OUTPUT_DIR}/de-de.dict" \
     "${OUTPUT_DIR}/de-de.deletes" \
     "${DE_DELETE_BUDGET}"
-
 
 # ============================================================
 # METADATA
@@ -1093,7 +1260,6 @@ generate_metadata() {
     fi
 }
 
-
 generate_metadata \
     "es-AR" \
     "${ES_DIR}/index.aff" \
@@ -1108,7 +1274,6 @@ generate_metadata \
     "de-de" \
     "${DE_DIR}/index.aff" \
     "${OUTPUT_DIR}/de-de.meta"
-
 
 # ============================================================
 # DIAGNOSTICS
@@ -1132,6 +1297,23 @@ check_word() {
     fi
 }
 
+check_rejected_word() {
+    local language="$1"
+    local word="$2"
+    local dictionary="${OUTPUT_DIR}/${language}.dict"
+
+    if grep \
+        -Fqx \
+        "${word}" \
+        <(tail -n +2 "${dictionary}")
+    then
+        echo "WARNING: unexpected word accepted"
+        echo "  Language: ${language}"
+        echo "  Word:     ${word}"
+    else
+        echo "OK: rejected invalid word: ${language}: ${word}"
+    fi
+}
 
 echo ""
 echo "============================================================"
@@ -1156,6 +1338,13 @@ check_word "de-de" "entschuldigung"
 check_word "de-de" "wahrscheinlich"
 check_word "de-de" "möglicherweise"
 
+echo ""
+echo "Checking known invalid forms:"
+echo ""
+
+check_rejected_word "es-AR" "manana"
+check_rejected_word "es-AR" "mananas"
+check_rejected_word "en-en" "helo"
 
 # ============================================================
 # VALIDATION
@@ -1187,7 +1376,6 @@ validate_generated_asset() {
     fi
 }
 
-
 echo ""
 echo "============================================================"
 echo " Validating generated assets"
@@ -1213,7 +1401,6 @@ do
 
     echo "OK: ${language}"
 done
-
 
 # ============================================================
 # FINAL SIZE REPORT
