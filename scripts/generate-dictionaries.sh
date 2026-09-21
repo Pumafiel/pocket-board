@@ -30,11 +30,12 @@ mkdir -p "${OUTPUT_DIR}"
 # TARGETS
 # ============================================================
 
-# The dictionary itself is not artificially capped.
-# We want useful vocabulary first and will measure the final APK.
+# Runtime dictionaries are not artificially capped.
 #
-# Delete indexes are explicitly budgeted because they grow much
-# faster than the dictionary and are the expensive part.
+# We want as much useful vocabulary as possible.
+# The APK build will tell us the real compressed size.
+#
+# Delete indexes ARE budgeted because they grow very quickly.
 
 ES_DELETE_BUDGET=2500000
 EN_DELETE_BUDGET=2500000
@@ -42,7 +43,8 @@ DE_DELETE_BUDGET=2500000
 
 GLOBAL_DELETE_BUDGET=7500000
 
-# Number of entries considered from the frequency corpora.
+# Maximum number of entries read from each frequency source.
+#
 # This is NOT the final dictionary size.
 SOURCE_MAX_ENTRIES=500000
 
@@ -50,16 +52,16 @@ SOURCE_MAX_ENTRIES=500000
 # DELETE POLICY
 # ============================================================
 
-# The most frequent words get edit-distance 2 deletes.
+# Most frequent words receive edit-distance 2 deletes.
 TOP_DISTANCE2_WORDS=15000
 
 MAX_DELETE_DISTANCE=2
 
-# This limits only the delete index.
-# Long words can still remain in the dictionary.
+# Only the delete index is limited by word length.
+# Long words can still remain in .dict.
 MAX_DELETE_WORD_LENGTH=24
 
-# Prevent one delete key from exploding into many candidates.
+# Prevent a single delete key from exploding.
 MAX_CANDIDATES_PER_DELETE=3
 
 # ============================================================
@@ -87,7 +89,15 @@ require_command cut
 require_command python3
 require_command tar
 require_command find
-require_command unmunch
+
+# We keep unmunch available for environments where it exists,
+# but the runtime dictionary generation below intentionally does
+# NOT expand the complete Hunspell dictionary with unmunch.
+if command -v unmunch >/dev/null 2>&1; then
+    echo "unmunch: available"
+else
+    echo "unmunch: not required for this dictionary build"
+fi
 
 # ============================================================
 # DOWNLOAD
@@ -203,7 +213,13 @@ LEIPZIG_WORDS_FILE="$(
 
 if [[ -z "${LEIPZIG_WORDS_FILE}" ]]; then
     echo "ERROR: Leipzig word-frequency file not found."
-    find "${LEIPZIG_DIR}" -maxdepth 4 -type f -print
+
+    find \
+        "${LEIPZIG_DIR}" \
+        -maxdepth 4 \
+        -type f \
+        -print
+
     exit 1
 fi
 
@@ -280,7 +296,9 @@ with open(
         if count >= maximum_entries:
             break
 
-print(f"Normalized frequency entries: {count}")
+print(
+    f"Normalized frequency entries: {count}"
+)
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -335,10 +353,6 @@ with open(
         if not parts:
             continue
 
-        # Leipzig word files normally contain:
-        # rank / frequency / word
-        #
-        # We find the first non-numeric token.
         word = None
 
         for part in parts:
@@ -405,22 +419,19 @@ normalize_frequency_leipzig \
     "${DE_DIR}/frequency.normalized"
 
 # ============================================================
-# HUNSPELL BASE WORDS
+# EXTRACT HUNSPELL BASE WORDS
 # ============================================================
 #
-# We deliberately DO NOT expand the complete Hunspell dictionary
-# with unmunch into the runtime dictionary.
+# We intentionally do NOT use the full unmunch expansion here.
 #
-# The full expansion can be enormous.
+# The complete expansion can become enormous.
 #
 # Instead:
 #
-#   frequency source = vocabulary priority
-#   Hunspell base list = validity/fallback vocabulary
+#   frequency corpus -> useful/common vocabulary
+#   Hunspell .dic    -> additional vocabulary fallback
 #
-# This keeps the build practical while still allowing the
-# frequency corpus to select useful forms such as accented
-# words and common conjugations.
+# This keeps generation and APK size under control.
 # ============================================================
 
 extract_hunspell_base_words() {
@@ -463,13 +474,18 @@ with open(
         if not line:
             continue
 
-        # First line is usually the entry count.
+        # First line is normally the entry count.
         if first:
             first = False
+
             if line.isdigit():
                 continue
 
-        # Remove comments.
+        # Hunspell entries can have flags:
+        #
+        #   palabra/ABC
+        #
+        # Keep only the base word.
         if "/" in line:
             word = line.split("/", 1)[0]
         else:
@@ -493,7 +509,9 @@ with open(
         out.write(word + "\n")
         count += 1
 
-print(f"Hunspell base words: {count}")
+print(
+    f"Hunspell base words: {count}"
+)
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -526,19 +544,22 @@ extract_hunspell_base_words \
 #
 # Priority:
 #
-#   1. Frequency-ranked words that are known by Hunspell.
-#   2. Remaining frequency words.
-#   3. Remaining Hunspell base words.
+#   1. Frequency words.
+#   2. Remaining Hunspell base words.
 #
 # No manual whitelist.
 #
 # IMPORTANT:
-# We do not require every frequency word to exist literally
-# in the Hunspell .dic because Hunspell may represent valid
-# forms through affix rules.
+# We do not require frequency words to literally exist in the
+# Hunspell base dictionary.
 #
-# Therefore frequency words are accepted as long as they look
-# like valid Unicode words.
+# This is important for forms such as:
+#
+#   podés
+#   tenés
+#   hacés
+#
+# and similar inflected/variant forms found in real usage data.
 # ============================================================
 
 build_candidates() {
@@ -576,29 +597,18 @@ def valid_word(word):
     has_letter = False
 
     for char in word:
+
         if char.isalpha():
             has_letter = True
             continue
 
+        # Apostrophes and hyphens are useful in natural language.
         if char in "'’'-":
             continue
 
         return False
 
     return has_letter
-
-hunspell_words = set()
-
-with open(
-    hunspell_file,
-    encoding="utf-8"
-) as f:
-
-    for raw in f:
-        word = normalize(raw)
-
-        if valid_word(word):
-            hunspell_words.add(word)
 
 seen = set()
 result = []
@@ -613,6 +623,7 @@ with open(
 ) as f:
 
     for raw in f:
+
         word = normalize(raw)
 
         if not valid_word(word):
@@ -634,6 +645,7 @@ with open(
 ) as f:
 
     for raw in f:
+
         word = normalize(raw)
 
         if not valid_word(word):
@@ -654,8 +666,9 @@ with open(
     for word in result:
         out.write(word + "\n")
 
-print(f"Vocabulary candidates: {len(result)}")
-print(f"Hunspell base vocabulary: {len(hunspell_words)}")
+print(
+    f"Vocabulary candidates: {len(result)}"
+)
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -730,7 +743,7 @@ write_dictionary \
     "${OUTPUT_DIR}/de-de.dict"
 
 # ============================================================
-# DELETE INDEX
+# GENERATE DELETE INDEX
 # ============================================================
 
 generate_delete_index() {
@@ -741,6 +754,8 @@ generate_delete_index() {
 
     local words_file
     local pairs_file
+    local header_bytes
+    local mapping_budget
 
     words_file="${WORK_DIR}/${language}.delete.words"
     pairs_file="${WORK_DIR}/${language}.delete.pairs"
@@ -761,10 +776,42 @@ generate_delete_index() {
 
     tail -n +2 "${dictionary}" > "${words_file}"
 
+    # --------------------------------------------------------
+    # IMPORTANT
+    #
+    # The budget belongs to the COMPLETE .deletes file.
+    #
+    # Therefore subtract the actual header size before asking
+    # Python to generate mappings.
+    # --------------------------------------------------------
+
+    header_bytes=$(
+        printf \
+            "#POCKETBOARD-DELETES-1\n#MAX_DISTANCE=%s\n#MAX_WORD_LENGTH=%s\n#MAX_CANDIDATES=%s\n" \
+            "${MAX_DELETE_DISTANCE}" \
+            "${MAX_DELETE_WORD_LENGTH}" \
+            "${MAX_CANDIDATES_PER_DELETE}" |
+        wc -c
+    )
+
+    mapping_budget=$(
+        (
+            budget - header_bytes
+        )
+    )
+
+    if (( mapping_budget <= 0 )); then
+        echo "ERROR: delete budget is smaller than the header."
+        exit 1
+    fi
+
+    echo "Header bytes:   ${header_bytes}"
+    echo "Mapping budget: ${mapping_budget}"
+
     python3 - \
         "${words_file}" \
         "${pairs_file}" \
-        "${budget}" \
+        "${mapping_budget}" \
         "${TOP_DISTANCE2_WORDS}" \
         "${MAX_DELETE_DISTANCE}" \
         "${MAX_DELETE_WORD_LENGTH}" \
@@ -788,6 +835,7 @@ def generate_deletes(word, distance):
     current_level = {word}
 
     for _ in range(distance):
+
         next_level = set()
 
         for current in current_level:
@@ -796,6 +844,7 @@ def generate_deletes(word, distance):
                 continue
 
             for i in range(len(current)):
+
                 candidate = (
                     current[:i] +
                     current[i + 1:]
@@ -817,6 +866,7 @@ with open(
 ) as f:
 
     for raw in f:
+
         word = raw.strip()
 
         if word:
@@ -824,21 +874,13 @@ with open(
 
 buckets = {}
 
-header = (
-    "#POCKETBOARD-DELETES-1\n"
-    f"#MAX_DISTANCE={max_distance}\n"
-    f"#MAX_WORD_LENGTH={max_word_length}\n"
-    f"#MAX_CANDIDATES={max_candidates}\n"
-)
-
-used_bytes = len(
-    header.encode("utf-8")
-)
-
+used_bytes = 0
 accepted_mappings = 0
 
 for rank, word in enumerate(words):
 
+    # Long words remain in the dictionary but do not get
+    # expensive delete-index expansion.
     if len(word) > max_word_length:
         continue
 
@@ -872,6 +914,7 @@ for rank, word in enumerate(words):
             .encode("utf-8")
         )
 
+        # Never exceed the mapping budget.
         if used_bytes + len(line) > budget:
             continue
 
@@ -886,8 +929,6 @@ with open(
     encoding="utf-8"
 ) as out:
 
-    out.write(header)
-
     for delete in sorted(buckets):
 
         for word in buckets[delete]:
@@ -897,33 +938,69 @@ with open(
             out.write(word)
             out.write("\n")
 
-print(f"Delete keys: {len(buckets)}")
-print(f"Mappings: {accepted_mappings}")
-print(f"Bytes: {used_bytes}")
+print(
+    f"Delete keys: {len(buckets)}"
+)
+
+print(
+    f"Mappings: {accepted_mappings}"
+)
+
+print(
+    f"Mapping bytes: {used_bytes}"
+)
 PY
 
     if [[ ! -s "${pairs_file}" ]]; then
-        echo "ERROR: optimized delete index produced no mappings:"
+        echo "ERROR: delete index produced no mappings:"
         echo "  ${language}"
         exit 1
     fi
 
+    # --------------------------------------------------------
+    # Build the final file using the SAME header whose size
+    # was subtracted from the budget above.
+    # --------------------------------------------------------
+
     {
-        echo "#POCKETBOARD-DELETES-1"
-        echo "#MAX_DISTANCE=${MAX_DELETE_DISTANCE}"
-        echo "#MAX_WORD_LENGTH=${MAX_DELETE_WORD_LENGTH}"
-        echo "#MAX_CANDIDATES=${MAX_CANDIDATES_PER_DELETE}"
+        printf \
+            "#POCKETBOARD-DELETES-1\n"
+        printf \
+            "#MAX_DISTANCE=%s\n" \
+            "${MAX_DELETE_DISTANCE}"
+        printf \
+            "#MAX_WORD_LENGTH=%s\n" \
+            "${MAX_DELETE_WORD_LENGTH}"
+        printf \
+            "#MAX_CANDIDATES=%s\n" \
+            "${MAX_CANDIDATES_PER_DELETE}"
         cat "${pairs_file}"
     } > "${output}"
 
     local size
     size="$(wc -c < "${output}")"
 
+    local mappings
+    mappings="$(
+        tail -n +5 "${output}" |
+        wc -l
+    )"
+
+    local keys
+    keys="$(
+        tail -n +5 "${output}" |
+        cut -f1 |
+        uniq |
+        wc -l
+    )"
+
     echo ""
     echo "${language}:"
-    echo "  Delete mappings: $(tail -n +5 "${output}" | wc -l)"
-    echo "  Delete bytes:    ${size}"
+    echo "  Delete keys:    ${keys}"
+    echo "  Delete mappings:${mappings}"
+    echo "  Delete bytes:   ${size}"
 
+    # Final safety check.
     if (( size > budget )); then
         echo ""
         echo "ERROR: delete index exceeded budget."
@@ -932,6 +1009,8 @@ PY
         echo "  Budget:   ${budget}"
         exit 1
     fi
+
+    echo "  Budget status:  OK"
 }
 
 generate_delete_index \
@@ -1017,7 +1096,7 @@ generate_metadata \
     "${OUTPUT_DIR}/de-de.meta"
 
 # ============================================================
-# DIAGNOSTICS
+# WORD DIAGNOSTICS
 # ============================================================
 
 check_word() {
@@ -1034,7 +1113,7 @@ check_word() {
     else
         echo "WARNING: word not selected"
         echo "  Language: ${language}"
-        echo "  Word: ${word}"
+        echo "  Word:     ${word}"
     fi
 }
 
@@ -1086,7 +1165,7 @@ validate_generated_asset() {
         echo "ERROR: invalid generated asset header:"
         echo "  ${file}"
         echo "Expected: ${expected_header}"
-        echo "Found: ${header}"
+        echo "Found:    ${header}"
         exit 1
     fi
 }
@@ -1191,6 +1270,7 @@ do
     echo "  Delete mappings: ${delete_mappings}"
     echo "  Metadata:        ${metadata_size} bytes"
     echo "  Total:           $((dictionary_size + delete_size + metadata_size)) bytes"
+
 done
 
 TOTAL_GENERATED_BYTES=$(
