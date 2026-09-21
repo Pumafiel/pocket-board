@@ -36,7 +36,6 @@ DE_DELETE_BUDGET=2500000
 
 GLOBAL_DELETE_BUDGET=7500000
 
-# Maximum entries read from frequency sources.
 SOURCE_MAX_ENTRIES=500000
 
 # ============================================================
@@ -378,7 +377,7 @@ print(
 PY
 
     if [[ ! -s "${output}" ]]; then
-        echo "ERROR: normalized Leipzig frequency list is empty:"
+        echo "ERROR: Leipzig frequency list is empty:"
         echo "  ${input}"
         exit 1
     fi
@@ -524,11 +523,13 @@ frequency_file = sys.argv[1]
 hunspell_file = sys.argv[2]
 output_file = sys.argv[3]
 
+
 def normalize(word):
     return unicodedata.normalize(
         "NFC",
         word.strip().lower()
     )
+
 
 def valid_word(word):
     if not word:
@@ -548,6 +549,7 @@ def valid_word(word):
         return False
 
     return has_letter
+
 
 seen = set()
 result = []
@@ -589,6 +591,7 @@ with open(
 
         seen.add(word)
         result.append(word)
+
 
 with open(
     output_file,
@@ -678,7 +681,6 @@ write_dictionary \
 # ============================================================
 # DELETE INDEX
 # ============================================================
-
 generate_delete_index() {
     local language="$1"
     local dictionary="$2"
@@ -709,8 +711,6 @@ generate_delete_index() {
 
     tail -n +2 "${dictionary}" > "${words_file}"
 
-    # Calculate the exact number of bytes occupied by the
-    # final header.
     header_bytes=$(
         printf \
             "#POCKETBOARD-DELETES-1\n#MAX_DISTANCE=%s\n#MAX_WORD_LENGTH=%s\n#MAX_CANDIDATES=%s\n" \
@@ -720,9 +720,6 @@ generate_delete_index() {
         wc -c
     )
 
-    # IMPORTANT:
-    # Keep this as a simple arithmetic expansion.
-    # Do not use command substitution here.
     mapping_budget=$((budget - header_bytes))
 
     if (( mapping_budget <= 0 )); then
@@ -751,6 +748,7 @@ max_distance = int(sys.argv[5])
 max_word_length = int(sys.argv[6])
 max_candidates = int(sys.argv[7])
 
+
 def generate_deletes(word, distance):
     result = set()
 
@@ -760,20 +758,14 @@ def generate_deletes(word, distance):
     current_level = {word}
 
     for _ in range(distance):
-
         next_level = set()
 
         for current in current_level:
-
             if not current:
                 continue
 
             for i in range(len(current)):
-
-                candidate = (
-                    current[:i] +
-                    current[i + 1:]
-                )
+                candidate = current[:i] + current[i + 1:]
 
                 if candidate:
                     result.add(candidate)
@@ -783,6 +775,12 @@ def generate_deletes(word, distance):
 
     return result
 
+
+# The vocabulary is already ordered by frequency:
+# frequency source first, Hunspell fallback second.
+#
+# Keep the rank explicitly so the delete index can always
+# prefer frequent words.
 words = []
 
 with open(
@@ -790,82 +788,179 @@ with open(
     encoding="utf-8"
 ) as f:
 
-    for raw in f:
-
+    for rank, raw in enumerate(f):
         word = raw.strip()
 
-        if word:
-            words.append(word)
+        if not word:
+            continue
+
+        if len(word) > max_word_length:
+            continue
+
+        distance = (
+            2
+            if rank < top_distance2_words
+            else 1
+        )
+
+        words.append(
+            (
+                rank,
+                word,
+                distance
+            )
+        )
+
+
+# ------------------------------------------------------------
+# Build delete buckets.
+#
+# delete -> [(frequency_rank, word)]
+# ------------------------------------------------------------
 
 buckets = {}
 
-used_bytes = 0
-accepted_mappings = 0
+for rank, word, distance in words:
 
-for rank, word in enumerate(words):
-
-    if len(word) > max_word_length:
-        continue
-
-    distance = (
-        2
-        if rank < top_distance2_words
-        else 1
-    )
-
-    generated = generate_deletes(
+    for delete in generate_deletes(
         word,
         distance
+    ):
+
+        bucket = buckets.setdefault(
+            delete,
+            []
+        )
+
+        bucket.append(
+            (
+                rank,
+                word
+            )
+        )
+
+
+# ------------------------------------------------------------
+# Keep only the most frequent candidates per delete.
+# ------------------------------------------------------------
+
+for delete, bucket in buckets.items():
+
+    bucket.sort(
+        key=lambda item: item[0]
     )
 
-    for delete in generated:
+    unique = []
+    seen_words = set()
 
-        bucket = buckets.get(delete)
+    for rank, word in bucket:
 
-        if bucket is None:
-            bucket = []
-            buckets[delete] = bucket
-
-        if word in bucket:
+        if word in seen_words:
             continue
 
-        if len(bucket) >= max_candidates:
-            continue
+        seen_words.add(word)
+
+        unique.append(
+            (
+                rank,
+                word
+            )
+        )
+
+        if len(unique) >= max_candidates:
+            break
+
+    buckets[delete] = unique
+
+
+# ------------------------------------------------------------
+# Flatten candidates.
+#
+# Frequency rank is retained so the byte budget is spent
+# preferentially on frequent words.
+# ------------------------------------------------------------
+
+candidates = []
+
+for delete, bucket in buckets.items():
+
+    for rank, word in bucket:
 
         line = (
             f"{delete}\t{word}\n"
             .encode("utf-8")
         )
 
-        if used_bytes + len(line) > budget:
-            continue
+        candidates.append(
+            (
+                rank,
+                delete,
+                word,
+                line
+            )
+        )
 
-        bucket.append(word)
 
-        used_bytes += len(line)
-        accepted_mappings += 1
+candidates.sort(
+    key=lambda item: (
+        item[0],
+        item[1],
+        item[2]
+    )
+)
+
+
+# ------------------------------------------------------------
+# Apply byte budget.
+# ------------------------------------------------------------
+
+selected = []
+used_bytes = 0
+
+for rank, delete, word, line in candidates:
+
+    if used_bytes + len(line) > budget:
+        continue
+
+    selected.append(
+        (
+            delete,
+            word,
+            line
+        )
+    )
+
+    used_bytes += len(line)
+
+
+# Runtime lookup expects sorted delete keys.
+selected.sort(
+    key=lambda item: (
+        item[0],
+        item[1]
+    )
+)
+
 
 with open(
     output_file,
-    "w",
-    encoding="utf-8"
+    "wb"
 ) as out:
 
-    for delete in sorted(buckets):
+    for delete, word, line in selected:
+        out.write(line)
 
-        for word in buckets[delete]:
-
-            out.write(delete)
-            out.write("\t")
-            out.write(word)
-            out.write("\n")
 
 print(
-    f"Delete keys: {len(buckets)}"
+    f"Delete keys before budget: {len(buckets)}"
 )
 
 print(
-    f"Mappings: {accepted_mappings}"
+    f"Candidate mappings: {len(candidates)}"
+)
+
+print(
+    f"Selected mappings: {len(selected)}"
 )
 
 print(
@@ -879,8 +974,6 @@ PY
         exit 1
     fi
 
-    # Write exactly the same header whose size was subtracted
-    # from the budget above.
     {
         printf "#POCKETBOARD-DELETES-1\n"
         printf "#MAX_DISTANCE=%s\n" \
@@ -927,6 +1020,11 @@ PY
     echo "  Budget status:   OK"
 }
 
+
+# ============================================================
+# GENERATE DELETE INDEXES
+# ============================================================
+
 generate_delete_index \
     "es-AR" \
     "${OUTPUT_DIR}/es-AR.dict" \
@@ -944,6 +1042,7 @@ generate_delete_index \
     "${OUTPUT_DIR}/de-de.dict" \
     "${OUTPUT_DIR}/de-de.deletes" \
     "${DE_DELETE_BUDGET}"
+
 
 # ============================================================
 # METADATA
@@ -994,6 +1093,7 @@ generate_metadata() {
     fi
 }
 
+
 generate_metadata \
     "es-AR" \
     "${ES_DIR}/index.aff" \
@@ -1008,6 +1108,7 @@ generate_metadata \
     "de-de" \
     "${DE_DIR}/index.aff" \
     "${OUTPUT_DIR}/de-de.meta"
+
 
 # ============================================================
 # DIAGNOSTICS
@@ -1031,6 +1132,7 @@ check_word() {
     fi
 }
 
+
 echo ""
 echo "============================================================"
 echo " Word diagnostics"
@@ -1053,6 +1155,7 @@ check_word "de-de" "morgen"
 check_word "de-de" "entschuldigung"
 check_word "de-de" "wahrscheinlich"
 check_word "de-de" "möglicherweise"
+
 
 # ============================================================
 # VALIDATION
@@ -1084,6 +1187,7 @@ validate_generated_asset() {
     fi
 }
 
+
 echo ""
 echo "============================================================"
 echo " Validating generated assets"
@@ -1110,6 +1214,7 @@ do
     echo "OK: ${language}"
 done
 
+
 # ============================================================
 # FINAL SIZE REPORT
 # ============================================================
@@ -1129,18 +1234,35 @@ for language in es-AR en-en de-de; do
     deletes="${OUTPUT_DIR}/${language}.deletes"
     metadata="${OUTPUT_DIR}/${language}.meta"
 
-    dictionary_size=$(wc -c < "$dictionary")
-    delete_size=$(wc -c < "$deletes")
-    metadata_size=$(wc -c < "$metadata")
+    dictionary_size=$(wc -c < "${dictionary}")
+    delete_size=$(wc -c < "${deletes}")
+    metadata_size=$(wc -c < "${metadata}")
 
-    dictionary_words=$(tail -n +2 "$dictionary" | wc -l)
-    delete_mappings=$(tail -n +5 "$deletes" | wc -l)
+    dictionary_words=$(
+        tail -n +2 "${dictionary}" |
+        wc -l
+    )
 
-    language_total=$((dictionary_size + delete_size + metadata_size))
+    delete_mappings=$(
+        tail -n +5 "${deletes}" |
+        wc -l
+    )
 
-    TOTAL_DICTIONARY_BYTES=$((TOTAL_DICTIONARY_BYTES + dictionary_size))
-    TOTAL_DELETE_BYTES=$((TOTAL_DELETE_BYTES + delete_size))
-    TOTAL_METADATA_BYTES=$((TOTAL_METADATA_BYTES + metadata_size))
+    language_total=$(
+        echo $((dictionary_size + delete_size + metadata_size))
+    )
+
+    TOTAL_DICTIONARY_BYTES=$(
+        echo $((TOTAL_DICTIONARY_BYTES + dictionary_size))
+    )
+
+    TOTAL_DELETE_BYTES=$(
+        echo $((TOTAL_DELETE_BYTES + delete_size))
+    )
+
+    TOTAL_METADATA_BYTES=$(
+        echo $((TOTAL_METADATA_BYTES + metadata_size))
+    )
 
     echo ""
     echo "${language}"
@@ -1150,18 +1272,15 @@ for language in es-AR en-en de-de; do
     echo "  Delete mappings: ${delete_mappings}"
     echo "  Metadata:        ${metadata_size} bytes"
     echo "  Total:           ${language_total} bytes"
-
 done
 
 TOTAL_GENERATED_BYTES=$(
-    ((
-        TOTAL_DICTIONARY_BYTES +
-        TOTAL_DELETE_BYTES +
-        TOTAL_METADATA_BYTES
-    ))
+    echo $((TOTAL_DICTIONARY_BYTES + TOTAL_DELETE_BYTES + TOTAL_METADATA_BYTES))
 )
 
-TOTAL_MIB=$((TOTAL_GENERATED_BYTES / 1024 / 1024))
+TOTAL_MIB=$(
+    echo $((TOTAL_GENERATED_BYTES / 1024 / 1024))
+)
 
 echo ""
 echo "============================================================"
