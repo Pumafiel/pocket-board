@@ -1453,32 +1453,19 @@ for language in es-AR en-en de-de; do
     delete_mappings="$(tail -n +5 "${deletes}" | wc -l)"
 
     language_total=$(
-        (
-            dictionary_size +
-            delete_size +
-            metadata_size
-        )
+        echo $((dictionary_size + delete_size + metadata_size))
     )
 
     TOTAL_DICTIONARY_BYTES=$(
-        (
-            TOTAL_DICTIONARY_BYTES +
-            dictionary_size
-        )
+        echo $((TOTAL_DICTIONARY_BYTES + dictionary_size))
     )
 
     TOTAL_DELETE_BYTES=$(
-        (
-            TOTAL_DELETE_BYTES +
-            delete_size
-        )
+        echo $((TOTAL_DELETE_BYTES + delete_size))
     )
 
     TOTAL_METADATA_BYTES=$(
-        (
-            TOTAL_METADATA_BYTES +
-            metadata_size
-        )
+        echo $((TOTAL_METADATA_BYTES + metadata_size))
     )
 
     echo ""
@@ -1489,22 +1476,21 @@ for language in es-AR en-en de-de; do
     echo "  Delete mappings: ${delete_mappings}"
     echo "  Metadata:        ${metadata_size} bytes"
     echo "  Total:           ${language_total} bytes"
+
 done
 
 TOTAL_GENERATED_BYTES=$(
-    (
-        TOTAL_DICTIONARY_BYTES +
-        TOTAL_DELETE_BYTES +
-        TOTAL_METADATA_BYTES
+    echo $(
+        (
+            TOTAL_DICTIONARY_BYTES +
+            TOTAL_DELETE_BYTES +
+            TOTAL_METADATA_BYTES
+        )
     )
 )
 
 TOTAL_MIB=$(
-    (
-        TOTAL_GENERATED_BYTES /
-        1024 /
-        1024
-    )
+    echo $((TOTAL_GENERATED_BYTES / 1024 / 1024))
 )
 
 echo ""
