@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 
 set -euo pipefail
@@ -25,7 +24,9 @@ set -euo pipefail
 #
 #   .deletes
 #       #POCKETBOARD-DELETES-1
-#       ...
+#       #MAX_DISTANCE=2
+#       #MAX_WORD_LENGTH=24
+#       #MAX_CANDIDATES=3
 #       delete<TAB>validated-target
 #
 # IMPORTANT:
@@ -648,6 +649,7 @@ entries = []
 with open(source, encoding="utf-8", errors="replace") as f:
 
     for raw in f:
+
         line = raw.strip()
 
         if not line:
@@ -703,6 +705,8 @@ PY
         echo "  ${input}"
         exit 1
     fi
+
+    echo "Entries: $(wc -l < "${output}")"
 }
 
 normalize_frequency_frequencywords \
@@ -837,15 +841,22 @@ write_core_words() {
     fi
 }
 
-write_core_words "es-AR" "${ES_DIR}/core.txt"
-write_core_words "en-en" "${EN_DIR}/core.txt"
-write_core_words "de-de" "${DE_DIR}/core.txt"
+write_core_words \
+    "es-AR" \
+    "${ES_DIR}/core.txt"
+
+write_core_words \
+    "en-en" \
+    "${EN_DIR}/core.txt"
+
+write_core_words \
+    "de-de" \
+    "${DE_DIR}/core.txt"
 
 # ============================================================
 # BUILD CANDIDATES
 #
-# FIX:
-# Python receives ALL four input arguments explicitly:
+# Python arguments:
 #
 #   argv[1] = frequency
 #   argv[2] = core
@@ -1199,7 +1210,11 @@ write_dictionary() {
     local word_count
     local byte_count
 
-    word_count="$(tail -n +2 "${output}" | wc -l)"
+    word_count="$(
+        tail -n +2 "${output}" |
+        wc -l
+    )"
+
     byte_count="$(wc -c < "${output}")"
 
     echo "Words: ${word_count}"
@@ -1224,20 +1239,19 @@ write_dictionary \
 # ============================================================
 # DELETE INDEX
 #
-# IMPORTANT:
-# The ONLY source is the already validated .dict.
+# ONLY source:
 #
-# Therefore:
+#   candidates
+#       ↓
+#   Hunspell
+#       ↓
+#   validated.txt
+#       ↓
+#   .dict
+#       ↓
+#   .deletes
 #
-#   candidates -> Hunspell -> validated .dict -> deletes
-#
-# NEVER:
-#
-#   candidates -> deletes
-#
-# and NEVER:
-#
-#   deletes -> candidates/.dict
+# Delete keys are NEVER fed back into candidate generation.
 # ============================================================
 
 generate_delete_index() {
@@ -1305,7 +1319,7 @@ generate_delete_index() {
     echo "  ${mapping_budget}"
 
     # --------------------------------------------------------
-    # FIXED ARGUMENT ORDER
+    # Python arguments:
     #
     # argv[1] words
     # argv[2] output
@@ -1792,13 +1806,13 @@ validate_generated_asset() {
 # ============================================================
 # VALIDATE DICTIONARY TOKENS
 #
-# FIX:
-# The input file is passed as an explicit Python argument.
-# This avoids the broken:
+# The input file is passed explicitly as a Python argument.
+#
+# This avoids the broken construction:
 #
 #   tail ... | python3 - <<'PY'
 #
-# combination, where the heredoc replaces stdin.
+# because the heredoc occupies stdin.
 # ============================================================
 
 validate_dictionary_tokens() {
@@ -2050,67 +2064,13 @@ report_delete_key_overlaps \
 
 # ============================================================
 # VERIFY DELETE FORMAT
+#
+# IMPORTANT:
+# This function intentionally reads the complete .deletes file
+# through an explicit filename argument.
+#
+# No pipe + heredoc combination is used.
 # ============================================================
-
-validate_delete_format() {
-    local language="$1"
-    local deletes="$2"
-    local invalid_file
-
-    invalid_file="${WORK_DIR}/${language}.invalid.delete.format"
-
-    rm -f "${invalid_file}"
-
-    tail -n +5 "${deletes}" |
-        python3 - \
-            > "${invalid_file}" <<'PY'
-import sys
-
-for raw in sys.stdin:
-    line = raw.rstrip("\n\r")
-
-    if not line:
-        continue
-
-    parts = line.split("\t")
-
-    if len(parts) != 2:
-        print(line)
-        continue
-
-    delete, target = parts
-
-    if not delete or not target:
-        print(line)
-        continue
-
-    if not any(char.isalpha() for char in delete):
-        print(line)
-        continue
-
-    if not any(char.isalpha() for char in target):
-        print(line)
-        continue
-PY
-
-    local invalid_count
-    invalid_count="$(wc -l < "${invalid_file}")"
-
-    echo ""
-    echo "Delete format validation: ${language}"
-    echo "  Invalid mappings: ${invalid_count}"
-
-    if (( invalid_count > 0 )); then
-        head -n 50 "${invalid_file}"
-        exit 1
-    fi
-
-    echo "OK: ${language}.deletes format"
-}
-
-# NOTE:
-# Unlike dictionary validation, this Python invocation deliberately
-# reads stdin. There is NO heredoc here.
 
 validate_delete_format() {
     local language="$1"
@@ -2147,6 +2107,9 @@ with open(
         if line.startswith("#"):
             continue
 
+        if not line:
+            continue
+
         parts = line.split("\t")
 
         if len(parts) != 2:
@@ -2177,9 +2140,11 @@ PY
     echo "  Invalid mappings: ${invalid_count}"
 
     if (( invalid_count > 0 )); then
+
         echo ""
         echo "ERROR: invalid delete mappings:"
         head -n 50 "${invalid_file}"
+
         exit 1
     fi
 
@@ -2235,32 +2200,31 @@ do
         wc -l
     )"
 
+    # --------------------------------------------------------
+    # CORRECT BASH ARITHMETIC
+    # --------------------------------------------------------
+
     language_total=$(
         (
-            dictionary_size +
-            delete_size +
-            metadata_size
+            echo $((dictionary_size + delete_size + metadata_size))
         )
     )
 
     TOTAL_DICTIONARY_BYTES=$(
         (
-            TOTAL_DICTIONARY_BYTES +
-            dictionary_size
+            echo $((TOTAL_DICTIONARY_BYTES + dictionary_size))
         )
     )
 
     TOTAL_DELETE_BYTES=$(
         (
-            TOTAL_DELETE_BYTES +
-            delete_size
+            echo $((TOTAL_DELETE_BYTES + delete_size))
         )
     )
 
     TOTAL_METADATA_BYTES=$(
         (
-            TOTAL_METADATA_BYTES +
-            metadata_size
+            echo $((TOTAL_METADATA_BYTES + metadata_size))
         )
     )
 
@@ -2275,21 +2239,23 @@ do
 
 done
 
+# ============================================================
+# GLOBAL TOTALS
+# ============================================================
+
 TOTAL_GENERATED_BYTES=$(
     (
-        TOTAL_DICTIONARY_BYTES +
-        TOTAL_DELETE_BYTES +
-        TOTAL_METADATA_BYTES
+        echo $(
+            (
+                TOTAL_DICTIONARY_BYTES +
+                TOTAL_DELETE_BYTES +
+                TOTAL_METADATA_BYTES
+            )
+        )
     )
 )
 
-TOTAL_MIB=$(
-    (
-        TOTAL_GENERATED_BYTES /
-        1024 /
-        1024
-    )
-)
+TOTAL_MIB=$((TOTAL_GENERATED_BYTES / 1024 / 1024))
 
 echo ""
 echo "============================================================"
@@ -2318,6 +2284,8 @@ if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
 
     exit 1
 fi
+
+echo "  Global budget status: OK"
 
 # ============================================================
 # FINAL SANITY CHECK
@@ -2361,4 +2329,3 @@ echo ""
 echo "============================================================"
 echo " Dictionary generation completed successfully"
 echo "============================================================"
-```
