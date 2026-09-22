@@ -37,7 +37,7 @@ BUILD_ROOT="${BUILD_ROOT:-${PROJECT_ROOT}/build/pocketboard-dictionaries}"
 SOURCE_ROOT="${BUILD_ROOT}/sources"
 HUNSPELL_ROOT="${BUILD_ROOT}/hunspell"
 FREQUENCY_ROOT="${BUILD_ROOT}/frequency"
-LEIPZIG_ROOT="${BUILD_ROOT}/leipzig}"
+LEIPZIG_ROOT="${BUILD_ROOT}/leipzig"
 
 WORK_ROOT="${BUILD_ROOT}/work"
 OUTPUT_ROOT="${BUILD_ROOT}/generated"
@@ -599,7 +599,6 @@ def parse_hunspell_word(line):
     if line.isdigit():
         return None
 
-    # Ignore leading/trailing whitespace.
     line = line.strip()
 
     if not line:
@@ -776,6 +775,26 @@ if LANGUAGE == "es-AR":
     core.extend(es_ar_core)
 
 ###############################################################################
+# Parse Hunspell source
+###############################################################################
+
+hunspell_words = set()
+
+with open(
+    hunspell_path,
+    "r",
+    encoding="utf-8",
+    errors="replace",
+) as fh:
+
+    for raw in fh:
+
+        word = parse_hunspell_word(raw)
+
+        if word is not None:
+            hunspell_words.add(word)
+
+###############################################################################
 # Candidate selection
 ###############################################################################
 
@@ -798,42 +817,6 @@ for word in core:
 # A frequency word is accepted when:
 #   1. it exists in Hunspell, OR
 #   2. it is explicitly mandatory/core vocabulary.
-###############################################################################
-
-frequency_candidates = []
-
-for word, score in frequency.items():
-
-    word = nfc(word)
-
-    if not is_valid_token(word):
-        continue
-
-    if word in hunspell_words if False else False:
-        pass
-
-###############################################################################
-# Parse Hunspell source
-###############################################################################
-
-hunspell_words = set()
-
-with open(
-    hunspell_path,
-    "r",
-    encoding="utf-8",
-    errors="replace",
-) as fh:
-
-    for raw in fh:
-
-        word = parse_hunspell_word(raw)
-
-        if word is not None:
-            hunspell_words.add(word)
-
-###############################################################################
-# Build frequency candidate list
 ###############################################################################
 
 frequency_candidates = []
@@ -1538,7 +1521,7 @@ build_language \
     "${OUTPUT_ROOT}/de"
 
 ###############################################################################
-# Final validation
+# Validate generated dictionaries
 ###############################################################################
 
 separator
@@ -1661,20 +1644,6 @@ for lang in "${LANGUAGES[@]}"; do
 done
 
 log "Android asset validation completed successfully."
-
-###############################################################################
-# Final asset validation
-###############################################################################
-
-for lang in "${LANGUAGES[@]}"; do
-
-    [[ -s "${ASSETS_ROOT}/${lang}/${lang}.dict" ]] ||
-        die "Asset missing: ${lang}.dict"
-
-    [[ -s "${ASSETS_ROOT}/${lang}/${lang}.deletes" ]] ||
-        die "Asset missing: ${lang}.deletes"
-
-done
 
 ###############################################################################
 # Final summary
