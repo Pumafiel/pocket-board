@@ -12,6 +12,8 @@ set -euo pipefail
 #   - Preserve Spanish accents and Argentine voseo.
 #   - Frequency-first vocabulary selection.
 #   - Curated mandatory vocabulary is always preserved.
+#   - Accent-aware filtering for noisy unaccented FrequencyWords
+#     variants in Spanish.
 #   - "manana" is explicitly excluded from es-AR.
 #   - Final .dict files are the sole source for .deletes.
 #   - Maximum delete distance is 2.
@@ -181,10 +183,9 @@ print_section "Checking required tools"
 require_command curl
 require_command tar
 require_command find
-require_command head
-require_command tail
 require_command wc
 require_command python3
+require_command ls
 
 echo "Required tools OK."
 
@@ -235,6 +236,7 @@ download_german_frequency() {
     local extract_dir="${WORK_DIR}/leipzig/extracted"
 
     mkdir -p "${WORK_DIR}/leipzig"
+
     rm -rf "${extract_dir}"
     mkdir -p "${extract_dir}"
 
@@ -315,8 +317,15 @@ destination = Path(sys.argv[2])
 
 count = 0
 
-with source.open("r", encoding="utf-8", errors="replace") as src, \
-     destination.open("w", encoding="utf-8", newline="\n") as dst:
+with source.open(
+    "r",
+    encoding="utf-8",
+    errors="replace"
+) as src, destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as dst:
 
     first = True
 
@@ -390,8 +399,15 @@ def valid_token(word):
 
 count = 0
 
-with source.open("r", encoding="utf-8", errors="replace") as src, \
-     destination.open("w", encoding="utf-8", newline="\n") as dst:
+with source.open(
+    "r",
+    encoding="utf-8",
+    errors="replace"
+) as src, destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as dst:
 
     for raw in src:
         if count >= limit:
@@ -466,8 +482,15 @@ def valid_token(word):
 
 count = 0
 
-with source.open("r", encoding="utf-8", errors="replace") as src, \
-     destination.open("w", encoding="utf-8", newline="\n") as dst:
+with source.open(
+    "r",
+    encoding="utf-8",
+    errors="replace"
+) as src, destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as dst:
 
     for raw in src:
         if count >= limit:
@@ -558,7 +581,12 @@ required = {
     ],
 }
 
-with destination.open("w", encoding="utf-8", newline="\n") as dst:
+with destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as dst:
+
     seen = set()
 
     for word in required[language]:
@@ -580,6 +608,21 @@ PY
 #
 # The final limit is enforced while guaranteeing every mandatory
 # word remains present.
+#
+# Spanish accent handling:
+#
+# FrequencyWords can contain ASCII spellings where the real
+# Spanish spelling requires a diacritic, for example:
+#
+#   mananas  -> mañanas
+#   deberia  -> debería
+#
+# We build an O(N) set of accent-folded keys from Hunspell's
+# accented vocabulary. Only the noisy FrequencyWords candidate
+# is suppressed. Hunspell itself remains authoritative and is
+# still added normally afterward.
+#
+# This avoids word-by-word Hunspell validation completely.
 # ------------------------------------------------------------
 
 build_final_vocabulary() {
@@ -637,10 +680,39 @@ def normalize_token(word):
 
     return word
 
+def accent_key(word):
+    """
+    Return an accent-folded comparison key.
+
+    Examples:
+        mañana  -> manana
+        mañanas -> mananas
+        debería -> deberia
+        papá    -> papa
+
+    This is used only for O(N) collision detection between
+    FrequencyWords and accented Hunspell vocabulary.
+    """
+    decomposed = unicodedata.normalize("NFD", word)
+
+    return "".join(
+        ch
+        for ch in decomposed
+        if not unicodedata.category(ch).startswith("M")
+    )
+
+def has_diacritic(word):
+    return accent_key(word) != word
+
 def read_words(path):
     result = []
 
-    with path.open("r", encoding="utf-8", errors="replace") as fh:
+    with path.open(
+        "r",
+        encoding="utf-8",
+        errors="replace"
+    ) as fh:
+
         for raw in fh:
             word = raw.rstrip("\r\n")
 
@@ -659,9 +731,70 @@ def read_words(path):
 
     return result
 
-frequency_words = read_words(frequency_source)
+# ------------------------------------------------------------
+# Hunspell is read first so its accented vocabulary can be used
+# as a spelling reference for noisy FrequencyWords candidates.
+# ------------------------------------------------------------
+
 hunspell_words = read_words(hunspell_source)
+
+accented_hunspell_keys = set()
+
+if language == "es-AR":
+    for word in hunspell_words:
+        if has_diacritic(word):
+            accented_hunspell_keys.add(accent_key(word))
+
+# ------------------------------------------------------------
+# Read FrequencyWords.
+#
+# For Spanish only:
+# suppress an ASCII FrequencyWords candidate when an accented
+# counterpart exists in Hunspell.
+#
+# This is deliberately NOT applied to Hunspell itself.
+# Therefore valid unaccented Hunspell vocabulary is preserved.
+# ------------------------------------------------------------
+
+frequency_words = []
+
+accent_filtered_frequency_count = 0
+
+with frequency_source.open(
+    "r",
+    encoding="utf-8",
+    errors="replace"
+) as fh:
+
+    for raw in fh:
+        word = raw.rstrip("\r\n")
+
+        if not word:
+            continue
+
+        word = normalize_token(word)
+
+        if word is None:
+            continue
+
+        if word in excluded[language]:
+            continue
+
+        if (
+            language == "es-AR"
+            and word.isascii()
+            and accent_key(word) in accented_hunspell_keys
+        ):
+            accent_filtered_frequency_count += 1
+            continue
+
+        frequency_words.append(word)
+
 core_words = read_words(core_source)
+
+# ------------------------------------------------------------
+# Merge source priority.
+# ------------------------------------------------------------
 
 ordered = []
 seen = set()
@@ -678,6 +811,10 @@ append_unique(frequency_words)
 append_unique(hunspell_words)
 append_unique(core_words)
 
+# ------------------------------------------------------------
+# Prepare mandatory vocabulary.
+# ------------------------------------------------------------
+
 core_unique = []
 
 for word in core_words:
@@ -686,11 +823,18 @@ for word in core_words:
 
 core_set = set(core_unique)
 
+# ------------------------------------------------------------
 # First select according to normal source priority.
+# ------------------------------------------------------------
+
 selected = ordered[:limit]
 selected_set = set(selected)
 
-# Guarantee all mandatory words survive the hard vocabulary limit.
+# ------------------------------------------------------------
+# Guarantee all mandatory words survive the hard vocabulary
+# limit.
+# ------------------------------------------------------------
+
 missing_core = [
     word
     for word in core_unique
@@ -706,8 +850,6 @@ for required_word in missing_core:
             break
 
     if replacement_index is None:
-        # This should only happen if the mandatory vocabulary itself
-        # exceeds the configured vocabulary limit.
         if len(selected) < limit:
             selected.append(required_word)
             selected_set.add(required_word)
@@ -720,10 +862,15 @@ for required_word in missing_core:
     old_word = selected[replacement_index]
 
     selected_set.discard(old_word)
+
     selected[replacement_index] = required_word
+
     selected_set.add(required_word)
 
+# ------------------------------------------------------------
 # Final deterministic deduplication and safety filtering.
+# ------------------------------------------------------------
+
 final_words = []
 final_seen = set()
 
@@ -745,7 +892,10 @@ for word in selected:
 if len(final_words) > limit:
     final_words = final_words[:limit]
 
+# ------------------------------------------------------------
 # Mandatory words must still be present.
+# ------------------------------------------------------------
+
 for required_word in core_unique:
     if required_word not in final_seen:
         raise SystemExit(
@@ -753,13 +903,23 @@ for required_word in core_unique:
             f"{required_word}"
         )
 
-with destination.open("w", encoding="utf-8", newline="\n") as dst:
+# ------------------------------------------------------------
+# Write final vocabulary.
+# ------------------------------------------------------------
+
+with destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as dst:
+
     for word in final_words:
         dst.write(word + "\n")
 
 print(f"Frequency source: {len(frequency_words)}")
 print(f"Hunspell source:  {len(hunspell_words)}")
 print(f"Core vocabulary:  {len(core_unique)}")
+print(f"Accent-filtered FrequencyWords: {accent_filtered_frequency_count}")
 print(f"Final vocabulary: {len(final_words)}")
 PY
 }
@@ -810,7 +970,12 @@ def normalize_word(word):
 
 words = []
 
-with dictionary.open("r", encoding="utf-8", errors="strict") as fh:
+with dictionary.open(
+    "r",
+    encoding="utf-8",
+    errors="strict"
+) as fh:
+
     for raw in fh:
         word = raw.rstrip("\r\n")
 
@@ -895,7 +1060,10 @@ def generate_distance2(word):
 
     return generated
 
+# ------------------------------------------------------------
 # Distance 2 first for high-priority vocabulary.
+# ------------------------------------------------------------
+
 for word in distance2_words:
     if entry_count >= budget:
         break
@@ -905,7 +1073,10 @@ for word in distance2_words:
 
     generate_distance2(word)
 
+# ------------------------------------------------------------
 # Distance 1 for the complete final dictionary.
+# ------------------------------------------------------------
+
 for word in words:
     if entry_count >= budget:
         break
@@ -915,9 +1086,18 @@ for word in words:
 
     generate_distance1(word)
 
-with deletes.open("w", encoding="utf-8", newline="\n") as dst:
+# ------------------------------------------------------------
+# Write deterministic delete index.
+# ------------------------------------------------------------
+
+with deletes.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as dst:
+
     dst.write("#POCKETBOARD-DELETES-1\n")
-    dst.write(f"#distance=1,2\n")
+    dst.write("#distance=1,2\n")
     dst.write("#source=dict-only\n")
     dst.write("#delete<TAB>target\n")
 
@@ -955,11 +1135,18 @@ if not dictionary.is_file():
 words = []
 seen = set()
 
-with dictionary.open("r", encoding="utf-8", errors="strict") as fh:
+with dictionary.open(
+    "r",
+    encoding="utf-8",
+    errors="strict"
+) as fh:
+
     lines = fh.readlines()
 
 if not lines:
-    raise SystemExit(f"ERROR: Empty dictionary: {dictionary}")
+    raise SystemExit(
+        f"ERROR: Empty dictionary: {dictionary}"
+    )
 
 if lines[0].rstrip("\r\n") != "#POCKETBOARD-DICT-1":
     raise SystemExit(
@@ -1032,19 +1219,34 @@ dictionary = Path(sys.argv[2])
 language = sys.argv[3]
 
 if not deletes.is_file():
-    raise SystemExit(f"ERROR: Missing deletes file: {deletes}")
+    raise SystemExit(
+        f"ERROR: Missing deletes file: {deletes}"
+    )
 
 if not dictionary.is_file():
-    raise SystemExit(f"ERROR: Missing dictionary: {dictionary}")
+    raise SystemExit(
+        f"ERROR: Missing dictionary: {dictionary}"
+    )
 
-with dictionary.open("r", encoding="utf-8", errors="strict") as fh:
+with dictionary.open(
+    "r",
+    encoding="utf-8",
+    errors="strict"
+) as fh:
+
     dictionary_words = {
         line.rstrip("\r\n")
         for line in fh
-        if line.rstrip("\r\n") and not line.startswith("#")
+        if line.rstrip("\r\n")
+        and not line.startswith("#")
     }
 
-with deletes.open("r", encoding="utf-8", errors="strict") as fh:
+with deletes.open(
+    "r",
+    encoding="utf-8",
+    errors="strict"
+) as fh:
+
     lines = fh.readlines()
 
 if len(lines) < 4:
@@ -1100,8 +1302,15 @@ for line_number, raw in enumerate(lines[4:], start=5):
             f"{language}"
         )
 
-    delete_key = unicodedata.normalize("NFC", delete_key)
-    target = unicodedata.normalize("NFC", target)
+    delete_key = unicodedata.normalize(
+        "NFC",
+        delete_key
+    )
+
+    target = unicodedata.normalize(
+        "NFC",
+        target
+    )
 
     if target not in dictionary_words:
         raise SystemExit(
@@ -1186,7 +1395,12 @@ for language, path in paths.items():
 
     words = set()
 
-    with path.open("r", encoding="utf-8", errors="strict") as fh:
+    with path.open(
+        "r",
+        encoding="utf-8",
+        errors="strict"
+    ) as fh:
+
         for raw in fh:
             word = raw.rstrip("\r\n")
 
@@ -1213,7 +1427,13 @@ for language, path in paths.items():
         f"Required vocabulary OK: {language}"
     )
 
-# Explicit Spanish regression check.
+# ------------------------------------------------------------
+# Spanish accent regression checks.
+#
+# These are explicit regression guards, not Hunspell
+# word-by-word validation.
+# ------------------------------------------------------------
+
 es_words = set()
 
 with paths["es-AR"].open(
@@ -1221,6 +1441,7 @@ with paths["es-AR"].open(
     encoding="utf-8",
     errors="strict"
 ) as fh:
+
     for raw in fh:
         word = raw.rstrip("\r\n")
 
@@ -1239,9 +1460,31 @@ if "manana" in es_words:
         "ERROR: Spanish regression: 'manana' must not be present"
     )
 
+if "mananas" in es_words:
+    raise SystemExit(
+        "ERROR: Spanish regression: 'mananas' must not be present"
+    )
+
+if "deberia" in es_words:
+    raise SystemExit(
+        "ERROR: Spanish regression: 'deberia' must not be present"
+    )
+
+if "mañanas" not in es_words:
+    raise SystemExit(
+        "ERROR: Spanish accent regression: 'mañanas' is missing"
+    )
+
+if "debería" not in es_words:
+    raise SystemExit(
+        "ERROR: Spanish accent regression: 'debería' is missing"
+    )
+
 print(
     "Spanish accent regression OK: "
-    "mañana present, manana absent"
+    "mañana present, manana absent; "
+    "mañanas present, mananas absent; "
+    "debería present, deberia absent"
 )
 PY
 }
@@ -1350,6 +1593,7 @@ for path in dict_paths:
         encoding="utf-8",
         errors="strict"
     ) as fh:
+
         words = [
             line.rstrip("\r\n")
             for line in fh
@@ -1384,6 +1628,10 @@ print("Final sanity check OK.")
 PY
 }
 
+# ------------------------------------------------------------
+# Size report
+# ------------------------------------------------------------
+
 size_report() {
     print_section "Generated dictionary sizes"
 
@@ -1413,7 +1661,14 @@ size_report() {
         echo "  total:    ${language_total} bytes"
     done
 
-    total_generated_bytes=$((total_dictionary_bytes + total_delete_bytes + total_metadata_bytes))
+    total_generated_bytes=$(
+        (
+            total_dictionary_bytes +
+            total_delete_bytes +
+            total_metadata_bytes
+        )
+    )
+
     total_mib=$((total_generated_bytes / 1024 / 1024))
 
     echo
@@ -1422,36 +1677,8 @@ size_report() {
     echo "Total metadata bytes: ${total_metadata_bytes}"
     echo "Total generated:      ${total_generated_bytes} bytes"
     echo "Total generated:      ${total_mib} MiB"
-
-echo
-echo "============================================================"
-echo " Accent/delete diagnostic"
-echo "============================================================"
-
-echo "Dictionary:"
-for word in "manana" "mananas" "deberia" "mañana" "mañanas" "debería"; do
-    if grep -Fxq "$word" "${OUTPUT_DIR}/es-AR.dict"; then
-        echo "  DICT YES: $word"
-    else
-        echo "  DICT NO:  $word"
-    fi
-done
-
-echo
-echo "Delete targets containing unaccented forms:"
-for word in "manana" "mananas" "deberia"; do
-    echo "  --- $word ---"
-    grep -F $'\t'"$word" "${OUTPUT_DIR}/es-AR.deletes" | head -5 || true
-done
-
-echo
-echo "Delete targets containing accented forms:"
-for word in "mañana" "mañanas" "debería"; do
-    echo "  --- $word ---"
-    grep -F $'\t'"$word" "${OUTPUT_DIR}/es-AR.deletes" | head -5 || true
-done
-    
 }
+
 # ------------------------------------------------------------
 # Prepare source word lists
 # ------------------------------------------------------------
@@ -1561,6 +1788,7 @@ for language in "${LANGUAGES[@]}"; do
 done
 
 echo "Dictionaries created:"
+
 ls -lh \
     "${OUTPUT_DIR}/es-AR.dict" \
     "${OUTPUT_DIR}/en-en.dict" \
@@ -1689,6 +1917,7 @@ echo "  ${OUTPUT_DIR}/de-de.deletes"
 echo
 echo "Hunspell validation: DISABLED"
 echo "Hunspell role: vocabulary source only"
+echo "Spanish accent collision filter: ENABLED"
 echo "Delete source: final .dict only"
 echo "Maximum delete distance: ${MAX_DISTANCE}"
 echo "Top distance-2 vocabulary: ${TOP_DISTANCE2_WORDS}"
