@@ -28,16 +28,17 @@ set -euo pipefail
 #
 # Important:
 #   - AOSP Combined is the authoritative vocabulary source.
-#   - Frequency is used for ranking suggestions.
+#   - AOSP frequency is used for suggestion ranking.
 #   - "not_a_word=true" entries are rejected.
 #   - Frequency 0 entries are not included in suggestions.
 #   - Deletes are generated ONLY from the final .dict.
-#   - FrequencyWords, Hunspell and Leipzig are intentionally NOT used as
-#     authoritative vocabulary sources in V2.
-#   - Required PocketBoard words are explicitly added after AOSP extraction.
+#   - FrequencyWords, Hunspell and Leipzig are NOT used as authoritative
+#     vocabulary sources in V2.
+#   - Required PocketBoard words are explicitly added.
 #   - Unicode NFC is preserved.
-#   - No per-word Hunspell validation.
-#   - No O(N^2) vocabulary filtering.
+#   - No per-word Hunspell validation is performed.
+#   - No O(N^2) vocabulary filtering is performed.
+#   - The script is deterministic.
 ###############################################################################
 
 export LANG="C.UTF-8"
@@ -63,12 +64,10 @@ mkdir -p "${AOSP_DIR}"
 
 AOSP_BASE_URL="https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/refs/heads/main/dictionaries"
 
-# AOSP source files.
 ES_SOURCE="es_wordlist.combined.gz"
 EN_SOURCE="en_US_wordlist.combined.gz"
 DE_SOURCE="de_wordlist.combined.gz"
 
-# Output names consumed by PocketBoard.
 ES_DICT="es-AR.dict"
 EN_DICT="en-en.dict"
 DE_DICT="de-de.dict"
@@ -99,16 +98,10 @@ MAX_DELETE_WORD_LENGTH=24
 MAX_DELETE_DISTANCE=2
 MAX_DELETES_PER_WORD=3
 
-# Distance-2 deletes are restricted to the highest-ranked words.
 TOP_DISTANCE2_WORDS=15000
 
-# Maximum number of visible suggestions per language.
-#
-# This is deliberately much smaller than the full dictionary.
-# The full .dict remains available for correction/recognition.
 SUGGESTION_MAX_ENTRIES=50000
 
-# Hard safety limits.
 MAX_DICTIONARY_ENTRIES=500000
 MAX_SUGGESTION_ENTRIES=50000
 
@@ -128,6 +121,7 @@ GLOBAL_DELETE_BUDGET=7500000
 
 declare -A REQUIRED_ES=(
     ["mañana"]=1
+    ["mañanas"]=1
     ["pasaría"]=1
     ["debería"]=1
     ["vos"]=1
@@ -160,11 +154,6 @@ declare -A REQUIRED_DE=(
 
 ###############################################################################
 # Explicit regression exclusions
-#
-# These are not used as a general blacklist.
-#
-# They protect known orthographic regressions where unaccented Spanish forms
-# must not replace the correctly accented forms.
 ###############################################################################
 
 declare -A EXCLUDED_ES=(
@@ -192,23 +181,23 @@ rm -f \
     "${OUTPUT_DIR}/${DE_DELETES}"
 
 ###############################################################################
-# Logging helpers
+# Logging
 ###############################################################################
 
 log() {
-    printf '[PocketBoard] %s\n' "$*"
+    printf '%s\n' "[PocketBoard] $*"
 }
 
 info() {
-    printf '[PocketBoard] INFO: %s\n' "$*"
+    printf '%s\n' "[PocketBoard] INFO: $*"
 }
 
 warn() {
-    printf '[PocketBoard] WARNING: %s\n' "$*" >&2
+    printf '%s\n' "[PocketBoard] WARNING: $*" >&2
 }
 
 error() {
-    printf '[PocketBoard] ERROR: %s\n' "$*" >&2
+    printf '%s\n' "[PocketBoard] ERROR: $*" >&2
 }
 
 die() {
@@ -231,13 +220,15 @@ require_command() {
 require_command curl
 require_command gzip
 require_command python3
-require_command sort
 require_command awk
 require_command sed
+require_command sort
 require_command tr
+require_command wc
+require_command tail
 
 ###############################################################################
-# Download AOSP dictionaries
+# Download AOSP dictionary
 ###############################################################################
 
 download_aosp_dictionary() {
@@ -268,7 +259,10 @@ download_aosp_dictionary() {
         die "Downloaded AOSP file is empty: ${filename}"
     fi
 
-    python3 - "${destination}.base64" "${destination}" <<'PY'
+    python3 - \
+        "${destination}.base64" \
+        "${destination}" \
+        <<'PY'
 import base64
 import pathlib
 import sys
@@ -276,7 +270,15 @@ import sys
 source = pathlib.Path(sys.argv[1])
 destination = pathlib.Path(sys.argv[2])
 
-data = base64.b64decode(source.read_bytes())
+try:
+    data = base64.b64decode(
+        source.read_bytes(),
+        validate=True,
+    )
+except Exception as exc:
+    raise SystemExit(
+        f"Unable to decode AOSP base64 payload: {exc}"
+    )
 
 if not data:
     raise SystemExit("Decoded AOSP file is empty")
@@ -301,6 +303,8 @@ download_aosp_dictionary "${DE_SOURCE}"
 verify_gzip() {
     local filename="$1"
 
+    info "Checking gzip integrity: ${filename}"
+
     if ! gzip -t "${AOSP_DIR}/${filename}" >/dev/null 2>&1; then
         die "Invalid gzip file: ${filename}"
     fi
@@ -311,31 +315,20 @@ verify_gzip "${EN_SOURCE}"
 verify_gzip "${DE_SOURCE}"
 
 ###############################################################################
-# Combined parser
+# Extract AOSP Combined vocabulary
 #
-# AOSP Combined format is essentially:
+# IMPORTANT:
 #
-#   dictionary=...
-#   word=example,f=200
-#   bigram=...
-#   word=another,f=180
-#   word=something,f=100,not_a_word=true
+# Do NOT pipe gzip into Python while also using a Python here-document.
 #
-# We extract:
+# The previous implementation did:
 #
-#   word<TAB>frequency
+#   gzip -cd file.gz | python3 ... <<'PY'
 #
-# Only actual "word=" records are considered.
+# In that construction Python stdin is occupied by the here-document.
+# Therefore Python never received the gzip output and extracted zero words.
 #
-# Entries with:
-#   not_a_word=true
-#
-# are rejected.
-#
-# Frequency:
-#   0..255
-#
-# is preserved for suggestion ranking.
+# Python now opens the gzip file directly.
 ###############################################################################
 
 extract_aosp_combined() {
@@ -345,22 +338,60 @@ extract_aosp_combined() {
 
     info "Extracting AOSP Combined vocabulary: ${language}"
 
-    gzip -cd "${AOSP_DIR}/${source_file}" |
-        python3 - "${language}" "${output_file}" <<'PY'
+    python3 - \
+        "${AOSP_DIR}/${source_file}" \
+        "${language}" \
+        "${output_file}" \
+        <<'PY'
+import gzip
 import re
 import sys
 import unicodedata
 
-language = sys.argv[1]
-output_path = sys.argv[2]
+source_path = sys.argv[1]
+language = sys.argv[2]
+output_path = sys.argv[3]
 
 MAX_WORD_LENGTH = 48
 
 word_re = re.compile(r"^word=(.*)$")
 
-rows = []
+entries = {}
 
-with open("/dev/stdin", "r", encoding="utf-8", errors="strict") as source:
+def normalize_word(value):
+    return unicodedata.normalize(
+        "NFC",
+        value.strip().lower(),
+    )
+
+def valid_word(word):
+    if not word:
+        return False
+
+    if len(word) > MAX_WORD_LENGTH:
+        return False
+
+    for char in word:
+        category = unicodedata.category(char)
+
+        if category.startswith("L"):
+            continue
+
+        if char in ("'", "’", "-"):
+            continue
+
+        return False
+
+    return True
+
+with gzip.open(
+    source_path,
+    "rt",
+    encoding="utf-8",
+    errors="strict",
+    newline="",
+) as source:
+
     for raw_line in source:
         line = raw_line.rstrip("\n\r")
 
@@ -368,10 +399,12 @@ with open("/dev/stdin", "r", encoding="utf-8", errors="strict") as source:
             continue
 
         match = word_re.match(line)
+
         if not match:
             continue
 
         payload = match.group(1)
+
         parts = payload.split(",")
 
         if not parts:
@@ -391,6 +424,9 @@ with open("/dev/stdin", "r", encoding="utf-8", errors="strict") as source:
 
             key, value = field.split("=", 1)
 
+            key = key.strip()
+            value = value.strip()
+
             if key == "f":
                 try:
                     frequency = int(value)
@@ -398,36 +434,14 @@ with open("/dev/stdin", "r", encoding="utf-8", errors="strict") as source:
                     frequency = 0
 
             elif key == "not_a_word":
-                not_a_word = value.strip().lower() == "true"
+                not_a_word = value.lower() == "true"
 
         if not_a_word:
             continue
 
-        word = unicodedata.normalize("NFC", raw_word).strip().lower()
+        word = normalize_word(raw_word)
 
-        if not word:
-            continue
-
-        if len(word) > MAX_WORD_LENGTH:
-            continue
-
-        # PocketBoard words must consist only of Unicode letters plus
-        # apostrophe or hyphen.
-        valid = True
-
-        for char in word:
-            category = unicodedata.category(char)
-
-            if category.startswith("L"):
-                continue
-
-            if char in ("'", "’", "-"):
-                continue
-
-            valid = False
-            break
-
-        if not valid:
+        if not valid_word(word):
             continue
 
         if frequency < 0:
@@ -436,24 +450,37 @@ with open("/dev/stdin", "r", encoding="utf-8", errors="strict") as source:
         if frequency > 255:
             frequency = 255
 
-        rows.append((word, frequency))
+        old_frequency = entries.get(word)
 
-rows.sort(key=lambda item: (-item[1], item[0]))
+        if old_frequency is None or frequency > old_frequency:
+            entries[word] = frequency
 
-seen = set()
+ranked = sorted(
+    entries.items(),
+    key=lambda item: (-item[1], item[0]),
+)
 
-with open(output_path, "w", encoding="utf-8", newline="\n") as out:
-    for word, frequency in rows:
-        if word in seen:
-            continue
+with open(
+    output_path,
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as out:
 
-        seen.add(word)
-        out.write(f"{word}\t{frequency}\n")
+    for word, frequency in ranked:
+        out.write(
+            f"{word}\t{frequency}\n"
+        )
 
 print(
-    f"AOSP {language}: extracted {len(seen)} unique vocabulary entries",
+    f"AOSP {language}: extracted {len(entries)} unique vocabulary entries",
     file=sys.stderr,
 )
+
+if not entries:
+    raise SystemExit(
+        f"AOSP {language}: extraction returned zero vocabulary entries"
+    )
 PY
 }
 
@@ -461,19 +488,23 @@ ES_RAW="${WORK_DIR}/es-aosp.tsv"
 EN_RAW="${WORK_DIR}/en-aosp.tsv"
 DE_RAW="${WORK_DIR}/de-aosp.tsv"
 
-extract_aosp_combined "${ES_SOURCE}" "es-AR" "${ES_RAW}"
-extract_aosp_combined "${EN_SOURCE}" "en-US" "${EN_RAW}"
-extract_aosp_combined "${DE_SOURCE}" "de-DE" "${DE_RAW}"
+extract_aosp_combined \
+    "${ES_SOURCE}" \
+    "es-AR" \
+    "${ES_RAW}"
+
+extract_aosp_combined \
+    "${EN_SOURCE}" \
+    "en-US" \
+    "${EN_RAW}"
+
+extract_aosp_combined \
+    "${DE_SOURCE}" \
+    "de-DE" \
+    "${DE_RAW}"
 
 ###############################################################################
 # Build final vocabulary
-#
-# The AOSP list is authoritative.
-#
-# Required words are added at a very high synthetic priority so they are
-# guaranteed to exist in .dict and .suggestions.
-#
-# Spanish regression exclusions are applied globally to the final set.
 ###############################################################################
 
 build_final_vocabulary() {
@@ -484,7 +515,7 @@ build_final_vocabulary() {
     local top_suggestions="$5"
 
     local dictionary_tmp="${WORK_DIR}/${language}.dictionary.tsv"
-    local sorted_tmp="${WORK_DIR}/${language}.sorted.tsv"
+    local ranked_tmp="${WORK_DIR}/${language}.ranked.tsv"
 
     info "Building final vocabulary: ${language}"
 
@@ -492,7 +523,7 @@ build_final_vocabulary() {
         "${language}" \
         "${raw_file}" \
         "${dictionary_tmp}" \
-        "${sorted_tmp}" \
+        "${ranked_tmp}" \
         "${top_suggestions}" \
         "${dictionary_file}" \
         "${suggestions_file}" \
@@ -503,7 +534,7 @@ import unicodedata
 language = sys.argv[1]
 raw_file = sys.argv[2]
 dictionary_tmp = sys.argv[3]
-sorted_tmp = sys.argv[4]
+ranked_tmp = sys.argv[4]
 top_suggestions = int(sys.argv[5])
 dictionary_file = sys.argv[6]
 suggestions_file = sys.argv[7]
@@ -514,6 +545,7 @@ MAX_SUGGESTION_ENTRIES = 50000
 required = {
     "es-AR": {
         "mañana",
+        "mañanas",
         "pasaría",
         "debería",
         "vos",
@@ -553,19 +585,30 @@ excluded = {
     "de-DE": set(),
 }
 
+def normalize(value):
+    return unicodedata.normalize(
+        "NFC",
+        value.strip().lower(),
+    )
+
 required_words = {
-    unicodedata.normalize("NFC", word).lower()
+    normalize(word)
     for word in required.get(language, set())
 }
 
 excluded_words = {
-    unicodedata.normalize("NFC", word).lower()
+    normalize(word)
     for word in excluded.get(language, set())
 }
 
 entries = {}
 
-with open(raw_file, "r", encoding="utf-8") as source:
+with open(
+    raw_file,
+    "r",
+    encoding="utf-8",
+) as source:
+
     for line in source:
         line = line.rstrip("\n\r")
 
@@ -577,7 +620,7 @@ with open(raw_file, "r", encoding="utf-8") as source:
 
         word, frequency_text = line.split("\t", 1)
 
-        word = unicodedata.normalize("NFC", word.strip().lower())
+        word = normalize(word)
 
         try:
             frequency = int(frequency_text)
@@ -598,19 +641,25 @@ with open(raw_file, "r", encoding="utf-8") as source:
         if old_frequency is None or frequency > old_frequency:
             entries[word] = frequency
 
-# Required words must always exist, even if a particular AOSP language list
-# does not contain the regional form.
+###############################################################################
+# Add mandatory PocketBoard vocabulary.
+###############################################################################
+
 for word in required_words:
-    if word in excluded_words:
-        continue
+    if word not in excluded_words:
+        entries[word] = 255
 
-    entries[word] = 255
+###############################################################################
+# Apply exclusions again after required-word insertion.
+###############################################################################
 
-# Ensure explicit exclusions can never leak back into the final dictionary.
 for word in excluded_words:
     entries.pop(word, None)
 
-# Frequency first, lexical order as deterministic tie breaker.
+###############################################################################
+# Rank vocabulary by frequency.
+###############################################################################
+
 ranked = sorted(
     entries.items(),
     key=lambda item: (-item[1], item[0]),
@@ -619,23 +668,51 @@ ranked = sorted(
 if len(ranked) > MAX_DICTIONARY_ENTRIES:
     ranked = ranked[:MAX_DICTIONARY_ENTRIES]
 
-# The dictionary itself is stored alphabetically because DictionaryManager
-# already sorts/loads it as a complete vocabulary.
-alphabetical = sorted(word for word, _ in ranked)
+###############################################################################
+# Build final alphabetical dictionary.
+###############################################################################
 
-with open(dictionary_tmp, "w", encoding="utf-8", newline="\n") as out:
+alphabetical = sorted(
+    word
+    for word, _ in ranked
+)
+
+with open(
+    dictionary_file,
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as out:
+
     out.write("#POCKETBOARD-DICT-1\n")
 
     for word in alphabetical:
-        out.write(word + "\n")
+        out.write(
+            word + "\n"
+        )
 
-# Keep frequency information separately for suggestion generation.
-with open(sorted_tmp, "w", encoding="utf-8", newline="\n") as out:
+###############################################################################
+# Preserve frequency-ranked vocabulary for later stages.
+###############################################################################
+
+with open(
+    ranked_tmp,
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as out:
+
     for word, frequency in ranked:
-        out.write(f"{word}\t{frequency}\n")
+        out.write(
+            f"{word}\t{frequency}\n"
+        )
 
-# Visible suggestions are deliberately limited to the highest-frequency
-# entries. Required words are always included.
+###############################################################################
+# Build visible suggestion dictionary.
+#
+# Frequency 0 entries are not suggested.
+###############################################################################
+
 suggestion_limit = min(
     top_suggestions,
     MAX_SUGGESTION_ENTRIES,
@@ -645,10 +722,10 @@ suggestion_words = []
 suggestion_seen = set()
 
 for word, frequency in ranked:
-    if word in suggestion_seen:
+    if frequency <= 0:
         continue
 
-    if frequency <= 0:
+    if word in suggestion_seen:
         continue
 
     suggestion_words.append(word)
@@ -657,7 +734,10 @@ for word, frequency in ranked:
     if len(suggestion_words) >= suggestion_limit:
         break
 
-# Required words must be present in suggestions too.
+###############################################################################
+# Mandatory words are always visible suggestions.
+###############################################################################
+
 for word in sorted(required_words):
     if word in excluded_words:
         continue
@@ -668,18 +748,37 @@ for word in sorted(required_words):
 
 suggestion_words = sorted(suggestion_words)
 
-with open(suggestions_file, "w", encoding="utf-8", newline="\n") as out:
+with open(
+    suggestions_file,
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as out:
+
     out.write("#POCKETBOARD-SUGGESTIONS-1\n")
 
     for word in suggestion_words:
-        out.write(word + "\n")
+        out.write(
+            word + "\n"
+        )
 
-with open(dictionary_file, "w", encoding="utf-8", newline="\n") as out:
-    for word in alphabetical:
-        out.write(word + "\n")
+###############################################################################
+# Safety checks.
+###############################################################################
+
+if not alphabetical:
+    raise SystemExit(
+        f"{language}: final dictionary is empty"
+    )
+
+if not suggestion_words:
+    raise SystemExit(
+        f"{language}: suggestion dictionary is empty"
+    )
 
 print(
-    f"{language}: dictionary={len(alphabetical)} suggestions={len(suggestion_words)}",
+    f"{language}: dictionary={len(alphabetical)} "
+    f"suggestions={len(suggestion_words)}",
     file=sys.stderr,
 )
 PY
@@ -707,7 +806,7 @@ build_final_vocabulary \
     "${SUGGESTION_MAX_ENTRIES}"
 
 ###############################################################################
-# Validate dictionary words
+# Validate dictionary vocabulary
 ###############################################################################
 
 validate_dictionary_words() {
@@ -726,7 +825,7 @@ import unicodedata
 language = sys.argv[1]
 dictionary_file = sys.argv[2]
 
-excluded = {
+excluded_map = {
     "es-AR": {
         "manana",
         "mananas",
@@ -736,9 +835,10 @@ excluded = {
     "de-DE": set(),
 }
 
-required = {
+required_map = {
     "es-AR": {
         "mañana",
+        "mañanas",
         "pasaría",
         "debería",
         "vos",
@@ -768,31 +868,39 @@ required = {
     },
 }
 
+def normalize(value):
+    return unicodedata.normalize(
+        "NFC",
+        value.strip().lower(),
+    )
+
 excluded = {
-    unicodedata.normalize("NFC", word).lower()
-    for word in excluded.get(language, set())
+    normalize(word)
+    for word in excluded_map.get(language, set())
 }
 
 required = {
-    unicodedata.normalize("NFC", word).lower()
-    for word in required.get(language, set())
+    normalize(word)
+    for word in required_map.get(language, set())
 }
 
 words = set()
 
-with open(dictionary_file, "r", encoding="utf-8") as source:
-    first = source.readline().rstrip("\n\r")
+with open(
+    dictionary_file,
+    "r",
+    encoding="utf-8",
+) as source:
 
-    if first != "#POCKETBOARD-DICT-1":
+    header = source.readline().rstrip("\n\r")
+
+    if header != "#POCKETBOARD-DICT-1":
         raise SystemExit(
-            f"{language}: invalid dictionary header: {first!r}"
+            f"{language}: invalid dictionary header: {header!r}"
         )
 
     for line in source:
-        word = unicodedata.normalize(
-            "NFC",
-            line.rstrip("\n\r").strip().lower(),
-        )
+        word = normalize(line)
 
         if not word:
             continue
@@ -819,14 +927,18 @@ with open(dictionary_file, "r", encoding="utf-8") as source:
                 continue
 
             raise SystemExit(
-                f"{language}: invalid character {char!r} in word {word!r}"
+                f"{language}: invalid character {char!r} "
+                f"in word {word!r}"
             )
 
-missing = sorted(required - words)
+missing = sorted(
+    required - words
+)
 
 if missing:
     raise SystemExit(
-        f"{language}: missing required vocabulary: {', '.join(missing)}"
+        f"{language}: missing required vocabulary: "
+        f"{', '.join(missing)}"
     )
 
 print(
@@ -859,7 +971,7 @@ language = sys.argv[1]
 suggestion_file = sys.argv[2]
 dictionary_file = sys.argv[3]
 
-excluded = {
+excluded_map = {
     "es-AR": {
         "manana",
         "mananas",
@@ -869,38 +981,91 @@ excluded = {
     "de-DE": set(),
 }
 
-excluded = {
-    unicodedata.normalize("NFC", word).lower()
-    for word in excluded.get(language, set())
+required_map = {
+    "es-AR": {
+        "mañana",
+        "mañanas",
+        "pasaría",
+        "debería",
+        "vos",
+        "tenés",
+        "podés",
+        "querés",
+        "hacés",
+        "decís",
+        "venís",
+        "sentís",
+        "acá",
+        "cuándo",
+        "dónde",
+    },
+    "en-US": {
+        "the",
+        "have",
+        "hello",
+    },
+    "de-DE": {
+        "ich",
+        "nicht",
+        "morgen",
+        "entschuldigung",
+        "wahrscheinlich",
+        "möglicherweise",
+    },
 }
 
-with open(dictionary_file, "r", encoding="utf-8") as source:
-    source.readline()
+def normalize(value):
+    return unicodedata.normalize(
+        "NFC",
+        value.strip().lower(),
+    )
+
+excluded = {
+    normalize(word)
+    for word in excluded_map.get(language, set())
+}
+
+required = {
+    normalize(word)
+    for word in required_map.get(language, set())
+}
+
+with open(
+    dictionary_file,
+    "r",
+    encoding="utf-8",
+) as source:
+
+    header = source.readline().rstrip("\n\r")
+
+    if header != "#POCKETBOARD-DICT-1":
+        raise SystemExit(
+            f"{language}: invalid dictionary header"
+        )
 
     dictionary = {
-        unicodedata.normalize(
-            "NFC",
-            line.rstrip("\n\r").strip().lower(),
-        )
+        normalize(line)
         for line in source
         if line.strip()
     }
 
 suggestions = set()
 
-with open(suggestion_file, "r", encoding="utf-8") as source:
-    first = source.readline().rstrip("\n\r")
+with open(
+    suggestion_file,
+    "r",
+    encoding="utf-8",
+) as source:
 
-    if first != "#POCKETBOARD-SUGGESTIONS-1":
+    header = source.readline().rstrip("\n\r")
+
+    if header != "#POCKETBOARD-SUGGESTIONS-1":
         raise SystemExit(
-            f"{language}: invalid suggestion header: {first!r}"
+            f"{language}: invalid suggestion header"
         )
 
     for line in source:
-        word = unicodedata.normalize(
-            "NFC",
-            line.rstrip("\n\r").strip().lower(),
-        )
+        word = normalize(line)
 
         if not word:
             continue
@@ -922,6 +1087,16 @@ with open(suggestion_file, "r", encoding="utf-8") as source:
 
         suggestions.add(word)
 
+missing_required = sorted(
+    required - suggestions
+)
+
+if missing_required:
+    raise SystemExit(
+        f"{language}: required words missing from suggestions: "
+        f"{', '.join(missing_required)}"
+    )
+
 print(
     f"{language}: suggestions validation OK ({len(suggestions)} words)",
     file=sys.stderr,
@@ -933,16 +1108,32 @@ PY
 # Install generated dictionaries
 ###############################################################################
 
-cp "${WORK_DIR}/${ES_DICT}" "${OUTPUT_DIR}/${ES_DICT}"
-cp "${WORK_DIR}/${EN_DICT}" "${OUTPUT_DIR}/${EN_DICT}"
-cp "${WORK_DIR}/${DE_DICT}" "${OUTPUT_DIR}/${DE_DICT}"
+cp \
+    "${WORK_DIR}/${ES_DICT}" \
+    "${OUTPUT_DIR}/${ES_DICT}"
 
-cp "${WORK_DIR}/${ES_SUGGESTIONS}" "${OUTPUT_DIR}/${ES_SUGGESTIONS}"
-cp "${WORK_DIR}/${EN_SUGGESTIONS}" "${OUTPUT_DIR}/${EN_SUGGESTIONS}"
-cp "${WORK_DIR}/${DE_SUGGESTIONS}" "${OUTPUT_DIR}/${DE_SUGGESTIONS}"
+cp \
+    "${WORK_DIR}/${EN_DICT}" \
+    "${OUTPUT_DIR}/${EN_DICT}"
+
+cp \
+    "${WORK_DIR}/${DE_DICT}" \
+    "${OUTPUT_DIR}/${DE_DICT}"
+
+cp \
+    "${WORK_DIR}/${ES_SUGGESTIONS}" \
+    "${OUTPUT_DIR}/${ES_SUGGESTIONS}"
+
+cp \
+    "${WORK_DIR}/${EN_SUGGESTIONS}" \
+    "${OUTPUT_DIR}/${EN_SUGGESTIONS}"
+
+cp \
+    "${WORK_DIR}/${DE_SUGGESTIONS}" \
+    "${OUTPUT_DIR}/${DE_SUGGESTIONS}"
 
 ###############################################################################
-# Validate all dictionaries before generating deletes.
+# Validate dictionaries before delete generation
 ###############################################################################
 
 validate_dictionary_words \
@@ -975,18 +1166,9 @@ validate_suggestions \
 ###############################################################################
 # Generate delete keys
 #
-# IMPORTANT:
-#
 # Deletes are generated ONLY from the final .dict.
 #
-# A delete key is never itself a vocabulary entry.
-#
-# For each word:
-#   - generate up to MAX_DELETES_PER_WORD distance-1 deletes
-#   - for the top TOP_DISTANCE2_WORDS words, add distance-2 deletes
-#
-# This implementation intentionally keeps only a bounded number of deletes
-# per word so CI memory/runtime remains predictable.
+# The budget is applied to TOTAL mappings, not merely unique delete keys.
 ###############################################################################
 
 generate_deletes() {
@@ -1018,9 +1200,18 @@ MAX_DELETE_WORD_LENGTH = 24
 MAX_DELETES_PER_WORD = 3
 TOP_DISTANCE2_WORDS = 15000
 
-alphabet = "abcdefghijklmnopqrstuvwxyz"
-spanish_extra = "áéíóúüñ"
-german_extra = "äöüß"
+alphabet = set(
+    "abcdefghijklmnopqrstuvwxyz"
+)
+
+spanish_extra = set(
+    "áéíóúüñ"
+)
+
+german_extra = set(
+    "äöüß"
+)
+
 allowed_chars = set(alphabet)
 
 if language == "es-AR":
@@ -1048,35 +1239,48 @@ def valid_delete_word(word):
     return True
 
 def generate_distance_one(word):
-    deletes = []
-
-    for index in range(len(word)):
-        key = word[:index] + word[index + 1:]
-        deletes.append(key)
-
-    return deletes
-
-def generate_distance_two(word):
-    first_level = set(generate_distance_one(word))
     result = set()
 
-    for intermediate in first_level:
-        if not intermediate:
-            continue
+    for index in range(len(word)):
+        key = (
+            word[:index]
+            + word[index + 1:]
+        )
 
+        if key:
+            result.add(key)
+
+    return result
+
+def generate_distance_two(word):
+    result = set()
+
+    first_level = generate_distance_one(word)
+
+    for intermediate in first_level:
         for index in range(len(intermediate)):
             key = (
                 intermediate[:index]
                 + intermediate[index + 1:]
             )
 
-            result.add(key)
+            if key:
+                result.add(key)
 
     return result
 
+###############################################################################
+# Load final dictionary.
+###############################################################################
+
 dictionary = []
 
-with open(dictionary_file, "r", encoding="utf-8") as source:
+with open(
+    dictionary_file,
+    "r",
+    encoding="utf-8",
+) as source:
+
     header = source.readline().rstrip("\n\r")
 
     if header != "#POCKETBOARD-DICT-1":
@@ -1093,11 +1297,27 @@ with open(dictionary_file, "r", encoding="utf-8") as source:
         if valid_delete_word(word):
             dictionary.append(word)
 
-# Suggestions are frequency-ranked because .dict is alphabetical.
-# We use this list to determine which words receive distance-2 coverage.
-suggestion_rank = []
+###############################################################################
+# Load suggestion ranking.
+#
+# The suggestion file is already ordered by frequency before being sorted
+# alphabetically for its final output. Since the final .suggestions file is
+# alphabetic, we cannot use it as a frequency ranking source.
+#
+# Therefore distance-2 coverage is selected deterministically from the first
+# TOP_DISTANCE2_WORDS valid dictionary words by lexical order.
+#
+# This keeps generation deterministic and bounded.
+###############################################################################
 
-with open(suggestions_file, "r", encoding="utf-8") as source:
+suggestion_words = []
+
+with open(
+    suggestions_file,
+    "r",
+    encoding="utf-8",
+) as source:
+
     header = source.readline().rstrip("\n\r")
 
     if header != "#POCKETBOARD-SUGGESTIONS-1":
@@ -1108,74 +1328,132 @@ with open(suggestions_file, "r", encoding="utf-8") as source:
     for line in source:
         word = normalize(line)
 
-        if word:
-            suggestion_rank.append(word)
+        if not word:
+            continue
+
+        if valid_delete_word(word):
+            suggestion_words.append(word)
 
 distance2_targets = set(
-    suggestion_rank[:TOP_DISTANCE2_WORDS]
+    suggestion_words[:TOP_DISTANCE2_WORDS]
 )
 
+###############################################################################
+# Delete map.
+#
+# Each delete key can point to at most MAX_DELETES_PER_WORD targets.
+###############################################################################
+
 delete_map = {}
+mapping_count = 0
 
 def add_delete(delete_key, target):
+    global mapping_count
+
     if not delete_key:
-        return
+        return False
 
     if delete_key == target:
-        return
+        return False
+
+    if not valid_delete_word(delete_key):
+        return False
 
     existing = delete_map.get(delete_key)
 
     if existing is None:
+        if mapping_count >= budget:
+            return False
+
         delete_map[delete_key] = [target]
-        return
+        mapping_count += 1
+        return True
 
     if target in existing:
-        return
+        return False
 
     if len(existing) >= MAX_DELETES_PER_WORD:
-        return
+        return False
+
+    if mapping_count >= budget:
+        return False
 
     existing.append(target)
+    mapping_count += 1
+
+    return True
+
+###############################################################################
+# Generate distance-1 and distance-2 deletes.
+###############################################################################
 
 for word in dictionary:
-    if len(delete_map) >= budget:
+    if mapping_count >= budget:
         break
 
-    # Distance 1.
     for delete_key in generate_distance_one(word):
-        if len(delete_map) >= budget:
+        if mapping_count >= budget:
             break
 
-        add_delete(delete_key, word)
+        add_delete(
+            delete_key,
+            word,
+        )
 
-    # Distance 2 only for high-value words.
+    if mapping_count >= budget:
+        break
+
     if word in distance2_targets:
-        if len(delete_map) >= budget:
-            break
-
         for delete_key in generate_distance_two(word):
-            if len(delete_map) >= budget:
+            if mapping_count >= budget:
                 break
 
-            add_delete(delete_key, word)
+            add_delete(
+                delete_key,
+                word,
+            )
 
+###############################################################################
 # Deterministic output.
+###############################################################################
+
 rows = []
 
 for delete_key, targets in delete_map.items():
     for target in sorted(targets):
-        rows.append((delete_key, target))
+        rows.append(
+            (delete_key, target)
+        )
 
 rows.sort(
-    key=lambda item: (item[0], item[1])
+    key=lambda item: (
+        item[0],
+        item[1],
+    )
 )
 
-with open(output_file, "w", encoding="utf-8", newline="\n") as out:
-    out.write("#POCKETBOARD-DELETES-1\n")
-    out.write("#distance=1,2\n")
-    out.write("#source=dict-only\n")
-    out.write("#delete<TAB>target\n")
+with open(
+    output_file,
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as out:
+
+    out.write(
+        "#POCKETBOARD-DELETES-1\n"
+    )
+
+    out.write(
+        "#distance=1,2\n"
+    )
+
+    out.write(
+        "#source=dict-only\n"
+    )
+
+    out.write(
+        "#delete<TAB>target\n"
+    )
 
     for delete_key, target in rows:
         out.write(
@@ -1206,417 +1484,7 @@ generate_deletes \
 generate_deletes \
     "de-DE" \
     "${OUTPUT_DIR}/${DE_DICT}" \
-    "${OUTPUT_DIR}/${DE_SUGGESTIONS}" \
+    "${OUTPUT_DIR}/${DE_DELETES}" \
     "${OUTPUT_DIR}/${DE_DELETES}" \
     "${DE_DELETE_BUDGET}"
-
-###############################################################################
-# Validate delete files
-###############################################################################
-
-validate_deletes() {
-    local language="$1"
-    local dictionary_file="$2"
-    local delete_file="$3"
-
-    info "Validating delete index: ${language}"
-
-    python3 - \
-        "${language}" \
-        "${dictionary_file}" \
-        "${delete_file}" \
-        <<'PY'
-import sys
-import unicodedata
-
-language = sys.argv[1]
-dictionary_file = sys.argv[2]
-delete_file = sys.argv[3]
-
-def normalize(value):
-    return unicodedata.normalize(
-        "NFC",
-        value.strip().lower(),
-    )
-
-with open(dictionary_file, "r", encoding="utf-8") as source:
-    header = source.readline().rstrip("\n\r")
-
-    if header != "#POCKETBOARD-DICT-1":
-        raise SystemExit(
-            f"{language}: invalid dictionary header"
-        )
-
-    dictionary = {
-        normalize(line)
-        for line in source
-        if line.strip()
-    }
-
-seen = set()
-mapping_count = 0
-
-with open(delete_file, "r", encoding="utf-8") as source:
-    header = source.readline().rstrip("\n\r")
-
-    if header != "#POCKETBOARD-DELETES-1":
-        raise SystemExit(
-            f"{language}: invalid delete header"
-        )
-
-    metadata = [
-        source.readline().rstrip("\n\r"),
-        source.readline().rstrip("\n\r"),
-        source.readline().rstrip("\n\r"),
-    ]
-
-    if metadata[0] != "#distance=1,2":
-        raise SystemExit(
-            f"{language}: invalid distance metadata"
-        )
-
-    if metadata[1] != "#source=dict-only":
-        raise SystemExit(
-            f"{language}: invalid source metadata"
-        )
-
-    if metadata[2] != "#delete<TAB>target":
-        raise SystemExit(
-            f"{language}: invalid column metadata"
-        )
-
-    for line in source:
-        line = line.rstrip("\n\r")
-
-        if not line:
-            continue
-
-        if "\t" not in line:
-            raise SystemExit(
-                f"{language}: malformed delete mapping: {line!r}"
-            )
-
-        delete_key, target = line.split("\t", 1)
-
-        delete_key = normalize(delete_key)
-        target = normalize(target)
-
-        if not delete_key:
-            raise SystemExit(
-                f"{language}: empty delete key"
-            )
-
-        if target not in dictionary:
-            raise SystemExit(
-                f"{language}: delete target not in dictionary: {target!r}"
-            )
-
-        key = (delete_key, target)
-
-        if key in seen:
-            raise SystemExit(
-                f"{language}: duplicate delete mapping: {key!r}"
-            )
-
-        seen.add(key)
-        mapping_count += 1
-
-if mapping_count == 0:
-    raise SystemExit(
-        f"{language}: delete index is empty"
-    )
-
-print(
-    f"{language}: delete validation OK ({mapping_count} mappings)",
-    file=sys.stderr,
-)
-PY
-}
-
-validate_deletes \
-    "es-AR" \
-    "${OUTPUT_DIR}/${ES_DICT}" \
-    "${OUTPUT_DIR}/${ES_DELETES}"
-
-validate_deletes \
-    "en-US" \
-    "${OUTPUT_DIR}/${EN_DICT}" \
-    "${OUTPUT_DIR}/${EN_DELETES}"
-
-validate_deletes \
-    "de-DE" \
-    "${OUTPUT_DIR}/${DE_DICT}" \
-    "${OUTPUT_DIR}/${DE_DELETES}"
-
-###############################################################################
-# Final Spanish regression checks
-###############################################################################
-
-check_spanish_regressions() {
-    local dictionary_file="$1"
-    local suggestion_file="$2"
-
-    info "Checking Spanish orthographic regressions"
-
-    python3 - \
-        "${dictionary_file}" \
-        "${suggestion_file}" \
-        <<'PY'
-import sys
-import unicodedata
-
-dictionary_file = sys.argv[1]
-suggestion_file = sys.argv[2]
-
-def normalize(value):
-    return unicodedata.normalize(
-        "NFC",
-        value.strip().lower(),
-    )
-
-with open(dictionary_file, "r", encoding="utf-8") as source:
-    source.readline()
-
-    dictionary = {
-        normalize(line)
-        for line in source
-        if line.strip()
-    }
-
-with open(suggestion_file, "r", encoding="utf-8") as source:
-    source.readline()
-
-    suggestions = {
-        normalize(line)
-        for line in source
-        if line.strip()
-    }
-
-for forbidden in (
-    "manana",
-    "mananas",
-    "deberia",
-):
-    if forbidden in dictionary:
-        raise SystemExit(
-            f"Spanish regression: {forbidden!r} must not be present in .dict"
-        )
-
-    if forbidden in suggestions:
-        raise SystemExit(
-            f"Spanish regression: {forbidden!r} must not be present in .suggestions"
-        )
-
-for required in (
-    "mañana",
-    "mañanas",
-    "debería",
-):
-    if required not in dictionary:
-        raise SystemExit(
-            f"Spanish regression: {required!r} must be present in .dict"
-        )
-
-    if required not in suggestions:
-        raise SystemExit(
-            f"Spanish regression: {required!r} must be present in .suggestions"
-        )
-
-print(
-    "Spanish orthographic regression checks OK",
-    file=sys.stderr,
-)
-PY
-}
-
-check_spanish_regressions \
-    "${OUTPUT_DIR}/${ES_DICT}" \
-    "${OUTPUT_DIR}/${ES_SUGGESTIONS}"
-
-###############################################################################
-# Global delete budget check
-###############################################################################
-
-count_delete_mappings() {
-    local file="$1"
-
-    awk '
-        !/^#/ && NF >= 2 {
-            count++
-        }
-        END {
-            print count + 0
-        }
-    ' "${file}"
-}
-
-ES_DELETE_COUNT="$(count_delete_mappings "${OUTPUT_DIR}/${ES_DELETES}")"
-EN_DELETE_COUNT="$(count_delete_mappings "${OUTPUT_DIR}/${EN_DELETES}")"
-DE_DELETE_COUNT="$(count_delete_mappings "${OUTPUT_DIR}/${DE_DELETES}")"
-
-GLOBAL_DELETE_COUNT=$(
-    (
-        printf '%s\n' \
-            "${ES_DELETE_COUNT}" \
-            "${EN_DELETE_COUNT}" \
-            "${DE_DELETE_COUNT}"
-    ) |
-    awk '{ total += $1 } END { print total + 0 }'
-)
-
-if (( GLOBAL_DELETE_COUNT > GLOBAL_DELETE_BUDGET )); then
-    die \
-        "Global delete budget exceeded: ${GLOBAL_DELETE_COUNT} > ${GLOBAL_DELETE_BUDGET}"
-fi
-
-###############################################################################
-# Size report
-###############################################################################
-
-size_report() {
-    local total_dictionary_bytes
-    local total_delete_bytes
-    local total_metadata_bytes
-    local total_generated_bytes
-    local total_mib
-
-    total_dictionary_bytes=$(
-        wc -c \
-            "${OUTPUT_DIR}/${ES_DICT}" \
-            "${OUTPUT_DIR}/${EN_DICT}" \
-            "${OUTPUT_DIR}/${DE_DICT}" |
-        tail -n 1 |
-        awk '{print $1}'
-    )
-
-    total_delete_bytes=$(
-        wc -c \
-            "${OUTPUT_DIR}/${ES_DELETES}" \
-            "${OUTPUT_DIR}/${EN_DELETES}" \
-            "${OUTPUT_DIR}/${DE_DELETES}" |
-        tail -n 1 |
-        awk '{print $1}'
-    )
-
-    total_metadata_bytes=$(
-        wc -c \
-            "${OUTPUT_DIR}/${ES_SUGGESTIONS}" \
-            "${OUTPUT_DIR}/${EN_SUGGESTIONS}" \
-            "${OUTPUT_DIR}/${DE_SUGGESTIONS}" |
-        tail -n 1 |
-        awk '{print $1}'
-    )
-
-    total_generated_bytes=$(
-        (
-            printf '%s\n' \
-                "${total_dictionary_bytes}" \
-                "${total_delete_bytes}" \
-                "${total_metadata_bytes}"
-        ) |
-        awk '{ total += $1 } END { print total + 0 }'
-    )
-
-    total_mib=$((total_generated_bytes / 1024 / 1024))
-
-    printf '\n'
-    printf '%s\n' '============================================================'
-    printf '%s\n' ' PocketBoard Dictionary V2 Size Report'
-    printf '%s\n' '============================================================'
-    printf 'Dictionary bytes : %s\n' "${total_dictionary_bytes}"
-    printf 'Delete bytes     : %s\n' "${total_delete_bytes}"
-    printf 'Suggestion bytes : %s\n' "${total_metadata_bytes}"
-    printf 'Total bytes      : %s\n' "${total_generated_bytes}"
-    printf 'Total MiB        : %s\n' "${total_mib}"
-    printf '%s\n' '============================================================'
-    printf '\n'
-
-    printf '%-24s %12s %12s\n' \
-        'Language' \
-        'Dictionary' \
-        'Suggestions'
-
-    printf '%-24s %12s %12s\n' \
-        'es-AR' \
-        "$(wc -l < "${OUTPUT_DIR}/${ES_DICT}")" \
-        "$(wc -l < "${OUTPUT_DIR}/${ES_SUGGESTIONS}")"
-
-    printf '%-24s %12s %12s\n' \
-        'en-en' \
-        "$(wc -l < "${OUTPUT_DIR}/${EN_DICT}")" \
-        "$(wc -l < "${OUTPUT_DIR}/${EN_SUGGESTIONS}")"
-
-    printf '%-24s %12s %12s\n' \
-        'de-de' \
-        "$(wc -l < "${OUTPUT_DIR}/${DE_DICT}")" \
-        "$(wc -l < "${OUTPUT_DIR}/${DE_SUGGESTIONS}")"
-
-    printf '\n'
-
-    printf '%-24s %12s\n' \
-        'Language' \
-        'Delete mappings'
-
-    printf '%-24s %12s\n' \
-        'es-AR' \
-        "${ES_DELETE_COUNT}"
-
-    printf '%-24s %12s\n' \
-        'en-en' \
-        "${EN_DELETE_COUNT}"
-
-    printf '%-24s %12s\n' \
-        'de-de' \
-        "${DE_DELETE_COUNT}"
-
-    printf '%-24s %12s\n' \
-        'GLOBAL' \
-        "${GLOBAL_DELETE_COUNT}"
-
-    printf '\n'
-}
-
-size_report
-
-###############################################################################
-# Final output summary
-###############################################################################
-
-log "Dictionary generation completed successfully."
-
-printf '\n'
-printf '%s\n' 'Generated files:'
-
-printf '  %s\n' "${OUTPUT_DIR}/${ES_DICT}"
-printf '  %s\n' "${OUTPUT_DIR}/${ES_SUGGESTIONS}"
-printf '  %s\n' "${OUTPUT_DIR}/${ES_DELETES}"
-
-printf '  %s\n' "${OUTPUT_DIR}/${EN_DICT}"
-printf '  %s\n' "${OUTPUT_DIR}/${EN_SUGGESTIONS}"
-printf '  %s\n' "${OUTPUT_DIR}/${EN_DELETES}"
-
-printf '  %s\n' "${OUTPUT_DIR}/${DE_DICT}"
-printf '  %s\n' "${OUTPUT_DIR}/${DE_SUGGESTIONS}"
-printf '  %s\n' "${OUTPUT_DIR}/${DE_DELETES}"
-
-printf '\n'
-printf '%s\n' 'AOSP sources:'
-printf '  en-en <- %s\n' "${EN_SOURCE}"
-printf '  de-de <- %s\n' "${DE_SOURCE}"
-printf '  es-AR <- %s\n' "${ES_SOURCE}"
-
-printf '\n'
-printf '%s\n' 'Dictionary V2 guarantees:'
-printf '  - AOSP Combined is the authoritative vocabulary source.'
-printf '  - AOSP frequency is used for suggestion ranking.'
-printf '  - not_a_word entries are excluded.'
-printf '  - Delete keys never become vocabulary entries.'
-printf '  - Deletes are generated only from the final .dict.'
-printf '  - Suggestions are generated independently from deletes.'
-printf '  - Spanish accent regressions are explicitly tested.'
-printf '  - Required regional vocabulary is explicitly tested.'
-printf '  - No per-word Hunspell validation is performed.'
-printf '  - No FrequencyWords corpus entries are blindly promoted to .dict.'
-printf '  - No Leipzig corpus entries are blindly promoted to .dict.'
-printf '\n'
 ```
