@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 
 set -euo pipefail
@@ -5,21 +6,31 @@ set -euo pipefail
 # PocketBoard dictionary generator
 #
 # Design goals:
-#   - Unicode/NFC-safe vocabulary (no accent stripping)
-#   - frequency-first vocabulary plus curated mandatory words
-#   - complete Hunspell validation before anything reaches .dict
-#   - edit-distance deletes generated ONLY from validated words
-#   - distance-2 correction coverage concentrated on high-value words
+#   - Unicode/NFC-safe vocabulary
+#   - NEVER strip Spanish accents/diacritics
+#   - frequency-first vocabulary
+#   - curated mandatory vocabulary
+#   - complete Hunspell validation before .dict generation
+#   - deletes generated ONLY from validated .dict words
+#   - distance-2 deletes concentrated on high-value words
 #   - strict token validation
 #   - explicit Spanish (Argentina) voseo/diacritic regressions
 #
-# IMPORTANT:
-# The runtime dictionary format is intentionally unchanged:
-#   .dict    = header + one validated word per line
-#   .deletes = header + delete<TAB>validated-target mappings
+# Runtime format remains unchanged:
 #
-# Do not add frequency metadata or new fields here unless the
-# PocketBoard runtime parser is changed at the same time.
+#   .dict
+#       #POCKETBOARD-DICT-1
+#       word
+#       word
+#
+#   .deletes
+#       #POCKETBOARD-DELETES-1
+#       ...
+#       delete<TAB>validated-target
+#
+# IMPORTANT:
+# Delete keys are search/correction keys only.
+# They are NEVER fed back into candidate generation.
 
 export LC_ALL=C
 export LANG=C
@@ -55,7 +66,6 @@ DE_DELETE_BUDGET=2500000
 
 GLOBAL_DELETE_BUDGET=7500000
 
-# Maximum entries read from frequency sources.
 SOURCE_MAX_ENTRIES=500000
 
 # ============================================================
@@ -70,19 +80,9 @@ MAX_DELETE_WORD_LENGTH=24
 
 MAX_CANDIDATES_PER_DELETE=3
 
-# ------------------------------------------------------------
-# Vocabulary tiers
-#
-# The runtime .dict format has no frequency field, so we do not
-# invent one here. Instead:
-#
-#   1. frequency sources provide the normal vocabulary/ranking
-#   2. CORE_WORDS are guaranteed candidates if Hunspell accepts
-#   3. PRIORITY_WORDS receive edit-distance 2 delete generation
-#
-# This improves correction coverage without changing the runtime
-# dictionary format.
-# ------------------------------------------------------------
+# ============================================================
+# CORE VOCABULARY
+# ============================================================
 
 CORE_ES_AR_WORDS=(
     "a"
@@ -134,7 +134,6 @@ CORE_ES_AR_WORDS=(
     "sí"
     "sobre"
     "sos"
-    "también"
     "tenés"
     "tengo"
     "tiempo"
@@ -365,8 +364,6 @@ require_command() {
         echo "Command:"
         echo "  ${command_name}"
         echo ""
-        echo "This script cannot continue."
-        echo ""
         exit 1
     fi
 }
@@ -383,26 +380,10 @@ require_command cut
 require_command python3
 require_command tar
 require_command find
+require_command comm
 
 # ============================================================
 # HUNSPELL
-# ============================================================
-#
-# IMPORTANT:
-#
-# We do NOT assume that the GitHub Actions runner has Hunspell.
-#
-# Missing Hunspell must never produce:
-#
-#   command not found
-#   exit code 127
-#
-# Instead, fail explicitly with exit code 1.
-#
-# Hunspell is used in batch mode later to validate candidates
-# against the complete .dic + .aff dictionary.
-#
-# Hunspell's -G option prints only accepted/correct words.
 # ============================================================
 
 if ! command -v hunspell >/dev/null 2>&1; then
@@ -412,16 +393,14 @@ if ! command -v hunspell >/dev/null 2>&1; then
     echo " ERROR: Hunspell is not installed"
     echo "============================================================"
     echo ""
-    echo "The dictionary generator requires the Hunspell executable."
+    echo "Install Hunspell in the GitHub Actions workflow."
     echo ""
-    echo "Install Hunspell in the GitHub Actions workflow before"
-    echo "running this Gradle task."
-    echo ""
-    echo "Example for Ubuntu:"
+    echo "Ubuntu:"
     echo ""
     echo "  sudo apt-get update"
     echo "  sudo apt-get install -y hunspell"
     echo ""
+
     exit 1
 fi
 
@@ -433,9 +412,7 @@ echo "  ${HUNSPELL_BIN}"
 
 if ! "${HUNSPELL_BIN}" -v >/dev/null 2>&1; then
     echo ""
-    echo "ERROR: Hunspell executable was found but could not be executed."
-    echo "Path:"
-    echo "  ${HUNSPELL_BIN}"
+    echo "ERROR: Hunspell executable could not be executed."
     exit 1
 fi
 
@@ -599,18 +576,10 @@ maximum_entries = int(sys.argv[3])
 seen = set()
 count = 0
 
-with open(
-    source,
-    encoding="utf-8",
-    errors="replace"
-) as f, open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
+with open(source, encoding="utf-8", errors="replace") as f, \
+     open(destination, "w", encoding="utf-8") as out:
 
     for raw in f:
-
         line = raw.strip()
 
         if not line:
@@ -621,21 +590,15 @@ with open(
         if not parts:
             continue
 
-        word = parts[0].strip().lower()
-
         word = unicodedata.normalize(
             "NFC",
-            word
+            parts[0].strip().lower()
         )
 
-        if not word:
-            continue
-
-        if word in seen:
+        if not word or word in seen:
             continue
 
         seen.add(word)
-
         out.write(word + "\n")
 
         count += 1
@@ -643,9 +606,7 @@ with open(
         if count >= maximum_entries:
             break
 
-print(
-    f"Normalized frequency entries: {count}"
-)
+print(f"Normalized frequency entries: {count}")
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -684,14 +645,9 @@ maximum_entries = int(sys.argv[3])
 seen = set()
 entries = []
 
-with open(
-    source,
-    encoding="utf-8",
-    errors="replace"
-) as f:
+with open(source, encoding="utf-8", errors="replace") as f:
 
     for raw in f:
-
         line = raw.strip()
 
         if not line:
@@ -705,7 +661,6 @@ with open(
         word = None
 
         for part in parts:
-
             token = part.strip()
 
             if not token:
@@ -723,8 +678,8 @@ with open(
 
         word = unicodedata.normalize(
             "NFC",
-            word
-        ).lower()
+            word.lower()
+        )
 
         if word in seen:
             continue
@@ -735,18 +690,11 @@ with open(
         if len(entries) >= maximum_entries:
             break
 
-with open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
-
+with open(destination, "w", encoding="utf-8") as out:
     for word in entries:
         out.write(word + "\n")
 
-print(
-    f"Normalized Leipzig entries: {len(entries)}"
-)
+print(f"Normalized Leipzig entries: {len(entries)}")
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -771,15 +719,6 @@ normalize_frequency_leipzig \
 
 # ============================================================
 # EXTRACT HUNSPELL BASE WORDS
-#
-# IMPORTANT:
-#
-# These are only an additional candidate source.
-#
-# They are NOT treated as the complete valid vocabulary.
-#
-# The actual validation happens later against the complete
-# .dic + .aff pair using Hunspell.
 # ============================================================
 
 extract_hunspell_base_words() {
@@ -804,20 +743,12 @@ destination = sys.argv[2]
 seen = set()
 count = 0
 
-with open(
-    source,
-    encoding="utf-8",
-    errors="replace"
-) as f, open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
+with open(source, encoding="utf-8", errors="replace") as f, \
+     open(destination, "w", encoding="utf-8") as out:
 
     first = True
 
     for raw in f:
-
         line = raw.strip()
 
         if not line:
@@ -834,27 +765,19 @@ with open(
         else:
             word = line
 
-        word = word.strip().lower()
-
         word = unicodedata.normalize(
             "NFC",
-            word
+            word.strip().lower()
         )
 
-        if not word:
-            continue
-
-        if word in seen:
+        if not word or word in seen:
             continue
 
         seen.add(word)
-
         out.write(word + "\n")
         count += 1
 
-print(
-    f"Hunspell base words: {count}"
-)
+print(f"Hunspell base words: {count}")
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -883,16 +806,7 @@ extract_hunspell_base_words \
     "${DE_DIR}/hunspell.base"
 
 # ============================================================
-# CURATED CORE VOCABULARY
-# ============================================================
-#
-# These words are not trusted blindly. They are added as
-# candidates and MUST still pass the complete Hunspell .dic+.aff
-# validation later.
-#
-# The lists are deliberately small and focused on common words
-# plus Spanish (Argentina) voseo/diacritic forms that should not
-# disappear just because an upstream frequency source changes.
+# CORE WORDS
 # ============================================================
 
 write_core_words() {
@@ -912,7 +826,7 @@ write_core_words() {
             printf '%s\n' "${CORE_DE_WORDS[@]}" > "${output}"
             ;;
         *)
-            echo "ERROR: unknown core vocabulary language: ${language}"
+            echo "ERROR: unknown language: ${language}"
             exit 1
             ;;
     esac
@@ -929,6 +843,14 @@ write_core_words "de-de" "${DE_DIR}/core.txt"
 
 # ============================================================
 # BUILD CANDIDATES
+#
+# FIX:
+# Python receives ALL four input arguments explicitly:
+#
+#   argv[1] = frequency
+#   argv[2] = core
+#   argv[3] = hunspell base
+#   argv[4] = output
 # ============================================================
 
 build_candidates() {
@@ -945,6 +867,7 @@ build_candidates() {
 
     python3 - \
         "${frequency}" \
+        "${core}" \
         "${hunspell}" \
         "${output}" <<'PY'
 import sys
@@ -965,9 +888,6 @@ def valid_token(word):
     if not word:
         return False
 
-    # Unicode letters are allowed, including áéíóúüñ, äöü, ß, etc.
-    # NFC is applied before this check. Do NOT ASCII-fold or strip
-    # accents: the accented spelling is the real dictionary word.
     if not any(char.isalpha() for char in word):
         return False
 
@@ -977,13 +897,16 @@ def valid_token(word):
     previous_punctuation = False
 
     for char in word:
+
         if char.isalpha():
             previous_punctuation = False
             continue
 
         if char in "'’-":
+
             if previous_punctuation:
                 return False
+
             previous_punctuation = True
             continue
 
@@ -994,19 +917,16 @@ def valid_token(word):
 seen = set()
 count = 0
 
-with open(
-    output_file,
-    "w",
-    encoding="utf-8"
-) as out:
+with open(output_file, "w", encoding="utf-8") as out:
 
     # --------------------------------------------------------
-    # Frequency vocabulary first.
+    # Frequency vocabulary
     # --------------------------------------------------------
 
     with open(
         frequency_file,
-        encoding="utf-8"
+        encoding="utf-8",
+        errors="replace"
     ) as f:
 
         for raw in f:
@@ -1020,21 +940,17 @@ with open(
                 continue
 
             seen.add(word)
-
             out.write(word + "\n")
             count += 1
 
     # --------------------------------------------------------
-    # Curated core vocabulary.
-    #
-    # Added AFTER the frequency list so normal frequency order is
-    # preserved. A core word only gets into .dict if Hunspell
-    # accepts it later.
+    # Core vocabulary
     # --------------------------------------------------------
 
     with open(
         core_file,
-        encoding="utf-8"
+        encoding="utf-8",
+        errors="replace"
     ) as f:
 
         for raw in f:
@@ -1052,14 +968,13 @@ with open(
             count += 1
 
     # --------------------------------------------------------
-    # Hunspell base vocabulary afterwards.
-    #
-    # These words are still candidates only.
+    # Hunspell base candidates
     # --------------------------------------------------------
 
     with open(
         hunspell_file,
-        encoding="utf-8"
+        encoding="utf-8",
+        errors="replace"
     ) as f:
 
         for raw in f:
@@ -1073,13 +988,10 @@ with open(
                 continue
 
             seen.add(word)
-
             out.write(word + "\n")
             count += 1
 
-print(
-    f"Candidate vocabulary: {count}"
-)
+print(f"Candidate vocabulary: {count}")
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -1114,41 +1026,7 @@ build_candidates \
     "${DE_DIR}/candidates.txt"
 
 # ============================================================
-# BASIC CANDIDATE DIAGNOSTICS
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Candidate diagnostics"
-echo "============================================================"
-
-for language in es-AR en-en de-de; do
-
-    candidates="${WORK_DIR}/${language}/candidates.txt"
-
-    echo ""
-    echo "${language}"
-    echo "  Candidates: $(wc -l < "${candidates}")"
-
-done
-
-# ============================================================
-# END OF PART 1
-# ============================================================
-#
-# PART 2 CONTINUES WITH:
-#
-#   validate_candidates_with_hunspell()
-#   write_dictionary()
-#   generate_delete_index()
-#   generate_metadata()
-#   diagnostics
-#   validation
-#   final size report
-#
-# ============================================================
-# ============================================================
-# HUNSPELL BATCH VALIDATION
+# HUNSPELL VALIDATION
 # ============================================================
 
 validate_candidates_with_hunspell() {
@@ -1170,26 +1048,8 @@ validate_candidates_with_hunspell() {
     echo " Validating vocabulary with Hunspell: ${language}"
     echo "============================================================"
 
-    echo "Dictionary:"
-    echo "  ${dictionary_base}.dic"
-    echo "  ${dictionary_base}.aff"
-
     echo "Candidates:"
-    echo "  ${candidates}"
-
-    echo "Candidate count:"
     echo "  $(wc -l < "${candidates}")"
-
-    # --------------------------------------------------------
-    # IMPORTANT
-    #
-    # One Hunspell process for the complete candidate list.
-    #
-    # This avoids launching Hunspell hundreds of thousands
-    # of times.
-    #
-    # -G = print only correct/accepted words.
-    # --------------------------------------------------------
 
     "${HUNSPELL_BIN}" \
         -G \
@@ -1200,21 +1060,12 @@ validate_candidates_with_hunspell() {
     if [[ ! -s "${accepted_raw}" ]]; then
         echo ""
         echo "ERROR: Hunspell accepted no candidates."
-        echo "Language:"
-        echo "  ${language}"
+        echo "Language: ${language}"
         exit 1
     fi
 
     echo "Hunspell accepted:"
     echo "  $(wc -l < "${accepted_raw}")"
-
-    # --------------------------------------------------------
-    # Restore the original frequency order.
-    #
-    # Hunspell's output is used only as a validity filter.
-    #
-    # The candidate order remains authoritative for priority.
-    # --------------------------------------------------------
 
     python3 - \
         "${candidates}" \
@@ -1256,11 +1107,12 @@ with open(
     candidates_file,
     encoding="utf-8",
     errors="replace"
-) as source, open(
-    output_file,
-    "w",
-    encoding="utf-8"
-) as out:
+) as source, \
+     open(
+         output_file,
+         "w",
+         encoding="utf-8"
+     ) as out:
 
     for raw in source:
 
@@ -1283,12 +1135,9 @@ with open(
         seen.add(word)
 
         out.write(word + "\n")
-
         count += 1
 
-print(
-    f"Validated vocabulary: {count}"
-)
+print(f"Validated vocabulary: {count}")
 PY
 
     if [[ ! -s "${output}" ]]; then
@@ -1302,10 +1151,6 @@ PY
     echo "Validated words:"
     echo "  $(wc -l < "${output}")"
 }
-
-# ============================================================
-# VALIDATE ALL THREE LANGUAGES
-# ============================================================
 
 validate_candidates_with_hunspell \
     "es-AR" \
@@ -1326,7 +1171,7 @@ validate_candidates_with_hunspell \
     "${DE_DIR}/validated.txt"
 
 # ============================================================
-# WRITE RUNTIME DICTIONARIES
+# WRITE DICTIONARIES
 # ============================================================
 
 write_dictionary() {
@@ -1380,32 +1225,26 @@ write_dictionary \
 # DELETE INDEX
 #
 # IMPORTANT:
+# The ONLY source is the already validated .dict.
 #
-# Deletes are generated ONLY from validated vocabulary.
+# Therefore:
 #
-# A delete key is NOT a dictionary word.
+#   candidates -> Hunspell -> validated .dict -> deletes
 #
-# Example:
+# NEVER:
 #
-#   dictionary:
-#       mañana
+#   candidates -> deletes
 #
-#   delete key:
-#       manana
+# and NEVER:
 #
-# The key "manana" can exist inside .deletes because it is an
-# intentionally generated search key.
-#
-# It will NEVER be written to .dict unless Hunspell itself
-# accepted "manana".
+#   deletes -> candidates/.dict
 # ============================================================
 
 generate_delete_index() {
     local language="$1"
     local dictionary="$2"
-    local priority_words="$3"
-    local output="$4"
-    local budget="$5"
+    local output="$3"
+    local budget="$4"
 
     local words_file
     local pairs_file
@@ -1428,24 +1267,8 @@ generate_delete_index() {
     echo "Budget:"
     echo "  ${budget} bytes"
 
-    echo "Distance 2 words:"
-    echo "  ${TOP_DISTANCE2_WORDS}"
-
-    echo "Maximum word length:"
-    echo "  ${MAX_DELETE_WORD_LENGTH}"
-
-    echo "Maximum candidates/delete:"
-    echo "  ${MAX_CANDIDATES_PER_DELETE}"
-
-    # --------------------------------------------------------
-    # ONLY VALIDATED WORDS.
-    #
-    # Do NOT change this to candidates.txt.
-    # --------------------------------------------------------
-
-    cp \
-        "${dictionary}" \
-        "${WORK_DIR}/${language}.dictionary.for.delete"
+    echo "Distance-2 vocabulary:"
+    echo "  ${TOP_DISTANCE2_WORDS} highest-priority validated words"
 
     tail -n +2 \
         "${dictionary}" \
@@ -1458,10 +1281,6 @@ generate_delete_index() {
         exit 1
     fi
 
-    # --------------------------------------------------------
-    # Header size
-    # --------------------------------------------------------
-
     header_bytes="$(
         printf \
             "#POCKETBOARD-DELETES-1\n#MAX_DISTANCE=%s\n#MAX_WORD_LENGTH=%s\n#MAX_CANDIDATES=%s\n" \
@@ -1471,31 +1290,14 @@ generate_delete_index() {
         wc -c
     )"
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # Simple Bash arithmetic only.
-    #
-    # This avoids the previous:
-    #
-    #   budget: command not found
-    #
-    # error.
-    # --------------------------------------------------------
-
     mapping_budget=$((budget - header_bytes))
 
     if (( mapping_budget <= 0 )); then
         echo ""
-        echo "ERROR: delete budget is smaller than the header."
-        echo "Budget:"
-        echo "  ${budget}"
-        echo "Header:"
-        echo "  ${header_bytes}"
+        echo "ERROR: delete budget is smaller than header."
         exit 1
     fi
 
-    echo ""
     echo "Header bytes:"
     echo "  ${header_bytes}"
 
@@ -1503,7 +1305,15 @@ generate_delete_index() {
     echo "  ${mapping_budget}"
 
     # --------------------------------------------------------
-    # Generate delete mappings.
+    # FIXED ARGUMENT ORDER
+    #
+    # argv[1] words
+    # argv[2] output
+    # argv[3] budget
+    # argv[4] top distance-2 words
+    # argv[5] max distance
+    # argv[6] max word length
+    # argv[7] max candidates
     # --------------------------------------------------------
 
     python3 - \
@@ -1517,20 +1327,15 @@ generate_delete_index() {
 import sys
 
 words_file = sys.argv[1]
-priority_file = sys.argv[2]
-output_file = sys.argv[3]
-budget = int(sys.argv[4])
-top_distance2_words = int(sys.argv[5])
-max_distance = int(sys.argv[6])
-max_word_length = int(sys.argv[7])
-max_candidates = int(sys.argv[8])
+output_file = sys.argv[2]
+budget = int(sys.argv[3])
+top_distance2_words = int(sys.argv[4])
+max_distance = int(sys.argv[5])
+max_word_length = int(sys.argv[6])
+max_candidates = int(sys.argv[7])
 
 def generate_deletes(word, distance):
     result = set()
-
-    if distance <= 0:
-        return result
-
     current_level = {word}
 
     for _ in range(distance):
@@ -1559,18 +1364,6 @@ def generate_deletes(word, distance):
 
     return result
 
-priority_words = set()
-
-with open(
-    priority_file,
-    encoding="utf-8",
-    errors="replace"
-) as f:
-    for raw in f:
-        word = raw.strip()
-        if word:
-            priority_words.add(word)
-
 words = []
 
 with open(
@@ -1596,10 +1389,7 @@ for rank, word in enumerate(words):
     if len(word) > max_word_length:
         continue
 
-    if (
-        rank < top_distance2_words
-        or word in priority_words
-    ):
+    if rank < top_distance2_words:
         distance = min(
             2,
             max_distance
@@ -1654,17 +1444,9 @@ with open(
             out.write(word)
             out.write("\n")
 
-print(
-    f"Delete keys: {len(buckets)}"
-)
-
-print(
-    f"Mappings: {accepted_mappings}"
-)
-
-print(
-    f"Mapping bytes: {used_bytes}"
-)
+print(f"Delete keys: {len(buckets)}")
+print(f"Mappings: {accepted_mappings}")
+print(f"Mapping bytes: {used_bytes}")
 PY
 
     if [[ ! -s "${pairs_file}" ]]; then
@@ -1674,36 +1456,13 @@ PY
         exit 1
     fi
 
-    # --------------------------------------------------------
-    # Write final delete file.
-    # --------------------------------------------------------
-
     {
         printf '%s\n' "#POCKETBOARD-DELETES-1"
-
-        printf '%s\n' \
-            "#MAX_DISTANCE=${MAX_DELETE_DISTANCE}"
-
-        printf '%s\n' \
-            "#MAX_WORD_LENGTH=${MAX_DELETE_WORD_LENGTH}"
-
-        printf '%s\n' \
-            "#MAX_CANDIDATES=${MAX_CANDIDATES_PER_DELETE}"
-
+        printf '%s\n' "#MAX_DISTANCE=${MAX_DELETE_DISTANCE}"
+        printf '%s\n' "#MAX_WORD_LENGTH=${MAX_DELETE_WORD_LENGTH}"
+        printf '%s\n' "#MAX_CANDIDATES=${MAX_CANDIDATES_PER_DELETE}"
         cat "${pairs_file}"
-
     } > "${output}"
-
-    # --------------------------------------------------------
-    # Size / mapping statistics.
-    #
-    # Every assignment is a normal Bash assignment.
-    #
-    # No accidental:
-    #
-    #   variable: command not found
-    #
-    # --------------------------------------------------------
 
     local size
     local mappings
@@ -1782,46 +1541,25 @@ generate_metadata() {
         printf '%s\n' "#POCKETBOARD-META-1"
 
         printf '%s\n' "# REP"
-
-        grep -E '^REP([[:space:]]|$)' \
-            "${aff}" ||
-            true
+        grep -E '^REP([[:space:]]|$)' "${aff}" || true
 
         printf '%s\n' "# KEY"
-
-        grep -E '^KEY([[:space:]]|$)' \
-            "${aff}" ||
-            true
+        grep -E '^KEY([[:space:]]|$)' "${aff}" || true
 
         printf '%s\n' "# TRY"
-
-        grep -E '^TRY([[:space:]]|$)' \
-            "${aff}" ||
-            true
+        grep -E '^TRY([[:space:]]|$)' "${aff}" || true
 
         printf '%s\n' "# PHONE"
-
-        grep -E '^PHONE([[:space:]]|$)' \
-            "${aff}" ||
-            true
+        grep -E '^PHONE([[:space:]]|$)' "${aff}" || true
 
         printf '%s\n' "# ph"
-
-        grep -E '^ph:' \
-            "${aff}" ||
-            true
+        grep -E '^ph:' "${aff}" || true
 
         printf '%s\n' "# NOSUGGEST"
-
-        grep -E '^NOSUGGEST([[:space:]]|$)' \
-            "${aff}" ||
-            true
+        grep -E '^NOSUGGEST([[:space:]]|$)' "${aff}" || true
 
         printf '%s\n' "# SUBSTANDARD"
-
-        grep -E '^SUBSTANDARD([[:space:]]|$)' \
-            "${aff}" ||
-            true
+        grep -E '^SUBSTANDARD([[:space:]]|$)' "${aff}" || true
 
     } > "${output}"
 
@@ -1857,11 +1595,7 @@ check_word() {
     local word="$2"
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
-    if grep \
-        -Fqx \
-        "${word}" \
-        <(tail -n +2 "${dictionary}")
-    then
+    if grep -Fqx "${word}" <(tail -n +2 "${dictionary}"); then
         echo "OK: ${language}: ${word}"
     else
         echo "WARNING: word not selected"
@@ -1875,11 +1609,7 @@ check_word_absent() {
     local word="$2"
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
-    if grep \
-        -Fqx \
-        "${word}" \
-        <(tail -n +2 "${dictionary}")
-    then
+    if grep -Fqx "${word}" <(tail -n +2 "${dictionary}"); then
         echo "ERROR: invalid word selected"
         echo "  Language: ${language}"
         echo "  Word:     ${word}"
@@ -1893,10 +1623,6 @@ echo ""
 echo "============================================================"
 echo " Word diagnostics"
 echo "============================================================"
-
-# ------------------------------------------------------------
-# Spanish
-# ------------------------------------------------------------
 
 check_word "es-AR" "mañana"
 check_word "es-AR" "pasaría"
@@ -1920,45 +1646,54 @@ check_word "es-AR" "qué"
 check_word "es-AR" "cuándo"
 check_word "es-AR" "dónde"
 
-# These should NOT become dictionary words merely because they
-# are useful typo/delete keys.
+# The unaccented spelling must NOT be injected merely because
+# "mañana" produces "manana" as a delete key.
 
 check_word_absent "es-AR" "manana"
 
-
-# ------------------------------------------------------------
-# Unicode regression checks
-# ------------------------------------------------------------
-#
-# NFC is the canonical storage form. This verifies that accented
-# Spanish words are present in composed Unicode form and that no
-# non-NFC entry slipped into the runtime dictionary.
-# ------------------------------------------------------------
+# ============================================================
+# NFC VALIDATION
+# ============================================================
 
 check_nfc_word() {
     local language="$1"
     local word="$2"
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
-    if python3 -         "${dictionary}"         "${word}" <<'PY'
+    if python3 - \
+        "${dictionary}" \
+        "${word}" <<'PY'
 import sys
 import unicodedata
 
 dictionary = sys.argv[1]
 word = sys.argv[2]
-target = unicodedata.normalize("NFC", word)
+
+target = unicodedata.normalize(
+    "NFC",
+    word
+)
 
 found = False
 has_non_nfc = False
 
-with open(dictionary, encoding="utf-8", errors="replace") as f:
+with open(
+    dictionary,
+    encoding="utf-8",
+    errors="replace"
+) as f:
+
     for raw in f:
+
         value = raw.rstrip("\n\r")
 
         if value == target:
             found = True
 
-        if value and value != unicodedata.normalize("NFC", value):
+        if value and value != unicodedata.normalize(
+            "NFC",
+            value
+        ):
             has_non_nfc = True
 
 if not found:
@@ -1968,15 +1703,20 @@ if has_non_nfc:
     raise SystemExit(2)
 PY
     then
+
         echo "OK: NFC: ${language}: ${word}"
+
     else
+
         status=$?
+
         if (( status == 2 )); then
             echo "ERROR: non-NFC dictionary entry found: ${language}"
             exit 1
         fi
 
-        echo "ERROR: NFC regression check failed: ${language}: ${word}"
+        echo "ERROR: NFC regression check failed:"
+        echo "  ${language}: ${word}"
         exit 1
     fi
 }
@@ -1996,9 +1736,9 @@ check_nfc_word "es-AR" "estás"
 check_nfc_word "es-AR" "acá"
 check_nfc_word "es-AR" "allá"
 
-# ------------------------------------------------------------
-# English
-# ------------------------------------------------------------
+# ============================================================
+# ENGLISH
+# ============================================================
 
 check_word "en-en" "the"
 check_word "en-en" "have"
@@ -2006,9 +1746,9 @@ check_word "en-en" "hello"
 
 check_word_absent "en-en" "helo"
 
-# ------------------------------------------------------------
-# German
-# ------------------------------------------------------------
+# ============================================================
+# GERMAN
+# ============================================================
 
 check_word "de-de" "ich"
 check_word "de-de" "nicht"
@@ -2018,7 +1758,7 @@ check_word "de-de" "wahrscheinlich"
 check_word "de-de" "möglicherweise"
 
 # ============================================================
-# VALIDATE GENERATED ASSETS
+# GENERATED ASSET VALIDATION
 # ============================================================
 
 validate_generated_asset() {
@@ -2051,6 +1791,14 @@ validate_generated_asset() {
 
 # ============================================================
 # VALIDATE DICTIONARY TOKENS
+#
+# FIX:
+# The input file is passed as an explicit Python argument.
+# This avoids the broken:
+#
+#   tail ... | python3 - <<'PY'
+#
+# combination, where the heredoc replaces stdin.
 # ============================================================
 
 validate_dictionary_tokens() {
@@ -2065,44 +1813,63 @@ validate_dictionary_tokens() {
     echo ""
     echo "Checking dictionary format: ${language}"
 
-    tail -n +2 "${dictionary}" |
-        python3 - > "${invalid_file}" <<'PY'
+    python3 - \
+        "${dictionary}" \
+        > "${invalid_file}" <<'PY'
 import sys
 
-for line in sys.stdin:
-    word = line.rstrip("\n\r")
+dictionary = sys.argv[1]
 
-    if not word:
-        continue
+with open(
+    dictionary,
+    encoding="utf-8",
+    errors="replace"
+) as f:
 
-    if not any(char.isalpha() for char in word):
-        print(word)
-        continue
+    first = True
 
-    if word[0] in "'’-" or word[-1] in "'’-":
-        print(word)
-        continue
+    for raw in f:
 
-    previous_punctuation = False
-    valid = True
+        word = raw.rstrip("\n\r")
 
-    for char in word:
-        if char.isalpha():
-            previous_punctuation = False
+        if first:
+            first = False
             continue
 
-        if char in "'’-":
-            if previous_punctuation:
-                valid = False
-                break
-            previous_punctuation = True
+        if not word:
             continue
 
-        valid = False
-        break
+        if not any(char.isalpha() for char in word):
+            print(word)
+            continue
 
-    if not valid:
-        print(word)
+        if word[0] in "'’-" or word[-1] in "'’-":
+            print(word)
+            continue
+
+        previous_punctuation = False
+        valid = True
+
+        for char in word:
+
+            if char.isalpha():
+                previous_punctuation = False
+                continue
+
+            if char in "'’-":
+
+                if previous_punctuation:
+                    valid = False
+                    break
+
+                previous_punctuation = True
+                continue
+
+            valid = False
+            break
+
+        if not valid:
+            print(word)
 PY
 
     local invalid_count
@@ -2157,9 +1924,7 @@ done
 # ============================================================
 # VERIFY DELETE TARGETS
 #
-# Every target word referenced by .deletes MUST exist in .dict.
-#
-# Delete keys themselves do NOT have to exist in .dict.
+# Every target in .deletes MUST exist in .dict.
 # ============================================================
 
 validate_delete_targets() {
@@ -2195,13 +1960,12 @@ validate_delete_targets() {
 
     echo ""
     echo "Delete target validation: ${language}"
-    echo "  Unique targets: ${targets}"
     echo "  Invalid targets: ${invalid_count}"
 
     if (( invalid_count > 0 )); then
 
         echo ""
-        echo "ERROR: delete index references words that are not in .dict:"
+        echo "ERROR: delete index references words not in .dict:"
         head -n 50 "${invalid_targets}"
 
         exit 1
@@ -2220,18 +1984,13 @@ validate_delete_targets \
     "${OUTPUT_DIR}/en-en.dict" \
     "${OUTPUT_DIR}/en-en.deletes"
 
-validate_delete_targets     "de-de"     "${OUTPUT_DIR}/de-de.dict"     "${OUTPUT_DIR}/de-de.deletes"
+validate_delete_targets \
+    "de-de" \
+    "${OUTPUT_DIR}/de-de.dict" \
+    "${OUTPUT_DIR}/de-de.deletes"
 
 # ============================================================
-# VERIFY DELETE KEYS ARE NOT BEING ADDED AS WORDS
-# ============================================================
-#
-# A delete key may legitimately also be a real word. That is not
-# an error: it can be a valid word and a valid typo/search key.
-#
-# The important invariant is that delete generation only flows
-# from validated .dict words. No delete key is ever fed back into
-# candidate generation or .dict generation.
+# VERIFY DELETE KEYS DO NOT FEED BACK INTO DICT
 # ============================================================
 
 report_delete_key_overlaps() {
@@ -2248,30 +2007,196 @@ report_delete_key_overlaps() {
     overlaps="${WORK_DIR}/${language}.overlap.result"
 
     tail -n +2 "${dictionary}" |
-        sort -u > "${dictionary_words}"
+        sort -u \
+        > "${dictionary_words}"
 
     tail -n +5 "${deletes}" |
         cut -f1 |
-        sort -u > "${delete_keys}"
+        sort -u \
+        > "${delete_keys}"
 
-    comm -12         "${dictionary_words}"         "${delete_keys}"         > "${overlaps}"
+    comm -12 \
+        "${dictionary_words}" \
+        "${delete_keys}" \
+        > "${overlaps}"
 
     echo ""
     echo "Delete-key/dictionary overlap: ${language}"
     echo "  Overlapping keys: $(wc -l < "${overlaps}")"
 
     if [[ -s "${overlaps}" ]]; then
-        echo "  Note: overlap is allowed when the key is independently a real word."
-        echo "  Examples:"
+
+        echo "  Note: overlap is allowed when the key is independently"
+        echo "  a real dictionary word."
+
         head -n 10 "${overlaps}"
     fi
 }
 
-report_delete_key_overlaps     "es-AR"     "${OUTPUT_DIR}/es-AR.dict"     "${OUTPUT_DIR}/es-AR.deletes"
+report_delete_key_overlaps \
+    "es-AR" \
+    "${OUTPUT_DIR}/es-AR.dict" \
+    "${OUTPUT_DIR}/es-AR.deletes"
 
-report_delete_key_overlaps     "en-en"     "${OUTPUT_DIR}/en-en.dict"     "${OUTPUT_DIR}/en-en.deletes"
+report_delete_key_overlaps \
+    "en-en" \
+    "${OUTPUT_DIR}/en-en.dict" \
+    "${OUTPUT_DIR}/en-en.deletes"
 
-report_delete_key_overlaps     "de-de"     "${OUTPUT_DIR}/de-de.dict"     "${OUTPUT_DIR}/de-de.deletes"
+report_delete_key_overlaps \
+    "de-de" \
+    "${OUTPUT_DIR}/de-de.dict" \
+    "${OUTPUT_DIR}/de-de.deletes"
+
+# ============================================================
+# VERIFY DELETE FORMAT
+# ============================================================
+
+validate_delete_format() {
+    local language="$1"
+    local deletes="$2"
+    local invalid_file
+
+    invalid_file="${WORK_DIR}/${language}.invalid.delete.format"
+
+    rm -f "${invalid_file}"
+
+    tail -n +5 "${deletes}" |
+        python3 - \
+            > "${invalid_file}" <<'PY'
+import sys
+
+for raw in sys.stdin:
+    line = raw.rstrip("\n\r")
+
+    if not line:
+        continue
+
+    parts = line.split("\t")
+
+    if len(parts) != 2:
+        print(line)
+        continue
+
+    delete, target = parts
+
+    if not delete or not target:
+        print(line)
+        continue
+
+    if not any(char.isalpha() for char in delete):
+        print(line)
+        continue
+
+    if not any(char.isalpha() for char in target):
+        print(line)
+        continue
+PY
+
+    local invalid_count
+    invalid_count="$(wc -l < "${invalid_file}")"
+
+    echo ""
+    echo "Delete format validation: ${language}"
+    echo "  Invalid mappings: ${invalid_count}"
+
+    if (( invalid_count > 0 )); then
+        head -n 50 "${invalid_file}"
+        exit 1
+    fi
+
+    echo "OK: ${language}.deletes format"
+}
+
+# NOTE:
+# Unlike dictionary validation, this Python invocation deliberately
+# reads stdin. There is NO heredoc here.
+
+validate_delete_format() {
+    local language="$1"
+    local deletes="$2"
+    local invalid_file
+
+    invalid_file="${WORK_DIR}/${language}.invalid.delete.format"
+
+    rm -f "${invalid_file}"
+
+    python3 - \
+        "${deletes}" \
+        > "${invalid_file}" <<'PY'
+import sys
+
+deletes_file = sys.argv[1]
+
+with open(
+    deletes_file,
+    encoding="utf-8",
+    errors="replace"
+) as f:
+
+    first = True
+
+    for raw in f:
+
+        line = raw.rstrip("\n\r")
+
+        if first:
+            first = False
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        parts = line.split("\t")
+
+        if len(parts) != 2:
+            print(line)
+            continue
+
+        delete, target = parts
+
+        if not delete or not target:
+            print(line)
+            continue
+
+        if not any(char.isalpha() for char in delete):
+            print(line)
+            continue
+
+        if not any(char.isalpha() for char in target):
+            print(line)
+            continue
+PY
+
+    local invalid_count
+
+    invalid_count="$(wc -l < "${invalid_file}")"
+
+    echo ""
+    echo "Delete format validation: ${language}"
+    echo "  Invalid mappings: ${invalid_count}"
+
+    if (( invalid_count > 0 )); then
+        echo ""
+        echo "ERROR: invalid delete mappings:"
+        head -n 50 "${invalid_file}"
+        exit 1
+    fi
+
+    echo "OK: ${language}.deletes format"
+}
+
+validate_delete_format \
+    "es-AR" \
+    "${OUTPUT_DIR}/es-AR.deletes"
+
+validate_delete_format \
+    "en-en" \
+    "${OUTPUT_DIR}/en-en.deletes"
+
+validate_delete_format \
+    "de-de" \
+    "${OUTPUT_DIR}/de-de.deletes"
 
 # ============================================================
 # FINAL SIZE REPORT
@@ -2296,39 +2221,48 @@ do
     deletes="${OUTPUT_DIR}/${language}.deletes"
     metadata="${OUTPUT_DIR}/${language}.meta"
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # These are Bash variable assignments.
-    #
-    # They are intentionally written as:
-    #
-    #   dictionary_size="$(...)"
-    #
-    # and NOT:
-    #
-    #   dictionary_size
-    #
-    # which was the cause of the previous exit 127.
-    # --------------------------------------------------------
-
     dictionary_size="$(wc -c < "${dictionary}")"
-
     delete_size="$(wc -c < "${deletes}")"
-
     metadata_size="$(wc -c < "${metadata}")"
 
-    dictionary_words="$(tail -n +2 "${dictionary}" | wc -l)"
+    dictionary_words="$(
+        tail -n +2 "${dictionary}" |
+        wc -l
+    )"
 
-    delete_mappings="$(tail -n +5 "${deletes}" | wc -l)"
+    delete_mappings="$(
+        tail -n +5 "${deletes}" |
+        wc -l
+    )"
 
-    language_total=$((         dictionary_size +         delete_size +         metadata_size     ))
+    language_total=$(
+        (
+            dictionary_size +
+            delete_size +
+            metadata_size
+        )
+    )
 
-    TOTAL_DICTIONARY_BYTES=$((         TOTAL_DICTIONARY_BYTES +         dictionary_size     ))
+    TOTAL_DICTIONARY_BYTES=$(
+        (
+            TOTAL_DICTIONARY_BYTES +
+            dictionary_size
+        )
+    )
 
-    TOTAL_DELETE_BYTES=$((         TOTAL_DELETE_BYTES +         delete_size     ))
+    TOTAL_DELETE_BYTES=$(
+        (
+            TOTAL_DELETE_BYTES +
+            delete_size
+        )
+    )
 
-    TOTAL_METADATA_BYTES=$((         TOTAL_METADATA_BYTES +         metadata_size     ))
+    TOTAL_METADATA_BYTES=$(
+        (
+            TOTAL_METADATA_BYTES +
+            metadata_size
+        )
+    )
 
     echo ""
     echo "${language}"
@@ -2341,9 +2275,21 @@ do
 
 done
 
-TOTAL_GENERATED_BYTES=$((     TOTAL_DICTIONARY_BYTES +     TOTAL_DELETE_BYTES +     TOTAL_METADATA_BYTES ))
+TOTAL_GENERATED_BYTES=$(
+    (
+        TOTAL_DICTIONARY_BYTES +
+        TOTAL_DELETE_BYTES +
+        TOTAL_METADATA_BYTES
+    )
+)
 
-TOTAL_MIB=$((     TOTAL_GENERATED_BYTES /     1024 /     1024 ))
+TOTAL_MIB=$(
+    (
+        TOTAL_GENERATED_BYTES /
+        1024 /
+        1024
+    )
+)
 
 echo ""
 echo "============================================================"
@@ -2408,9 +2354,11 @@ do
     fi
 
     echo "OK: ${language}"
+
 done
 
 echo ""
 echo "============================================================"
 echo " Dictionary generation completed successfully"
 echo "============================================================"
+```
