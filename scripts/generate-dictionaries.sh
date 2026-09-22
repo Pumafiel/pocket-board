@@ -1581,6 +1581,14 @@ done
 
 ###############################################################################
 # Install generated dictionaries into Android assets
+#
+# IMPORTANT:
+# Gradle validatePocketBoardDictionaries expects the dictionary files
+# directly inside:
+#
+#   app/src/main/assets/dictionaries/
+#
+# Therefore we DO NOT create per-language subdirectories here.
 ###############################################################################
 
 separator
@@ -1593,17 +1601,66 @@ mkdir -p "$ASSETS_ROOT"
 
 for lang in "${LANGUAGES[@]}"; do
 
-    mkdir -p "${ASSETS_ROOT}/${lang}"
+    SOURCE_DICT="${OUTPUT_ROOT}/${lang}/${lang}.dict"
+    SOURCE_DELETES="${OUTPUT_ROOT}/${lang}/${lang}.deletes"
+
+    TARGET_DICT="${ASSETS_ROOT}/${lang}.dict"
+    TARGET_DELETES="${ASSETS_ROOT}/${lang}.deletes"
+
+    [[ -s "$SOURCE_DICT" ]] ||
+        die "Generated dictionary missing before installation: ${SOURCE_DICT}"
+
+    [[ -s "$SOURCE_DELETES" ]] ||
+        die "Generated deletes missing before installation: ${SOURCE_DELETES}"
 
     cp \
-        "${OUTPUT_ROOT}/${lang}/${lang}.dict" \
-        "${ASSETS_ROOT}/${lang}/${lang}.dict"
+        "$SOURCE_DICT" \
+        "$TARGET_DICT"
 
     cp \
-        "${OUTPUT_ROOT}/${lang}/${lang}.deletes" \
-        "${ASSETS_ROOT}/${lang}/${lang}.deletes"
+        "$SOURCE_DELETES" \
+        "$TARGET_DELETES"
+
+    log "Installed ${lang}:"
+    log "  ${TARGET_DICT}"
+    log "  ${TARGET_DELETES}"
 
 done
+
+###############################################################################
+# Final asset validation
+###############################################################################
+
+separator
+log "Validating installed Android assets"
+separator
+
+for lang in "${LANGUAGES[@]}"; do
+
+    DICT_ASSET="${ASSETS_ROOT}/${lang}.dict"
+    DELETES_ASSET="${ASSETS_ROOT}/${lang}.deletes"
+
+    [[ -s "$DICT_ASSET" ]] ||
+        die "Asset missing: ${DICT_ASSET}"
+
+    [[ -s "$DELETES_ASSET" ]] ||
+        die "Asset missing: ${DELETES_ASSET}"
+
+done
+
+###############################################################################
+# Verify there are no unexpected per-language directories
+###############################################################################
+
+for lang in "${LANGUAGES[@]}"; do
+
+    if [[ -d "${ASSETS_ROOT}/${lang}" ]]; then
+        die "Unexpected language asset directory remains: ${ASSETS_ROOT}/${lang}"
+    fi
+
+done
+
+log "Android asset validation completed successfully."
 
 ###############################################################################
 # Final asset validation
