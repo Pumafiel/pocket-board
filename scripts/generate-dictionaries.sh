@@ -1095,18 +1095,21 @@ PY
 build_candidates \
     "es-AR" \
     "${ES_DIR}/frequency.normalized" \
+    "${ES_DIR}/core.txt" \
     "${ES_DIR}/hunspell.base" \
     "${ES_DIR}/candidates.txt"
 
 build_candidates \
     "en-en" \
     "${EN_DIR}/frequency.normalized" \
+    "${EN_DIR}/core.txt" \
     "${EN_DIR}/hunspell.base" \
     "${EN_DIR}/candidates.txt"
 
 build_candidates \
     "de-de" \
     "${DE_DIR}/frequency.normalized" \
+    "${DE_DIR}/core.txt" \
     "${DE_DIR}/hunspell.base" \
     "${DE_DIR}/candidates.txt"
 
