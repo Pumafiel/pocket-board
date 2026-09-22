@@ -1422,11 +1422,7 @@ size_report() {
         echo "  total:    ${language_total} bytes"
     done
 
-    total_generated_bytes=$(
-        total_dictionary_bytes +
-        total_delete_bytes +
-        total_metadata_bytes
-    )
+    total_generated_bytes=$((total_dictionary_bytes + total_delete_bytes + total_metadata_bytes))
 
     total_mib=$((total_generated_bytes / 1024 / 1024))
 
