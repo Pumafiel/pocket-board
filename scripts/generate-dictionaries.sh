@@ -2,100 +2,122 @@
 
 set -euo pipefail
 
-# ============================================================
+###############################################################################
 # PocketBoard dictionary generator
 #
+# Hunspell is used ONLY as a vocabulary source.
+# It is NOT used to validate candidates word by word.
+#
+# Pipeline:
+#
+#   Hunspell .dic
+#        +
+#   Frequency sources
+#        +
+#   Curated/core vocabulary
+#        ↓
+#   Unicode NFC normalization
+#        ↓
+#   Strict token filtering
+#        ↓
+#   Deduplication
+#        ↓
+#   validated.txt
+#        ↓
+#   .dict
+#        ↓
+#   .deletes
+#
 # Design goals:
-#   - Unicode/NFC-safe vocabulary
-#   - NEVER strip Spanish accents/diacritics
-#   - Frequency-first vocabulary
-#   - Curated mandatory/core vocabulary
-#   - Complete Hunspell validation before .dict generation
-#   - UTF-8 explicitly passed to Hunspell
-#   - Spanish Argentina / voseo support
-#   - Delete keys generated ONLY from validated .dict words
-#   - Delete keys are NEVER fed back into candidate generation
-#   - Strict token validation
-#   - Stable runtime asset format
-# ============================================================
+#   - Preserve Unicode and accents.
+#   - Never strip diacritics.
+#   - Preserve Argentine Spanish voseo.
+#   - Keep mandatory/core vocabulary.
+#   - Keep Hunspell as a source, not a validator.
+#   - Generate delete keys ONLY from final dictionary words.
+#   - Never feed delete keys back into vocabulary generation.
+#   - Produce deterministic output.
+#   - Fail early when an expected intermediate file is missing.
+###############################################################################
 
-set -euo pipefail
+export LANG="C.UTF-8"
+export LC_ALL="C.UTF-8"
 
-# ------------------------------------------------------------
-# Locale
-# ------------------------------------------------------------
-
-export LC_ALL=C.UTF-8
-export LANG=C.UTF-8
-
-# ------------------------------------------------------------
+###############################################################################
 # Paths
-# ------------------------------------------------------------
+###############################################################################
 
-ROOT_DIR="$(
-    cd "$(dirname "${BASH_SOURCE[0]}")/.." &&
-    pwd
-)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 WORK_DIR="${ROOT_DIR}/build/pocketboard-dictionaries"
 OUTPUT_DIR="${ROOT_DIR}/app/src/main/assets/dictionaries"
 
-WOOORM_BASE="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries"
+HUNSPELL_SOURCE_BASE="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries"
 FREQUENCY_BASE="https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018"
 LEIPZIG_BASE="https://downloads.wortschatz-leipzig.de/corpora"
 
-ES_DIR="${WORK_DIR}/es-AR"
-EN_DIR="${WORK_DIR}/en-en"
-DE_DIR="${WORK_DIR}/de-de"
+###############################################################################
+# Languages
+###############################################################################
 
-mkdir -p "${ES_DIR}"
-mkdir -p "${EN_DIR}"
-mkdir -p "${DE_DIR}"
-mkdir -p "${OUTPUT_DIR}"
+LANGUAGES=(
+    "es-AR"
+    "en-en"
+    "de-de"
+)
 
-# ============================================================
-# TARGETS
-# ============================================================
+declare -A HUNSPELL_LANGUAGE=(
+    ["es-AR"]="es"
+    ["en-en"]="en"
+    ["de-de"]="de"
+)
 
+declare -A FREQUENCY_LANGUAGE=(
+    ["es-AR"]="es"
+    ["en-en"]="en"
+)
+
+###############################################################################
+# Limits
+###############################################################################
+
+# Maximum number of vocabulary words retained per language.
+SOURCE_MAX_ENTRIES=500000
+
+# Delete budgets.
 ES_DELETE_BUDGET=2500000
 EN_DELETE_BUDGET=2500000
 DE_DELETE_BUDGET=2500000
 
 GLOBAL_DELETE_BUDGET=7500000
 
-# Maximum entries read from frequency sources.
-SOURCE_MAX_ENTRIES=500000
-
-# ============================================================
-# DELETE POLICY
-# ============================================================
-
+# Distance-2 correction is intentionally concentrated on the highest-priority
+# part of the final vocabulary.
 TOP_DISTANCE2_WORDS=15000
 
 MAX_DELETE_DISTANCE=2
-
 MAX_DELETE_WORD_LENGTH=24
-
 MAX_CANDIDATES_PER_DELETE=3
 
-# ============================================================
-# CORE VOCABULARY
+###############################################################################
+# Core Spanish Argentina vocabulary
 #
-# These words are mandatory.
+# These words are added directly to the final vocabulary.
 #
-# Spanish deliberately contains accented forms and Argentine
-# voseo forms. Do NOT add unaccented variants such as "manana"
-# as replacements for "mañana".
-# ============================================================
+# IMPORTANT:
+#   - Accents are intentionally preserved.
+#   - Argentine voseo forms are explicitly included.
+#   - "manana" is intentionally NOT included.
+###############################################################################
 
 CORE_ES_AR_WORDS=(
     "a"
-    "al"
-    "algo"
-    "alguien"
-    "ahora"
-    "allá"
     "acá"
+    "ahora"
+    "algo"
+    "al"
+    "alguien"
+    "allá"
     "también"
     "bien"
     "cada"
@@ -103,12 +125,17 @@ CORE_ES_AR_WORDS=(
     "cómo"
     "cuando"
     "cuándo"
-    "dónde"
-    "donde"
     "debería"
+    "decir"
     "decís"
     "día"
     "días"
+    "donde"
+    "dónde"
+    "el"
+    "en"
+    "es"
+    "estar"
     "estás"
     "este"
     "esto"
@@ -126,18 +153,23 @@ CORE_ES_AR_WORDS=(
     "nunca"
     "para"
     "pasaría"
+    "poder"
     "podés"
     "porque"
     "por"
     "qué"
+    "querer"
     "querés"
+    "saber"
     "sabés"
     "sé"
+    "sentís"
     "ser"
     "si"
     "sí"
     "sobre"
     "sos"
+    "tener"
     "tenés"
     "tengo"
     "tiempo"
@@ -147,20 +179,17 @@ CORE_ES_AR_WORDS=(
     "tú"
     "una"
     "uno"
+    "venir"
+    "venís"
     "vos"
     "voy"
     "ya"
     "yo"
-    "venís"
-    "sentís"
-    "decir"
-    "venir"
-    "estar"
-    "tener"
-    "poder"
-    "querer"
-    "saber"
 )
+
+###############################################################################
+# Core English vocabulary
+###############################################################################
 
 CORE_EN_WORDS=(
     "a"
@@ -268,6 +297,10 @@ CORE_EN_WORDS=(
     "your"
 )
 
+###############################################################################
+# Core German vocabulary
+###############################################################################
+
 CORE_DE_WORDS=(
     "aber"
     "alle"
@@ -352,2010 +385,1075 @@ CORE_DE_WORDS=(
     "wahrscheinlich"
 )
 
-# ============================================================
-# REQUIRED COMMANDS
-# ============================================================
+###############################################################################
+# Required commands
+###############################################################################
 
 require_command() {
     local command_name="$1"
 
     if ! command -v "${command_name}" >/dev/null 2>&1; then
-        echo ""
-        echo "============================================================"
-        echo " ERROR: required command is missing"
-        echo "============================================================"
-        echo ""
-        echo "Command:"
-        echo "  ${command_name}"
-        echo ""
+        echo "ERROR: Required command not found: ${command_name}" >&2
         exit 1
     fi
 }
 
-require_command curl
-require_command sort
-require_command grep
-require_command sed
-require_command tr
-require_command head
-require_command tail
-require_command wc
-require_command cut
-require_command tar
-require_command find
-require_command comm
-require_command python3
+for command_name in \
+    curl \
+    sort \
+    grep \
+    sed \
+    tr \
+    head \
+    tail \
+    wc \
+    cut \
+    tar \
+    find \
+    python3
+do
+    require_command "${command_name}"
+done
 
-# ============================================================
-# HUNSPELL
-# ============================================================
+###############################################################################
+# Logging
+###############################################################################
 
-if ! command -v hunspell >/dev/null 2>&1; then
-
-    echo ""
+print_section() {
+    echo
     echo "============================================================"
-    echo " ERROR: Hunspell is not installed"
+    echo " $1"
     echo "============================================================"
-    echo ""
-    echo "The dictionary generator requires the Hunspell executable."
-    echo ""
-    echo "Install Hunspell in GitHub Actions before running Gradle."
-    echo ""
-    echo "Example:"
-    echo ""
-    echo "  sudo apt-get update"
-    echo "  sudo apt-get install -y hunspell"
-    echo ""
+    echo
+}
 
-    exit 1
-fi
+###############################################################################
+# Download helper
+###############################################################################
 
-HUNSPELL_BIN="$(command -v hunspell)"
-
-echo ""
-echo "Hunspell executable:"
-echo "  ${HUNSPELL_BIN}"
-
-if ! "${HUNSPELL_BIN}" -v >/dev/null 2>&1; then
-
-    echo ""
-    echo "ERROR: Hunspell executable was found but could not be executed."
-    echo "Path:"
-    echo "  ${HUNSPELL_BIN}"
-
-    exit 1
-fi
-
-echo ""
-echo "Hunspell:"
-"${HUNSPELL_BIN}" -v || true
-
-# ============================================================
-# DOWNLOAD
-# ============================================================
-
-download() {
+download_file() {
     local url="$1"
     local destination="$2"
 
-    echo ""
+    mkdir -p "$(dirname "${destination}")"
+
     echo "Downloading:"
     echo "  ${url}"
+    echo "  -> ${destination}"
 
     curl \
         --fail \
-        --location \
         --silent \
         --show-error \
-        --retry 4 \
+        --location \
+        --retry 3 \
         --retry-delay 2 \
         --connect-timeout 30 \
         --max-time 300 \
-        -A "PocketBoard-Build" \
-        -o "${destination}" \
-        "${url}"
+        "${url}" \
+        -o "${destination}"
 
     if [[ ! -s "${destination}" ]]; then
-
-        echo ""
-        echo "ERROR: empty download:"
-        echo "  ${destination}"
-
+        echo "ERROR: Downloaded file is empty:" >&2
+        echo "  ${destination}" >&2
         exit 1
     fi
 }
 
-# ============================================================
-# DOWNLOAD HUNSPELL DICTIONARIES
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Downloading Hunspell dictionaries"
-echo "============================================================"
-
-download \
-    "${WOOORM_BASE}/es-AR/index.dic" \
-    "${ES_DIR}/index.dic"
-
-download \
-    "${WOOORM_BASE}/es-AR/index.aff" \
-    "${ES_DIR}/index.aff"
-
-download \
-    "${WOOORM_BASE}/en/index.dic" \
-    "${EN_DIR}/index.dic"
-
-download \
-    "${WOOORM_BASE}/en/index.aff" \
-    "${EN_DIR}/index.aff"
-
-download \
-    "${WOOORM_BASE}/de/index.dic" \
-    "${DE_DIR}/index.dic"
-
-download \
-    "${WOOORM_BASE}/de/index.aff" \
-    "${DE_DIR}/index.aff"
-
-# ============================================================
-# DOWNLOAD FREQUENCY SOURCES
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Downloading frequency sources"
-echo "============================================================"
-
-download \
-    "${FREQUENCY_BASE}/es/es_full.txt" \
-    "${ES_DIR}/frequency.txt"
-
-download \
-    "${FREQUENCY_BASE}/en/en_full.txt" \
-    "${EN_DIR}/frequency.txt"
-
-# ============================================================
-# LEIPZIG GERMAN
-# ============================================================
-
-LEIPZIG_ARCHIVE="${DE_DIR}/deu_news_2025_1M.tar.gz"
-LEIPZIG_DIR="${DE_DIR}/leipzig"
-
-download \
-    "${LEIPZIG_BASE}/deu_news_2025_1M.tar.gz" \
-    "${LEIPZIG_ARCHIVE}"
-
-rm -rf "${LEIPZIG_DIR}"
-
-mkdir -p "${LEIPZIG_DIR}"
-
-echo ""
-echo "============================================================"
-echo " Extracting Leipzig German frequency list"
-echo "============================================================"
-
-tar \
-    -xzf "${LEIPZIG_ARCHIVE}" \
-    -C "${LEIPZIG_DIR}"
-
-# IMPORTANT:
-# Do not use "find | head" here.
-# With set -o pipefail, find can receive SIGPIPE from head.
-LEIPZIG_WORDS_FILE="$(
-    find \
-        "${LEIPZIG_DIR}" \
-        -type f \
-        -name '*-words.txt' \
-        -print \
-        -quit
-)"
-
-if [[ -z "${LEIPZIG_WORDS_FILE}" ]]; then
-
-    echo ""
-    echo "ERROR: Leipzig word-frequency file not found."
-
-    find \
-        "${LEIPZIG_DIR}" \
-        -maxdepth 4 \
-        -type f \
-        -print
-
-    exit 1
-fi
-
-echo ""
-echo "Leipzig frequency file:"
-echo "  ${LEIPZIG_WORDS_FILE}"
-
-# ============================================================
-# NORMALIZE FREQUENCYWORDS
-# ============================================================
-
-normalize_frequency_frequencywords() {
-
-    local input="$1"
-    local output="$2"
-
-    echo ""
-    echo "Normalizing frequency list:"
-    echo "  ${input}"
-
-    python3 \
-        - "${input}" \
-        "${output}" \
-        "${SOURCE_MAX_ENTRIES}" \
-        <<'PY'
-import sys
-import unicodedata
-
-source = sys.argv[1]
-destination = sys.argv[2]
-maximum_entries = int(sys.argv[3])
-
-seen = set()
-count = 0
-
-with open(
-    source,
-    encoding="utf-8",
-    errors="replace"
-) as f, open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
-
-    for raw in f:
-
-        line = raw.strip()
-
-        if not line:
-            continue
-
-        parts = line.split()
-
-        if not parts:
-            continue
-
-        word = parts[0].strip().lower()
-
-        word = unicodedata.normalize(
-            "NFC",
-            word
-        )
-
-        if not word:
-            continue
-
-        if word in seen:
-            continue
-
-        seen.add(word)
-
-        out.write(word + "\n")
-
-        count += 1
-
-        if count >= maximum_entries:
-            break
-
-print(
-    f"Normalized frequency entries: {count}"
-)
-PY
-
-    if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: normalized frequency list is empty:"
-        echo "  ${input}"
-
-        exit 1
-    fi
-
-    echo "Entries: $(wc -l < "${output}")"
-}
-
-# ============================================================
-# NORMALIZE LEIPZIG
-# ============================================================
-
-normalize_frequency_leipzig() {
-
-    local input="$1"
-    local output="$2"
-
-    echo ""
-    echo "Normalizing Leipzig frequency list:"
-    echo "  ${input}"
-
-    python3 \
-        - "${input}" \
-        "${output}" \
-        "${SOURCE_MAX_ENTRIES}" \
-        <<'PY'
-import sys
-import unicodedata
-
-source = sys.argv[1]
-destination = sys.argv[2]
-maximum_entries = int(sys.argv[3])
-
-seen = set()
-entries = []
-
-with open(
-    source,
-    encoding="utf-8",
-    errors="replace"
-) as f:
-
-    for raw in f:
-
-        line = raw.strip()
-
-        if not line:
-            continue
-
-        parts = line.split()
-
-        if not parts:
-            continue
-
-        word = None
-
-        for part in parts:
-
-            token = part.strip()
-
-            if not token:
-                continue
-
-            try:
-                float(token.replace(",", "."))
-                continue
-            except ValueError:
-                word = token
-                break
-
-        if word is None:
-            continue
-
-        word = unicodedata.normalize(
-            "NFC",
-            word
-        ).lower()
-
-        if word in seen:
-            continue
-
-        seen.add(word)
-        entries.append(word)
-
-        if len(entries) >= maximum_entries:
-            break
-
-with open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
-
-    for word in entries:
-        out.write(word + "\n")
-
-print(
-    f"Normalized Leipzig entries: {len(entries)}"
-)
-PY
-
-    if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: normalized Leipzig frequency list is empty:"
-        echo "  ${input}"
-
-        exit 1
-    fi
-}
-
-normalize_frequency_frequencywords \
-    "${ES_DIR}/frequency.txt" \
-    "${ES_DIR}/frequency.normalized"
-
-normalize_frequency_frequencywords \
-    "${EN_DIR}/frequency.txt" \
-    "${EN_DIR}/frequency.normalized"
-
-normalize_frequency_leipzig \
-    "${LEIPZIG_WORDS_FILE}" \
-    "${DE_DIR}/frequency.normalized"
-
-# ============================================================
-# EXTRACT HUNSPELL BASE WORDS
-# ============================================================
-
-extract_hunspell_base_words() {
-
+###############################################################################
+# Download Hunspell source dictionaries
+###############################################################################
+
+download_hunspell_dictionary() {
     local language="$1"
-    local dic="$2"
-    local output="$3"
+    local source_language="${HUNSPELL_LANGUAGE[${language}]}"
+    local language_dir="${WORK_DIR}/${language}"
 
-    echo ""
-    echo "============================================================"
-    echo " Extracting Hunspell base words: ${language}"
-    echo "============================================================"
+    mkdir -p "${language_dir}/hunspell"
 
-    python3 \
-        - "${dic}" \
-        "${output}" \
-        <<'PY'
+    download_file \
+        "${HUNSPELL_SOURCE_BASE}/${source_language}/index.dic" \
+        "${language_dir}/hunspell/index.dic"
+
+    download_file \
+        "${HUNSPELL_SOURCE_BASE}/${source_language}/index.aff" \
+        "${language_dir}/hunspell/index.aff"
+}
+
+###############################################################################
+# Download FrequencyWords source
+###############################################################################
+
+download_frequency_dictionary() {
+    local language="$1"
+    local source_language="${FREQUENCY_LANGUAGE[${language}]}"
+    local language_dir="${WORK_DIR}/${language}"
+
+    mkdir -p "${language_dir}/frequency"
+
+    download_file \
+        "${FREQUENCY_BASE}/${source_language}/${source_language}_full.txt" \
+        "${language_dir}/frequency/${source_language}_full.txt"
+}
+
+###############################################################################
+# Download German Leipzig source
+###############################################################################
+
+download_german_frequency() {
+    local language_dir="${WORK_DIR}/de-de"
+    local archive="${language_dir}/frequency/deu_news_2025_1M.tar.gz"
+    local extract_dir="${language_dir}/frequency/leipzig"
+
+    mkdir -p "${extract_dir}"
+
+    download_file \
+        "${LEIPZIG_BASE}/deu_news_2025_1M.tar.gz" \
+        "${archive}"
+
+    tar \
+        -xzf "${archive}" \
+        -C "${extract_dir}"
+
+    if ! find "${extract_dir}" -type f -print -quit | grep -q .; then
+        echo "ERROR: Leipzig archive contains no usable files." >&2
+        exit 1
+    fi
+}
+
+###############################################################################
+# Token validation
+###############################################################################
+
+normalize_and_filter() {
+    local input_file="$1"
+    local output_file="$2"
+
+    python3 - "${input_file}" "${output_file}" <<'PY'
 import sys
 import unicodedata
 
 source = sys.argv[1]
 destination = sys.argv[2]
-
-seen = set()
-count = 0
-
-with open(
-    source,
-    encoding="utf-8",
-    errors="replace"
-) as f, open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
-
-    first = True
-
-    for raw in f:
-
-        line = raw.strip()
-
-        if not line:
-            continue
-
-        if first:
-
-            first = False
-
-            if line.isdigit():
-                continue
-
-        if "/" in line:
-            word = line.split("/", 1)[0]
-        else:
-            word = line
-
-        word = word.strip().lower()
-
-        word = unicodedata.normalize(
-            "NFC",
-            word
-        )
-
-        if not word:
-            continue
-
-        if word in seen:
-            continue
-
-        seen.add(word)
-
-        out.write(word + "\n")
-
-        count += 1
-
-print(
-    f"Hunspell base words: {count}"
-)
-PY
-
-    if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: Hunspell base word extraction produced no words:"
-        echo "  ${language}"
-
-        exit 1
-    fi
-
-    echo "Base words: $(wc -l < "${output}")"
-}
-
-extract_hunspell_base_words \
-    "es-AR" \
-    "${ES_DIR}/index.dic" \
-    "${ES_DIR}/hunspell.base"
-
-extract_hunspell_base_words \
-    "en-en" \
-    "${EN_DIR}/index.dic" \
-    "${EN_DIR}/hunspell.base"
-
-extract_hunspell_base_words \
-    "de-de" \
-    "${DE_DIR}/index.dic" \
-    "${DE_DIR}/hunspell.base"
-
-# ============================================================
-# WRITE CORE WORD LISTS
-# ============================================================
-
-printf '%s\n' \
-    "${CORE_ES_AR_WORDS[@]}" \
-    > "${ES_DIR}/core.txt"
-
-printf '%s\n' \
-    "${CORE_EN_WORDS[@]}" \
-    > "${EN_DIR}/core.txt"
-
-printf '%s\n' \
-    "${CORE_DE_WORDS[@]}" \
-    > "${DE_DIR}/core.txt"
-
-# ============================================================
-# BUILD CANDIDATES
-#
-# Order:
-#
-#   1. Frequency vocabulary
-#   2. Core vocabulary
-#   3. Hunspell base vocabulary
-#
-# Candidate order remains the priority order.
-# ============================================================
-
-build_candidates() {
-
-    local language="$1"
-    local frequency="$2"
-    local core="$3"
-    local hunspell="$4"
-    local output="$5"
-
-    echo ""
-    echo "============================================================"
-    echo " Building candidate vocabulary: ${language}"
-    echo "============================================================"
-
-    python3 \
-        - "${frequency}" \
-        "${core}" \
-        "${hunspell}" \
-        "${output}" \
-        <<'PY'
-import sys
-import unicodedata
-
-frequency_file = sys.argv[1]
-core_file = sys.argv[2]
-hunspell_file = sys.argv[3]
-output_file = sys.argv[4]
-
-
-def normalize(word):
-    return unicodedata.normalize(
-        "NFC",
-        word.strip().lower()
-    )
-
 
 def valid_token(word):
-
     if not word:
+        return False
+
+    if len(word) > 64:
+        return False
+
+    if any(ch.isspace() for ch in word):
+        return False
+
+    if any(ord(ch) < 32 for ch in word):
         return False
 
     has_letter = False
 
-    for char in word:
+    for ch in word:
+        category = unicodedata.category(ch)
 
-        if char.isalpha():
+        if ch.isalpha():
             has_letter = True
             continue
 
-        if char in "'’-":
+        if category.startswith("M"):
+            continue
+
+        if ch in ("'", "’", "-"):
             continue
 
         return False
 
     return has_letter
 
-
 seen = set()
-count = 0
 
-with open(
-    output_file,
-    "w",
-    encoding="utf-8"
-) as out:
+with open(source, "r", encoding="utf-8", errors="ignore") as src:
+    for line in src:
+        word = line.strip()
 
-    for source_file in (
-        frequency_file,
-        core_file,
-        hunspell_file,
-    ):
+        if not word:
+            continue
 
-        with open(
-            source_file,
-            encoding="utf-8",
-            errors="replace"
-        ) as f:
+        word = unicodedata.normalize("NFC", word)
+        word = word.lower()
 
-            for raw in f:
+        if valid_token(word):
+            seen.add(word)
 
-                word = normalize(raw)
-
-                if not valid_token(word):
-                    continue
-
-                if word in seen:
-                    continue
-
-                seen.add(word)
-
-                out.write(word + "\n")
-
-                count += 1
-
-print(
-    f"Candidate vocabulary: {count}"
-)
+with open(destination, "w", encoding="utf-8") as dst:
+    for word in sorted(seen):
+        dst.write(word + "\n")
 PY
-
-    if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: candidate vocabulary is empty:"
-        echo "  ${language}"
-
-        exit 1
-    fi
-
-    echo ""
-    echo "Candidate vocabulary:"
-    echo "  $(wc -l < "${output}")"
 }
 
-build_candidates \
-    "es-AR" \
-    "${ES_DIR}/frequency.normalized" \
-    "${ES_DIR}/core.txt" \
-    "${ES_DIR}/hunspell.base" \
-    "${ES_DIR}/candidates.txt"
+###############################################################################
+# Extract words from Hunspell .dic
+#
+# Hunspell flags are removed:
+#
+#   word/ABC
+#
+# becomes:
+#
+#   word
+#
+# The .aff file is NOT used for validation.
+###############################################################################
 
-build_candidates \
-    "en-en" \
-    "${EN_DIR}/frequency.normalized" \
-    "${EN_DIR}/core.txt" \
-    "${EN_DIR}/hunspell.base" \
-    "${EN_DIR}/candidates.txt"
+extract_hunspell_words() {
+    local dictionary_file="$1"
+    local output_file="$2"
 
-build_candidates \
-    "de-de" \
-    "${DE_DIR}/frequency.normalized" \
-    "${DE_DIR}/core.txt" \
-    "${DE_DIR}/hunspell.base" \
-    "${DE_DIR}/candidates.txt"
-
-# ============================================================
-# CREATE HUNSPELL CORE OVERLAY
-#
-# WHY:
-#
-# The upstream locale dictionary can legitimately lack a
-# specific mandatory word/form.
-#
-# Spanish Argentine voseo is especially important here:
-#
-#   podés
-#   tenés
-#   querés
-#   sabés
-#   hacés
-#   decís
-#   venís
-#   sentís
-#
-# Instead of bypassing Hunspell, we extend the dictionary with
-# exact mandatory words and then validate the complete candidate
-# list against the resulting Hunspell dictionary.
-#
-# This means mandatory words still pass through Hunspell.
-#
-# We DO NOT add typo variants such as:
-#
-#   manana
-#
-# Therefore "mañana" remains valid while "manana" remains
-# rejected.
-# ============================================================
-
-make_hunspell_overlay() {
-
-    local language="$1"
-    local source_dic="$2"
-    local core_file="$3"
-    local output_base="$4"
-
-    echo ""
-    echo "============================================================"
-    echo " Creating Hunspell core overlay: ${language}"
-    echo "============================================================"
-
-    python3 \
-        - "${source_dic}" \
-        "${core_file}" \
-        "${output_base}.dic" \
-        <<'PY'
+    python3 - "${dictionary_file}" "${output_file}" <<'PY'
 import sys
 import unicodedata
 
-source_dic = sys.argv[1]
-core_file = sys.argv[2]
-destination = sys.argv[3]
+source = sys.argv[1]
+destination = sys.argv[2]
 
-with open(
-    source_dic,
-    encoding="utf-8",
-    errors="replace"
-) as f:
-    lines = f.read().splitlines()
+def valid_token(word):
+    if not word:
+        return False
+
+    if len(word) > 64:
+        return False
+
+    if any(ch.isspace() for ch in word):
+        return False
+
+    if any(ord(ch) < 32 for ch in word):
+        return False
+
+    has_letter = False
+
+    for ch in word:
+        category = unicodedata.category(ch)
+
+        if ch.isalpha():
+            has_letter = True
+            continue
+
+        if category.startswith("M"):
+            continue
+
+        if ch in ("'", "’", "-"):
+            continue
+
+        return False
+
+    return has_letter
+
+with open(source, "r", encoding="utf-8", errors="ignore") as src:
+    lines = src.readlines()
 
 if not lines:
-    raise SystemExit(
-        "Hunspell dictionary is empty"
-    )
+    raise SystemExit("ERROR: Empty Hunspell dictionary")
 
-first = lines[0].strip()
+start = 1
 
-if first.isdigit():
-    original_count = int(first)
-    body = lines[1:]
-else:
-    original_count = len(lines)
-    body = lines
+# Standard Hunspell .dic files begin with an entry count.
+try:
+    int(lines[0].strip())
+except ValueError:
+    start = 0
 
-existing = set()
-
-for line in body:
-
-    line = line.strip()
-
-    if not line:
-        continue
-
-    word = line.split("/", 1)[0]
-
-    word = unicodedata.normalize(
-        "NFC",
-        word.lower()
-    )
-
-    existing.add(word)
-
-extra = []
-
-with open(
-    core_file,
-    encoding="utf-8",
-    errors="replace"
-) as f:
-
-    for raw in f:
-
-        word = unicodedata.normalize(
-            "NFC",
-            raw.strip().lower()
-        )
+with open(destination, "w", encoding="utf-8") as dst:
+    for line in lines[start:]:
+        word = line.strip()
 
         if not word:
             continue
 
-        if word in existing:
-            continue
+        # Remove Hunspell flags.
+        word = word.split("/", 1)[0]
 
-        existing.add(word)
-        extra.append(word)
+        word = unicodedata.normalize("NFC", word)
+        word = word.lower()
 
-with open(
-    destination,
-    "w",
-    encoding="utf-8"
-) as out:
-
-    out.write(
-        str(original_count + len(extra))
-    )
-    out.write("\n")
-
-    for line in body:
-
-        out.write(line)
-        out.write("\n")
-
-    for word in extra:
-
-        out.write(word)
-        out.write("\n")
-
-print(
-    f"Core overlay additions: {len(extra)}"
-)
+        if valid_token(word):
+            dst.write(word + "\n")
 PY
-
-    cp \
-        "${source_dic%/*}/index.aff" \
-        "${output_base}.aff"
-
-    if [[ ! -s "${output_base}.dic" ]]; then
-        echo "ERROR: Hunspell overlay .dic is empty: ${language}"
-        exit 1
-    fi
-
-    if [[ ! -s "${output_base}.aff" ]]; then
-        echo "ERROR: Hunspell overlay .aff is empty: ${language}"
-        exit 1
-    fi
 }
 
-make_hunspell_overlay \
-    "es-AR" \
-    "${ES_DIR}/index.dic" \
-    "${ES_DIR}/core.txt" \
-    "${ES_DIR}/combined"
+###############################################################################
+# Normalize FrequencyWords
+###############################################################################
 
-make_hunspell_overlay \
-    "en-en" \
-    "${EN_DIR}/index.dic" \
-    "${EN_DIR}/core.txt" \
-    "${EN_DIR}/combined"
+extract_frequency_words_frequencywords() {
+    local input_file="$1"
+    local output_file="$2"
 
-make_hunspell_overlay \
-    "de-de" \
-    "${DE_DIR}/index.dic" \
-    "${DE_DIR}/core.txt" \
-    "${DE_DIR}/combined"
+    python3 - "${input_file}" "${output_file}" <<'PY'
+import sys
+import unicodedata
 
-# ============================================================
-# HUNSPELL BATCH VALIDATION
-#
-# IMPORTANT:
-#
-# We use:
-#
-#   -a
-#   -i UTF-8
-#
-# instead of -G.
-#
-# -a gives one diagnostic result per input word:
-#
-#   *  accepted dictionary word
-#   +  accepted through affix/root analysis
-#   -  accepted compound
-#   &  rejected
-#   #  rejected
-#
-# This lets us preserve the ORIGINAL candidate line and its
-# original NFC representation rather than trying to reconstruct
-# vocabulary from Hunspell's filtered output.
-# ============================================================
+source = sys.argv[1]
+destination = sys.argv[2]
 
-validate_candidates_with_hunspell() {
+def valid_token(word):
+    if not word:
+        return False
 
+    if len(word) > 64:
+        return False
+
+    if any(ch.isspace() for ch in word):
+        return False
+
+    for ch in word:
+        category = unicodedata.category(ch)
+
+        if ch.isalpha():
+            continue
+
+        if category.startswith("M"):
+            continue
+
+        if ch in ("'", "’", "-"):
+            continue
+
+        return False
+
+    return any(ch.isalpha() for ch in word)
+
+with open(source, "r", encoding="utf-8", errors="ignore") as src, \
+     open(destination, "w", encoding="utf-8") as dst:
+
+    for line in src:
+        parts = line.strip().split()
+
+        if not parts:
+            continue
+
+        word = parts[0]
+
+        word = word.split("/", 1)[0]
+        word = unicodedata.normalize("NFC", word)
+        word = word.lower()
+
+        if valid_token(word):
+            dst.write(word + "\n")
+PY
+}
+
+###############################################################################
+# Normalize Leipzig German source
+###############################################################################
+
+extract_german_leipzig_words() {
+    local input_file="$1"
+    local output_file="$2"
+
+    python3 - "${input_file}" "${output_file}" <<'PY'
+import sys
+import unicodedata
+
+source = sys.argv[1]
+destination = sys.argv[2]
+
+def valid_token(word):
+    if not word:
+        return False
+
+    if len(word) > 64:
+        return False
+
+    if any(ch.isspace() for ch in word):
+        return False
+
+    for ch in word:
+        category = unicodedata.category(ch)
+
+        if ch.isalpha():
+            continue
+
+        if category.startswith("M"):
+            continue
+
+        if ch in ("'", "’", "-"):
+            continue
+
+        return False
+
+    return any(ch.isalpha() for ch in word)
+
+with open(source, "r", encoding="utf-8", errors="ignore") as src, \
+     open(destination, "w", encoding="utf-8") as dst:
+
+    for line in src:
+        parts = line.strip().split()
+
+        if not parts:
+            continue
+
+        # Leipzig word-frequency files generally contain several columns.
+        # Find the first valid lexical token.
+        selected = None
+
+        for part in parts:
+            candidate = unicodedata.normalize("NFC", part).lower()
+
+            if valid_token(candidate):
+                selected = candidate
+                break
+
+        if selected is not None:
+            dst.write(selected + "\n")
+PY
+}
+
+###############################################################################
+# Write core words
+###############################################################################
+
+write_core_words() {
     local language="$1"
-    local dictionary_base="$2"
-    local candidates="$3"
-    local output="$4"
+    local output_file="$2"
 
-    local status_file
-    local candidate_count
+    case "${language}" in
+        es-AR)
+            printf '%s\n' "${CORE_ES_AR_WORDS[@]}" > "${output_file}"
+            ;;
 
-    status_file="${WORK_DIR}/${language}.hunspell.status"
+        en-en)
+            printf '%s\n' "${CORE_EN_WORDS[@]}" > "${output_file}"
+            ;;
 
-    rm -f \
-        "${status_file}" \
-        "${output}"
+        de-de)
+            printf '%s\n' "${CORE_DE_WORDS[@]}" > "${output_file}"
+            ;;
 
-    echo ""
-    echo "============================================================"
-    echo " Validating vocabulary with Hunspell: ${language}"
-    echo "============================================================"
+        *)
+            echo "ERROR: Unknown language: ${language}" >&2
+            exit 1
+            ;;
+    esac
+}
 
-    echo ""
-    echo "Dictionary:"
-    echo "  ${dictionary_base}.dic"
-    echo "  ${dictionary_base}.aff"
+###############################################################################
+# Build final vocabulary
+###############################################################################
 
-    candidate_count="$(wc -l < "${candidates}")"
+build_candidate_vocabulary() {
+    local language="$1"
 
-    echo ""
-    echo "Candidates:"
-    echo "  ${candidate_count}"
+    local language_dir="${WORK_DIR}/${language}"
 
-    # --------------------------------------------------------
-    # One Hunspell process for the complete candidate list.
+    local hunspell_words="${language_dir}/hunspell-words.txt"
+    local frequency_words="${language_dir}/frequency-words.txt"
+    local core_words="${language_dir}/core-words.txt"
+
+    local raw_candidates="${language_dir}/raw-candidates.txt"
+    local normalized_candidates="${language_dir}/normalized-candidates.txt"
+    local final_vocabulary="${language_dir}/validated.txt"
+
+    print_section "Building candidate vocabulary: ${language}"
+
+    ###########################################################################
+    # Hunspell source
+    ###########################################################################
+
+    extract_hunspell_words \
+        "${language_dir}/hunspell/index.dic" \
+        "${hunspell_words}"
+
+    ###########################################################################
+    # Frequency source
+    ###########################################################################
+
+    case "${language}" in
+        es-AR)
+            extract_frequency_words_frequencywords \
+                "${language_dir}/frequency/es_full.txt" \
+                "${frequency_words}"
+            ;;
+
+        en-en)
+            extract_frequency_words_frequencywords \
+                "${language_dir}/frequency/en_full.txt" \
+                "${frequency_words}"
+            ;;
+
+        de-de)
+            local leipzig_file
+
+            leipzig_file="$(
+                find "${language_dir}/frequency/leipzig" \
+                    -type f \
+                    -print \
+                    -quit
+            )"
+
+            if [[ -z "${leipzig_file}" ]]; then
+                echo "ERROR: Could not locate German Leipzig frequency file." >&2
+                exit 1
+            fi
+
+            extract_german_leipzig_words \
+                "${leipzig_file}" \
+                "${frequency_words}"
+            ;;
+    esac
+
+    ###########################################################################
+    # Core vocabulary
+    ###########################################################################
+
+    write_core_words \
+        "${language}" \
+        "${core_words}"
+
+    ###########################################################################
+    # Combine sources
+    ###########################################################################
+
+    cat \
+        "${hunspell_words}" \
+        "${frequency_words}" \
+        "${core_words}" \
+        > "${raw_candidates}"
+
+    echo "Candidate vocabulary:"
+    wc -l < "${raw_candidates}"
+
+    ###########################################################################
+    # Normalize and deduplicate
+    ###########################################################################
+
+    normalize_and_filter \
+        "${raw_candidates}" \
+        "${normalized_candidates}"
+
+    ###########################################################################
+    # Frequency-first ordering
     #
-    # Explicit UTF-8 is important because LC_ALL=C can otherwise
-    # interact badly with Unicode input on CI systems.
-    # --------------------------------------------------------
+    # Frequency source gets priority.
+    # Hunspell source fills the remaining vocabulary.
+    # Core vocabulary is always retained.
+    ###########################################################################
 
-    "${HUNSPELL_BIN}" \
-        -a \
-        -i UTF-8 \
-        -d "${dictionary_base}" \
-        < "${candidates}" \
-        > "${status_file}"
-
-    if [[ ! -s "${status_file}" ]]; then
-
-        echo ""
-        echo "ERROR: Hunspell produced no diagnostic output:"
-        echo "  ${language}"
-
-        exit 1
-    fi
-
-    # --------------------------------------------------------
-    # Convert Hunspell's per-word statuses back into the
-    # original candidate vocabulary.
-    #
-    # We intentionally DO NOT use a set of Hunspell's output
-    # words. That was the source of the previous mismatch:
-    #
-    #   Candidates:       ~500k
-    #   Hunspell accepted: ~205k
-    #   Validated:        ~186k
-    #
-    # Status-based mapping preserves the original candidate.
-    # --------------------------------------------------------
-
-    python3 \
-        - "${candidates}" \
-        "${status_file}" \
-        "${output}" \
+    python3 - \
+        "${frequency_words}" \
+        "${hunspell_words}" \
+        "${core_words}" \
+        "${normalized_candidates}" \
+        "${final_vocabulary}" \
+        "${SOURCE_MAX_ENTRIES}" \
         <<'PY'
 import sys
 import unicodedata
 
-candidates_file = sys.argv[1]
-status_file = sys.argv[2]
-output_file = sys.argv[3]
-
+frequency_file = sys.argv[1]
+hunspell_file = sys.argv[2]
+core_file = sys.argv[3]
+normalized_file = sys.argv[4]
+output_file = sys.argv[5]
+limit = int(sys.argv[6])
 
 def normalize(word):
-    return unicodedata.normalize(
-        "NFC",
-        word.strip().lower()
-    )
+    return unicodedata.normalize("NFC", word.strip()).lower()
 
+def read_words(path):
+    result = []
 
-with open(
-    candidates_file,
-    encoding="utf-8",
-    errors="replace"
-) as f:
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            word = normalize(line)
 
-    candidates = [
-        normalize(line)
-        for line in f
-        if line.strip()
-    ]
+            if word:
+                result.append(word)
 
+    return result
 
-accepted_indexes = []
-
-status_count = 0
-
-started = False
-
-with open(
-    status_file,
-    encoding="utf-8",
-    errors="replace"
-) as f:
-
-    for raw in f:
-
-        line = raw.rstrip("\r\n")
-
-        # Hunspell prints a version/header line before the
-        # per-word diagnostics.
-        if not started:
-
-            if line.startswith(
-                ("*", "+", "-", "&", "#", "?")
-            ):
-                started = True
-            else:
-                continue
-
-        if not line:
-            continue
-
-        marker = line[0]
-
-        if marker not in (
-            "*",
-            "+",
-            "-",
-            "&",
-            "#",
-            "?",
-        ):
-            continue
-
-        current_index = status_count
-
-        status_count += 1
-
-        if marker in (
-            "*",
-            "+",
-            "-",
-        ):
-            accepted_indexes.append(
-                current_index
-            )
-
-
-if status_count != len(candidates):
-
-    raise SystemExit(
-        "Hunspell status count mismatch: "
-        f"candidates={len(candidates)} "
-        f"statuses={status_count}"
-    )
-
+frequency = read_words(frequency_file)
+hunspell = read_words(hunspell_file)
+core = read_words(core_file)
+normalized = read_words(normalized_file)
 
 seen = set()
+ordered = []
 
-validated_count = 0
-
-with open(
-    output_file,
-    "w",
-    encoding="utf-8"
-) as out:
-
-    for index in accepted_indexes:
-
-        word = candidates[index]
-
-        if not word:
-            continue
-
+def append_unique(words):
+    for word in words:
         if word in seen:
             continue
 
         seen.add(word)
+        ordered.append(word)
 
-        out.write(word)
-        out.write("\n")
+# Highest priority: frequency vocabulary.
+append_unique(frequency)
 
-        validated_count += 1
+# Then Hunspell source vocabulary.
+append_unique(hunspell)
 
+# Then normalized union as a safety net.
+append_unique(normalized)
 
-print(
-    f"Hunspell accepted: {validated_count}"
-)
+# Core vocabulary is mandatory.
+append_unique(core)
 
-print(
-    f"Validated vocabulary: {validated_count}"
-)
+core_set = set(core)
+
+###############################################################################
+# Apply vocabulary limit while preserving every core word.
+###############################################################################
+
+if len(ordered) > limit:
+    selected = []
+
+    for word in ordered:
+        if len(selected) >= limit:
+            break
+
+        selected.append(word)
+
+    selected_set = set(selected)
+
+    for word in core:
+        if word not in selected_set:
+            selected.append(word)
+            selected_set.add(word)
+
+    ordered = selected
+
+###############################################################################
+# Final deterministic output.
+#
+# Keep frequency priority rather than alphabetically sorting the dictionary.
+###############################################################################
+
+with open(output_file, "w", encoding="utf-8") as out:
+    for word in ordered:
+        out.write(word + "\n")
 PY
 
-    # --------------------------------------------------------
-    # HARD GUARD:
-    #
-    # Never allow the next stage to run without validated.txt.
-    # This directly prevents the failure:
-    #
-    #   cat: .../validated.txt: No such file or directory
-    # --------------------------------------------------------
+    ###########################################################################
+    # Hard guards.
+    ###########################################################################
 
-    if [[ ! -f "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: Hunspell validation did not create validated.txt:"
-        echo "  ${output}"
-
+    if [[ ! -f "${final_vocabulary}" ]]; then
+        echo "ERROR: Final vocabulary was not created:" >&2
+        echo "  ${final_vocabulary}" >&2
         exit 1
     fi
 
-    if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: validated vocabulary is empty:"
-        echo "  ${output}"
-
+    if [[ ! -s "${final_vocabulary}" ]]; then
+        echo "ERROR: Final vocabulary is empty:" >&2
+        echo "  ${final_vocabulary}" >&2
         exit 1
     fi
 
-    echo ""
-    echo "Validated words:"
-    echo "  $(wc -l < "${output}")"
+    echo
+    echo "Final vocabulary:"
+    wc -l < "${final_vocabulary}"
 }
 
-# ============================================================
-# VALIDATE ALL THREE LANGUAGES
-# ============================================================
+###############################################################################
+# Create PocketBoard .dict
+###############################################################################
 
-validate_candidates_with_hunspell \
-    "es-AR" \
-    "${ES_DIR}/combined" \
-    "${ES_DIR}/candidates.txt" \
-    "${ES_DIR}/validated.txt"
+create_dictionary() {
+    local language="$1"
 
-validate_candidates_with_hunspell \
-    "en-en" \
-    "${EN_DIR}/combined" \
-    "${EN_DIR}/candidates.txt" \
-    "${EN_DIR}/validated.txt"
+    local language_dir="${WORK_DIR}/${language}"
+    local validated="${language_dir}/validated.txt"
+    local output="${OUTPUT_DIR}/${language}.dict"
 
-validate_candidates_with_hunspell \
-    "de-de" \
-    "${DE_DIR}/combined" \
-    "${DE_DIR}/candidates.txt" \
-    "${DE_DIR}/validated.txt"
-
-# ============================================================
-# VERIFY VALIDATED FILES BEFORE GENERATING DICTIONARIES
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Checking validated vocabulary files"
-echo "============================================================"
-
-for language in \
-    "es-AR" \
-    "en-en" \
-    "de-de"
-do
-
-    validated="${WORK_DIR}/${language}/validated.txt"
+    print_section "Generating dictionary: ${language}"
 
     if [[ ! -f "${validated}" ]]; then
-
-        echo ""
-        echo "ERROR: validated vocabulary file does not exist:"
-        echo "  ${validated}"
-
+        echo "ERROR: Missing final vocabulary:" >&2
+        echo "  ${validated}" >&2
         exit 1
     fi
 
     if [[ ! -s "${validated}" ]]; then
-
-        echo ""
-        echo "ERROR: validated vocabulary file is empty:"
-        echo "  ${validated}"
-
-        exit 1
-    fi
-
-    echo "OK: ${language}: $(wc -l < "${validated}") validated words"
-
-done
-
-# ============================================================
-# WRITE RUNTIME DICTIONARIES
-# ============================================================
-
-write_dictionary() {
-
-    local language="$1"
-    local words="$2"
-    local output="$3"
-
-    echo ""
-    echo "============================================================"
-    echo " Generating dictionary: ${language}"
-    echo "============================================================"
-
-    # --------------------------------------------------------
-    # HARD GUARDS.
-    #
-    # Never call cat on a missing validated file.
-    # --------------------------------------------------------
-
-    if [[ ! -f "${words}" ]]; then
-
-        echo ""
-        echo "ERROR: validated vocabulary is missing:"
-        echo "  ${words}"
-
-        exit 1
-    fi
-
-    if [[ ! -s "${words}" ]]; then
-
-        echo ""
-        echo "ERROR: validated vocabulary is empty:"
-        echo "  ${words}"
-
+        echo "ERROR: Final vocabulary is empty:" >&2
+        echo "  ${validated}" >&2
         exit 1
     fi
 
     {
-        printf '%s\n' \
-            "#POCKETBOARD-DICT-1"
-
-        cat \
-            "${words}"
-
+        printf '%s\n' '#POCKETBOARD-DICT-1'
+        cat "${validated}"
     } > "${output}"
 
     if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: generated dictionary is empty:"
-        echo "  ${output}"
-
+        echo "ERROR: Failed to create dictionary:" >&2
+        echo "  ${output}" >&2
         exit 1
     fi
 
-    local word_count
-    local byte_count
+    echo "Dictionary:"
+    echo "  ${output}"
 
-    word_count="$(
-        tail \
-            -n +2 \
-            "${output}" |
-        wc -l
-    )"
-
-    byte_count="$(
-        wc -c < "${output}"
-    )"
-
-    echo ""
-    echo "Words: ${word_count}"
-    echo "Bytes: ${byte_count}"
+    echo "Words:"
+    tail -n +2 "${output}" | wc -l
 }
 
-write_dictionary \
-    "es-AR" \
-    "${ES_DIR}/validated.txt" \
-    "${OUTPUT_DIR}/es-AR.dict"
-
-write_dictionary \
-    "en-en" \
-    "${EN_DIR}/validated.txt" \
-    "${OUTPUT_DIR}/en-en.dict"
-
-write_dictionary \
-    "de-de" \
-    "${DE_DIR}/validated.txt" \
-    "${OUTPUT_DIR}/de-de.dict"
-
-# ============================================================
-# DELETE INDEX
+###############################################################################
+# Generate delete keys
 #
 # IMPORTANT:
 #
-# Deletes are generated ONLY from validated .dict words.
+# Deletes are generated ONLY from the final .dict.
 #
-# A delete key is NOT a dictionary word.
-#
-# Example:
-#
-#   dictionary:
-#       mañana
-#
-#   delete:
-#       manana
-#
-# "manana" may exist in .deletes as a search/correction key.
-# It will NOT be inserted into .dict unless it passed Hunspell.
-# ============================================================
+# They are NEVER added to candidate vocabulary.
+# They are NEVER fed back into vocabulary generation.
+###############################################################################
 
-generate_delete_index() {
-
+generate_deletes() {
     local language="$1"
-    local dictionary="$2"
-    local output="$3"
-    local budget="$4"
 
-    local words_file
-    local pairs_file
-    local header_bytes
-    local mapping_budget
+    local dictionary="${OUTPUT_DIR}/${language}.dict"
+    local output="${OUTPUT_DIR}/${language}.deletes"
 
-    words_file="${WORK_DIR}/${language}.delete.words"
-    pairs_file="${WORK_DIR}/${language}.delete.pairs"
+    local budget
 
-    rm -f \
-        "${words_file}" \
-        "${pairs_file}" \
-        "${output}"
+    case "${language}" in
+        es-AR)
+            budget="${ES_DELETE_BUDGET}"
+            ;;
 
-    echo ""
-    echo "============================================================"
-    echo " Generating delete index: ${language}"
-    echo "============================================================"
+        en-en)
+            budget="${EN_DELETE_BUDGET}"
+            ;;
 
-    echo ""
-    echo "Budget:"
-    echo "  ${budget} bytes"
+        de-de)
+            budget="${DE_DELETE_BUDGET}"
+            ;;
 
-    echo ""
-    echo "Distance 2 words:"
-    echo "  ${TOP_DISTANCE2_WORDS}"
+        *)
+            echo "ERROR: Unknown language: ${language}" >&2
+            exit 1
+            ;;
+    esac
 
-    echo ""
-    echo "Maximum word length:"
-    echo "  ${MAX_DELETE_WORD_LENGTH}"
-
-    echo ""
-    echo "Maximum candidates/delete:"
-    echo "  ${MAX_CANDIDATES_PER_DELETE}"
-
-    # --------------------------------------------------------
-    # ONLY VALIDATED WORDS.
-    # --------------------------------------------------------
+    print_section "Generating delete keys: ${language}"
 
     if [[ ! -f "${dictionary}" ]]; then
-
-        echo ""
-        echo "ERROR: dictionary missing before delete generation:"
-        echo "  ${dictionary}"
-
+        echo "ERROR: Dictionary missing:" >&2
+        echo "  ${dictionary}" >&2
         exit 1
     fi
 
-    tail \
-        -n +2 \
+    python3 - \
         "${dictionary}" \
-        > "${words_file}"
-
-    if [[ ! -s "${words_file}" ]]; then
-
-        echo ""
-        echo "ERROR: no validated words available for delete index:"
-        echo "  ${language}"
-
-        exit 1
-    fi
-
-    # --------------------------------------------------------
-    # Header size
-    # --------------------------------------------------------
-
-    header_bytes="$(
-        printf \
-            "#POCKETBOARD-DELETES-1\n#MAX_DISTANCE=%s\n#MAX_WORD_LENGTH=%s\n#MAX_CANDIDATES=%s\n" \
-            "${MAX_DELETE_DISTANCE}" \
-            "${MAX_DELETE_WORD_LENGTH}" \
-            "${MAX_CANDIDATES_PER_DELETE}" |
-        wc -c
-    )"
-
-    mapping_budget=$(
-        (
-            printf '%s\n' \
-                "$((budget - header_bytes))"
-        )
-    )
-
-    if (( mapping_budget <= 0 )); then
-
-        echo ""
-        echo "ERROR: delete budget is smaller than the header."
-        echo "Budget:"
-        echo "  ${budget}"
-        echo "Header:"
-        echo "  ${header_bytes}"
-
-        exit 1
-    fi
-
-    echo ""
-    echo "Header bytes:"
-    echo "  ${header_bytes}"
-
-    echo ""
-    echo "Mapping budget:"
-    echo "  ${mapping_budget}"
-
-    # --------------------------------------------------------
-    # Generate delete mappings.
-    # --------------------------------------------------------
-
-    python3 \
-        - "${words_file}" \
-        "${pairs_file}" \
-        "${mapping_budget}" \
+        "${output}" \
+        "${budget}" \
         "${TOP_DISTANCE2_WORDS}" \
         "${MAX_DELETE_DISTANCE}" \
         "${MAX_DELETE_WORD_LENGTH}" \
         "${MAX_CANDIDATES_PER_DELETE}" \
         <<'PY'
 import sys
+import unicodedata
 
-words_file = sys.argv[1]
+dictionary_file = sys.argv[1]
 output_file = sys.argv[2]
 budget = int(sys.argv[3])
 top_distance2_words = int(sys.argv[4])
 max_distance = int(sys.argv[5])
 max_word_length = int(sys.argv[6])
-max_candidates = int(sys.argv[7])
+max_candidates_per_word = int(sys.argv[7])
 
+if max_distance != 2:
+    raise SystemExit("ERROR: This generator currently supports distance 1/2.")
 
-def generate_deletes(
-    word,
-    distance
-):
+def normalize(word):
+    return unicodedata.normalize("NFC", word.strip()).lower()
 
-    result = set()
-
-    if distance <= 0:
-        return result
-
-    current_level = {word}
-
-    for _ in range(distance):
-
-        next_level = set()
-
-        for current in current_level:
-
-            if not current:
-                continue
-
-            for index in range(len(current)):
-
-                candidate = (
-                    current[:index] +
-                    current[index + 1:]
-                )
-
-                if not candidate:
-                    continue
-
-                result.add(candidate)
-                next_level.add(candidate)
-
-        current_level = next_level
-
-    return result
-
+###############################################################################
+# Read ONLY final dictionary words.
+###############################################################################
 
 words = []
 
-with open(
-    words_file,
-    encoding="utf-8",
-    errors="replace"
-) as f:
+with open(dictionary_file, "r", encoding="utf-8") as f:
+    for line in f:
+        word = line.rstrip("\n")
 
-    for raw in f:
+        if word == "#POCKETBOARD-DICT-1":
+            continue
 
-        word = raw.strip()
+        word = normalize(word)
 
         if word:
             words.append(word)
 
+###############################################################################
+# Deduplicate while preserving dictionary priority.
+###############################################################################
 
-buckets = {}
+seen = set()
+unique_words = []
 
-used_bytes = 0
-accepted_mappings = 0
-
-for rank, word in enumerate(words):
-
-    if len(word) > max_word_length:
+for word in words:
+    if word in seen:
         continue
 
-    if rank < top_distance2_words:
+    seen.add(word)
+    unique_words.append(word)
 
-        distance = min(
-            2,
-            max_distance
+###############################################################################
+# Only reasonably short words are useful for deletion generation.
+###############################################################################
+
+eligible = [
+    word
+    for word in unique_words
+    if len(word) <= max_word_length
+]
+
+###############################################################################
+# Delete table.
+#
+# delete key -> validated target
+###############################################################################
+
+entries = {}
+
+def add_delete(delete_key, target):
+    if not delete_key:
+        return False
+
+    if delete_key == target:
+        return False
+
+    if delete_key in entries:
+        return False
+
+    if len(entries) >= budget:
+        return False
+
+    entries[delete_key] = target
+    return True
+
+###############################################################################
+# Distance-1 deletes.
+###############################################################################
+
+def deletions_distance_1(word):
+    result = set()
+
+    chars = list(word)
+
+    for index in range(len(chars)):
+        result.add(
+            "".join(
+                chars[:index] +
+                chars[index + 1:]
+            )
         )
 
-    else:
+    return result
 
-        distance = 1
+###############################################################################
+# Distance-2 deletes.
+###############################################################################
 
-    deletes = generate_deletes(
-        word,
-        distance
+def deletions_distance_2(word):
+    result = set()
+
+    first = deletions_distance_1(word)
+
+    for intermediate in first:
+        result.update(
+            deletions_distance_1(intermediate)
+        )
+
+    return result
+
+###############################################################################
+# Distance 2 for highest-priority vocabulary.
+###############################################################################
+
+distance2_words = eligible[:top_distance2_words]
+
+for word in distance2_words:
+    if len(entries) >= budget:
+        break
+
+    candidates = sorted(
+        deletions_distance_2(word),
+        key=lambda value: (len(value), value)
     )
 
-    for delete in deletes:
+    added = 0
 
-        bucket = buckets.get(delete)
+    for delete_key in candidates:
+        if added >= max_candidates_per_word:
+            break
 
-        if bucket is None:
+        if add_delete(delete_key, word):
+            added += 1
 
-            bucket = []
+###############################################################################
+# Distance 1 for remaining vocabulary.
+###############################################################################
 
-            buckets[delete] = bucket
+if len(entries) < budget:
+    for word in eligible:
+        if len(entries) >= budget:
+            break
 
-        if word in bucket:
-            continue
-
-        if len(bucket) >= max_candidates:
-            continue
-
-        line = (
-            f"{delete}\t{word}\n"
-            .encode("utf-8")
+        candidates = sorted(
+            deletions_distance_1(word),
+            key=lambda value: (len(value), value)
         )
 
-        if used_bytes + len(line) > budget:
-            continue
+        added = 0
 
-        bucket.append(word)
+        for delete_key in candidates:
+            if added >= max_candidates_per_word:
+                break
 
-        used_bytes += len(line)
+            if add_delete(delete_key, word):
+                added += 1
 
-        accepted_mappings += 1
+###############################################################################
+# Write output.
+###############################################################################
 
+with open(output_file, "w", encoding="utf-8") as out:
+    out.write("#POCKETBOARD-DELETES-1\n")
+    out.write("#distance=1,2\n")
+    out.write("#source=dict-only\n")
+    out.write("#delete<TAB>target\n")
 
-with open(
-    output_file,
-    "w",
-    encoding="utf-8"
-) as out:
+    for delete_key, target in sorted(entries.items()):
+        out.write(delete_key)
+        out.write("\t")
+        out.write(target)
+        out.write("\n")
 
-    for delete in sorted(buckets):
-
-        for word in buckets[delete]:
-
-            out.write(delete)
-            out.write("\t")
-            out.write(word)
-            out.write("\n")
-
-
-print(
-    f"Delete keys: {len(buckets)}"
-)
-
-print(
-    f"Mappings: {accepted_mappings}"
-)
-
-print(
-    f"Mapping bytes: {used_bytes}"
-)
+print(f"Delete entries: {len(entries)}")
 PY
 
-    if [[ ! -s "${pairs_file}" ]]; then
-
-        echo ""
-        echo "ERROR: delete index produced no mappings:"
-        echo "  ${language}"
-
+    if [[ ! -f "${output}" ]]; then
+        echo "ERROR: Delete file was not created:" >&2
+        echo "  ${output}" >&2
         exit 1
     fi
-
-    # --------------------------------------------------------
-    # Write final delete file.
-    # --------------------------------------------------------
-
-    {
-        printf '%s\n' \
-            "#POCKETBOARD-DELETES-1"
-
-        printf '%s\n' \
-            "#MAX_DISTANCE=${MAX_DELETE_DISTANCE}"
-
-        printf '%s\n' \
-            "#MAX_WORD_LENGTH=${MAX_DELETE_WORD_LENGTH}"
-
-        printf '%s\n' \
-            "#MAX_CANDIDATES=${MAX_CANDIDATES_PER_DELETE}"
-
-        cat \
-            "${pairs_file}"
-
-    } > "${output}"
-
-    local size
-    local mappings
-    local keys
-
-    size="$(
-        wc -c < "${output}"
-    )"
-
-    mappings="$(
-        tail \
-            -n +5 \
-            "${output}" |
-        wc -l
-    )"
-
-    keys="$(
-        tail \
-            -n +5 \
-            "${output}" |
-        cut -f1 |
-        sort -u |
-        wc -l
-    )"
-
-    echo ""
-    echo "${language}:"
-    echo "  Delete keys:     ${keys}"
-    echo "  Delete mappings: ${mappings}"
-    echo "  Delete bytes:    ${size}"
-
-    if (( size > budget )); then
-
-        echo ""
-        echo "ERROR: delete index exceeded budget."
-        echo "  Language: ${language}"
-        echo "  Size:     ${size}"
-        echo "  Budget:   ${budget}"
-
-        exit 1
-    fi
-
-    echo "  Budget status:   OK"
-}
-
-# ============================================================
-# GENERATE DELETE FILES
-# ============================================================
-
-generate_delete_index \
-    "es-AR" \
-    "${OUTPUT_DIR}/es-AR.dict" \
-    "${OUTPUT_DIR}/es-AR.deletes" \
-    "${ES_DELETE_BUDGET}"
-
-generate_delete_index \
-    "en-en" \
-    "${OUTPUT_DIR}/en-en.dict" \
-    "${OUTPUT_DIR}/en-en.deletes" \
-    "${EN_DELETE_BUDGET}"
-
-generate_delete_index \
-    "de-de" \
-    "${OUTPUT_DIR}/de-de.dict" \
-    "${OUTPUT_DIR}/de-de.deletes" \
-    "${DE_DELETE_BUDGET}"
-
-# ============================================================
-# METADATA
-# ============================================================
-
-generate_metadata() {
-
-    local language="$1"
-    local aff="$2"
-    local output="$3"
-
-    echo ""
-    echo "Generating metadata:"
-    echo "  ${language}"
-
-    {
-        printf '%s\n' \
-            "#POCKETBOARD-META-1"
-
-        printf '%s\n' \
-            "# REP"
-
-        grep \
-            -E '^REP([[:space:]]|$)' \
-            "${aff}" ||
-            true
-
-        printf '%s\n' \
-            "# KEY"
-
-        grep \
-            -E '^KEY([[:space:]]|$)' \
-            "${aff}" ||
-            true
-
-        printf '%s\n' \
-            "# TRY"
-
-        grep \
-            -E '^TRY([[:space:]]|$)' \
-            "${aff}" ||
-            true
-
-        printf '%s\n' \
-            "# PHONE"
-
-        grep \
-            -E '^PHONE([[:space:]]|$)' \
-            "${aff}" ||
-            true
-
-        printf '%s\n' \
-            "# ph"
-
-        grep \
-            -E '^ph:' \
-            "${aff}" ||
-            true
-
-        printf '%s\n' \
-            "# NOSUGGEST"
-
-        grep \
-            -E '^NOSUGGEST([[:space:]]|$)' \
-            "${aff}" ||
-            true
-
-        printf '%s\n' \
-            "# SUBSTANDARD"
-
-        grep \
-            -E '^SUBSTANDARD([[:space:]]|$)' \
-            "${aff}" ||
-            true
-
-    } > "${output}"
 
     if [[ ! -s "${output}" ]]; then
-
-        echo ""
-        echo "ERROR: metadata generation failed:"
-        echo "  ${language}"
-
+        echo "ERROR: Delete file is empty:" >&2
+        echo "  ${output}" >&2
         exit 1
     fi
+
+    echo
+    echo "Delete entries:"
+    tail -n +5 "${output}" | wc -l
 }
 
-generate_metadata \
-    "es-AR" \
-    "${ES_DIR}/index.aff" \
-    "${OUTPUT_DIR}/es-AR.meta"
+###############################################################################
+# Validate .dict format
+###############################################################################
 
-generate_metadata \
-    "en-en" \
-    "${EN_DIR}/index.aff" \
-    "${OUTPUT_DIR}/en-en.meta"
-
-generate_metadata \
-    "de-de" \
-    "${DE_DIR}/index.aff" \
-    "${OUTPUT_DIR}/de-de.meta"
-
-# ============================================================
-# WORD DIAGNOSTICS
-# ============================================================
-
-check_word() {
-
+validate_dictionary() {
     local language="$1"
-    local word="$2"
-
     local dictionary="${OUTPUT_DIR}/${language}.dict"
 
-    if grep \
-        -Fqx \
-        "${word}" \
-        <(
-            tail \
-                -n +2 \
-                "${dictionary}"
-        )
-    then
+    print_section "Checking dictionary: ${language}"
 
-        echo "OK: ${language}: ${word}"
-
-    else
-
-        echo ""
-        echo "ERROR: required word not selected"
-        echo "  Language: ${language}"
-        echo "  Word:     ${word}"
-
+    if [[ ! -f "${dictionary}" ]]; then
+        echo "ERROR: Missing dictionary:" >&2
+        echo "  ${dictionary}" >&2
         exit 1
     fi
+
+    if [[ "$(head -n 1 "${dictionary}")" != "#POCKETBOARD-DICT-1" ]]; then
+        echo "ERROR: Invalid dictionary header:" >&2
+        echo "  ${dictionary}" >&2
+        exit 1
+    fi
+
+    python3 - "${dictionary}" <<'PY'
+import sys
+import unicodedata
+
+path = sys.argv[1]
+
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+if not lines:
+    raise SystemExit("ERROR: Empty dictionary")
+
+if lines[0].rstrip("\n") != "#POCKETBOARD-DICT-1":
+    raise SystemExit("ERROR: Invalid dictionary header")
+
+seen = set()
+
+for number, line in enumerate(lines[1:], start=2):
+    word = line.rstrip("\n")
+
+    if not word:
+        raise SystemExit(
+            f"ERROR: Empty dictionary token at line {number}"
+        )
+
+    normalized = unicodedata.normalize("NFC", word)
+
+    if normalized != word:
+        raise SystemExit(
+            f"ERROR: NFC regression at line {number}: {word}"
+        )
+
+    if any(ch.isspace() for ch in word):
+        raise SystemExit(
+            f"ERROR: Whitespace in dictionary token at line {number}: {word}"
+        )
+
+    if word in seen:
+        raise SystemExit(
+            f"ERROR: Duplicate dictionary word at line {number}: {word}"
+        )
+
+    seen.add(word)
+
+print(f"Dictionary validation OK: {len(seen)} words")
+PY
 }
 
-check_word_absent() {
+###############################################################################
+# Validate .deletes format
+###############################################################################
 
+validate_delete_format() {
     local language="$1"
-    local word="$2"
 
     local dictionary="${OUTPUT_DIR}/${language}.dict"
+    local deletes="${OUTPUT_DIR}/${language}.deletes"
 
-    if grep \
-        -Fqx \
-        "${word}" \
-        <(
-            tail \
-                -n +2 \
-                "${dictionary}"
-        )
-    then
+    print_section "Checking deletes: ${language}"
 
-        echo ""
-        echo "ERROR: invalid word selected"
-        echo "  Language: ${language}"
-        echo "  Word:     ${word}"
-
-        exit 1
-
-    else
-
-        echo "OK: rejected: ${language}: ${word}"
-
-    fi
-}
-
-echo ""
-echo "============================================================"
-echo " Word diagnostics"
-echo "============================================================"
-
-# ------------------------------------------------------------
-# Spanish
-# ------------------------------------------------------------
-
-check_word "es-AR" "mañana"
-check_word "es-AR" "pasaría"
-check_word "es-AR" "debería"
-check_word "es-AR" "vos"
-check_word "es-AR" "tenés"
-check_word "es-AR" "podés"
-check_word "es-AR" "hacés"
-check_word "es-AR" "decís"
-check_word "es-AR" "venís"
-check_word "es-AR" "sentís"
-check_word "es-AR" "acá"
-check_word "es-AR" "cuándo"
-check_word "es-AR" "dónde"
-
-# This MUST NOT become a dictionary word merely because it can
-# be a useful delete/correction key.
-check_word_absent "es-AR" "manana"
-
-# ------------------------------------------------------------
-# English
-# ------------------------------------------------------------
-
-check_word "en-en" "the"
-check_word "en-en" "have"
-check_word "en-en" "hello"
-
-check_word_absent "en-en" "helo"
-
-# ------------------------------------------------------------
-# German
-# ------------------------------------------------------------
-
-check_word "de-de" "ich"
-check_word "de-de" "nicht"
-check_word "de-de" "morgen"
-check_word "de-de" "entschuldigung"
-check_word "de-de" "wahrscheinlich"
-check_word "de-de" "möglicherweise"
-
-# ============================================================
-# VALIDATE GENERATED ASSETS
-# ============================================================
-
-validate_generated_asset() {
-
-    local file="$1"
-    local expected_header="$2"
-
-    if [[ ! -s "${file}" ]]; then
-
-        echo ""
-        echo "ERROR: generated asset is empty:"
-        echo "  ${file}"
-
+    if [[ ! -f "${deletes}" ]]; then
+        echo "ERROR: Missing delete file:" >&2
+        echo "  ${deletes}" >&2
         exit 1
     fi
 
-    local header
-
-    header="$(
-        head \
-            -n 1 \
-            "${file}" |
-        tr -d '\r'
-    )"
-
-    if [[ "${header}" != "${expected_header}" ]]; then
-
-        echo ""
-        echo "ERROR: invalid generated asset header:"
-        echo "  ${file}"
-        echo "Expected: ${expected_header}"
-        echo "Found:    ${header}"
-
-        exit 1
-    fi
-}
-
-echo ""
-echo "============================================================"
-echo " Validating generated assets"
-echo "============================================================"
-
-for language in \
-    "es-AR" \
-    "en-en" \
-    "de-de"
-do
-
-    validate_generated_asset \
-        "${OUTPUT_DIR}/${language}.dict" \
-        "#POCKETBOARD-DICT-1"
-
-    validate_generated_asset \
-        "${OUTPUT_DIR}/${language}.meta" \
-        "#POCKETBOARD-META-1"
-
-    validate_generated_asset \
-        "${OUTPUT_DIR}/${language}.deletes" \
-        "#POCKETBOARD-DELETES-1"
-
-    echo "OK: ${language}"
-
-done
-
-# ============================================================
-# VALIDATE DICTIONARY TOKENS
-#
-# IMPORTANT:
-#
-# This uses Python directly with the file as an argument.
-#
-# Do NOT use:
-#
-#   tail ... | python3 - <<'PY'
-#
-# because the heredoc occupies stdin and the piped data never
-# reaches the Python program.
-# ============================================================
-
-validate_dictionary_tokens() {
-
-    local language="$1"
-    local dictionary="$2"
-
-    local invalid_file
-
-    invalid_file="${WORK_DIR}/${language}.invalid.tokens"
-
-    rm -f \
-        "${invalid_file}"
-
-    echo ""
-    echo "Checking dictionary format: ${language}"
-
-    python3 \
-        - "${dictionary}" \
-        > "${invalid_file}" \
-        <<'PY'
+    python3 - "${dictionary}" "${deletes}" <<'PY'
 import sys
 
-dictionary = sys.argv[1]
+dictionary_file = sys.argv[1]
+delete_file = sys.argv[2]
 
-with open(
-    dictionary,
-    encoding="utf-8",
-    errors="replace"
-) as f:
+###############################################################################
+# Read final dictionary.
+###############################################################################
 
-    for raw in f:
+dictionary_words = set()
 
-        word = raw.rstrip(
-            "\n\r"
-        )
+with open(dictionary_file, "r", encoding="utf-8") as f:
+    for line in f:
+        word = line.rstrip("\n")
 
         if not word:
             continue
@@ -2363,344 +1461,467 @@ with open(
         if word.startswith("#"):
             continue
 
-        valid = False
+        dictionary_words.add(word)
 
-        for char in word:
+###############################################################################
+# Validate delete file.
+###############################################################################
 
-            if char.isalpha():
+with open(delete_file, "r", encoding="utf-8") as f:
+    lines = f.readlines()
 
-                valid = True
+if not lines:
+    raise SystemExit("ERROR: Empty delete file")
 
-                continue
+if lines[0].rstrip("\n") != "#POCKETBOARD-DELETES-1":
+    raise SystemExit("ERROR: Invalid delete header")
 
-            if char in "'’-":
-                continue
+if len(lines) < 4:
+    raise SystemExit("ERROR: Delete file metadata is incomplete")
 
-            valid = False
-            break
+seen_delete_keys = set()
+count = 0
 
-        if not valid:
-            print(word)
+for number, line in enumerate(lines[4:], start=5):
+    line = line.rstrip("\n")
+
+    if not line:
+        continue
+
+    if "\t" not in line:
+        raise SystemExit(
+            f"ERROR: Invalid delete format at line {number}"
+        )
+
+    delete_key, target = line.split("\t", 1)
+
+    if not delete_key:
+        raise SystemExit(
+            f"ERROR: Empty delete key at line {number}"
+        )
+
+    if not target:
+        raise SystemExit(
+            f"ERROR: Empty delete target at line {number}"
+        )
+
+    if target not in dictionary_words:
+        raise SystemExit(
+            f"ERROR: Delete target is not in final dictionary at "
+            f"line {number}: {target}"
+        )
+
+    if delete_key in seen_delete_keys:
+        raise SystemExit(
+            f"ERROR: Duplicate delete key at line {number}: {delete_key}"
+        )
+
+    seen_delete_keys.add(delete_key)
+    count += 1
+
+print(f"Delete validation OK: {count} entries")
 PY
-
-    local invalid_count
-
-    invalid_count="$(
-        wc -l < "${invalid_file}"
-    )"
-
-    echo "Invalid dictionary entries: ${invalid_count}"
-
-    if (( invalid_count > 0 )); then
-
-        echo ""
-        echo "ERROR: invalid dictionary entries found:"
-
-        head \
-            -n 50 \
-            "${invalid_file}"
-
-        exit 1
-    fi
-
-    echo "OK: ${language}.dict contains only valid token format"
 }
 
-validate_dictionary_tokens \
-    "es-AR" \
-    "${OUTPUT_DIR}/es-AR.dict"
+###############################################################################
+# Required vocabulary and Unicode regression checks
+###############################################################################
 
-validate_dictionary_tokens \
-    "en-en" \
-    "${OUTPUT_DIR}/en-en.dict"
+check_required_words() {
+    print_section "Checking required vocabulary"
 
-validate_dictionary_tokens \
-    "de-de" \
-    "${OUTPUT_DIR}/de-de.dict"
+    python3 \
+        "${OUTPUT_DIR}/es-AR.dict" \
+        "${OUTPUT_DIR}/en-en.dict" \
+        "${OUTPUT_DIR}/de-de.dict" \
+        <<'PY'
+import sys
 
-# ============================================================
-# VERIFY DELETE TARGETS
-#
-# Every target word referenced by .deletes MUST exist in .dict.
-#
-# Delete keys themselves do NOT have to exist in .dict.
-# ============================================================
+es_file = sys.argv[1]
+en_file = sys.argv[2]
+de_file = sys.argv[3]
 
-validate_delete_targets() {
+def read_dictionary(path):
+    words = set()
 
-    local language="$1"
-    local dictionary="$2"
-    local deletes="$3"
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            word = line.rstrip("\n")
 
-    local dictionary_words
-    local targets
-    local invalid_targets
+            if not word:
+                continue
 
-    dictionary_words="${WORK_DIR}/${language}.delete.dictionary.words"
-    targets="${WORK_DIR}/${language}.delete.targets"
-    invalid_targets="${WORK_DIR}/${language}.invalid.delete.targets"
+            if word.startswith("#"):
+                continue
 
-    tail \
-        -n +2 \
-        "${dictionary}" |
-        sort -u \
-        > "${dictionary_words}"
+            words.add(word)
 
-    tail \
-        -n +5 \
-        "${deletes}" |
-        cut \
-            -f2 |
-        sort -u \
-        > "${targets}"
+    return words
 
-    comm \
-        -23 \
-        "${targets}" \
-        "${dictionary_words}" \
-        > "${invalid_targets}"
+es = read_dictionary(es_file)
+en = read_dictionary(en_file)
+de = read_dictionary(de_file)
 
-    local invalid_count
+###############################################################################
+# Spanish Argentina
+###############################################################################
 
-    invalid_count="$(
-        wc -l < "${invalid_targets}"
-    )"
-
-    echo ""
-    echo "Delete target validation: ${language}"
-    echo "  Unique targets: ${targets}"
-    echo "  Invalid targets: ${invalid_count}"
-
-    if (( invalid_count > 0 )); then
-
-        echo ""
-        echo "ERROR: delete index references words that are not in .dict:"
-
-        head \
-            -n 50 \
-            "${invalid_targets}"
-
-        exit 1
-    fi
-
-    echo "OK: all delete targets exist in ${language}.dict"
+required_es = {
+    "mañana",
+    "pasaría",
+    "debería",
+    "vos",
+    "tenés",
+    "podés",
+    "querés",
+    "hacés",
+    "decís",
+    "venís",
+    "sentís",
+    "acá",
+    "cuándo",
+    "dónde",
 }
 
-validate_delete_targets \
-    "es-AR" \
-    "${OUTPUT_DIR}/es-AR.dict" \
-    "${OUTPUT_DIR}/es-AR.deletes"
+###############################################################################
+# English
+###############################################################################
 
-validate_delete_targets \
-    "en-en" \
-    "${OUTPUT_DIR}/en-en.dict" \
-    "${OUTPUT_DIR}/en-en.deletes"
+required_en = {
+    "the",
+    "have",
+    "hello",
+}
 
-validate_delete_targets \
-    "de-de" \
-    "${OUTPUT_DIR}/de-de.dict" \
-    "${OUTPUT_DIR}/de-de.deletes"
+###############################################################################
+# German
+###############################################################################
 
-# ============================================================
-# FINAL SIZE REPORT
-# ============================================================
+required_de = {
+    "ich",
+    "nicht",
+    "morgen",
+    "entschuldigung",
+    "wahrscheinlich",
+    "möglicherweise",
+}
 
-echo ""
-echo "============================================================"
-echo " PocketBoard dictionary build summary"
-echo "============================================================"
+def check(language, required, vocabulary):
+    missing = sorted(required - vocabulary)
 
-TOTAL_DICTIONARY_BYTES=0
-TOTAL_DELETE_BYTES=0
-TOTAL_METADATA_BYTES=0
+    if missing:
+        print(f"ERROR: Missing required {language} words:")
 
-for language in \
-    "es-AR" \
-    "en-en" \
-    "de-de"
-do
+        for word in missing:
+            print(f"  {word}")
 
-    dictionary="${OUTPUT_DIR}/${language}.dict"
-    deletes="${OUTPUT_DIR}/${language}.deletes"
-    metadata="${OUTPUT_DIR}/${language}.meta"
+        raise SystemExit(1)
 
-    dictionary_size="$(
-        wc -c < "${dictionary}"
-    )"
-
-    delete_size="$(
-        wc -c < "${deletes}"
-    )"
-
-    metadata_size="$(
-        wc -c < "${metadata}"
-    )"
-
-    dictionary_words="$(
-        tail \
-            -n +2 \
-            "${dictionary}" |
-        wc -l
-    )"
-
-    delete_mappings="$(
-        tail \
-            -n +5 \
-            "${deletes}" |
-        wc -l
-    )"
-
-    # IMPORTANT:
-    #
-    # Correct Bash arithmetic.
-    #
-    # The previous broken implementation attempted to execute
-    # arithmetic expressions as commands.
-    #
-
-    language_total=$(
-        (
-            echo $(
-                (
-                    dictionary_size +
-                    delete_size +
-                    metadata_size
-                )
-            )
-        )
+    print(
+        f"{language}: all {len(required)} required words present"
     )
 
-    # Normalize through explicit arithmetic below.
-    language_total=$(
-        (
-            printf '%s' \
-                "$((dictionary_size + delete_size + metadata_size))"
-        )
+check("es-AR", required_es, es)
+check("en-en", required_en, en)
+check("de-de", required_de, de)
+
+###############################################################################
+# Spanish regression:
+#
+# The unaccented form must NOT be introduced as a replacement for mañana.
+###############################################################################
+
+if "manana" in es:
+    raise SystemExit(
+        "ERROR: Spanish regression: 'manana' must not be present"
     )
 
-    TOTAL_DICTIONARY_BYTES=$(
-        (
-            printf '%s' \
-                "$((TOTAL_DICTIONARY_BYTES + dictionary_size))"
+###############################################################################
+# Explicit NFC checks.
+###############################################################################
+
+for word in (
+    "mañana",
+    "pasaría",
+    "debería",
+    "podés",
+    "tenés",
+    "querés",
+    "hacés",
+    "decís",
+    "venís",
+    "sentís",
+    "acá",
+    "cuándo",
+    "dónde",
+):
+    if word not in es:
+        raise SystemExit(
+            f"ERROR: Spanish Unicode/voseo regression: {word}"
         )
+
+print("Spanish accent and voseo checks OK")
+PY
+}
+
+###############################################################################
+# Global delete budget
+###############################################################################
+
+check_global_delete_budget() {
+    print_section "Checking global delete budget"
+
+    local total=0
+
+    for language in "${LANGUAGES[@]}"; do
+        local file="${OUTPUT_DIR}/${language}.deletes"
+
+        if [[ ! -f "${file}" ]]; then
+            echo "ERROR: Missing delete file:" >&2
+            echo "  ${file}" >&2
+            exit 1
+        fi
+
+        local count
+
+        count=$(
+            tail -n +5 "${file}" |
+                grep -c $'\t' || true
+        )
+
+        total=$((total + count))
+    done
+
+    echo "Total delete entries: ${total}"
+    echo "Global delete budget: ${GLOBAL_DELETE_BUDGET}"
+
+    if (( total > GLOBAL_DELETE_BUDGET )); then
+        echo "ERROR: Global delete budget exceeded." >&2
+        exit 1
+    fi
+}
+
+###############################################################################
+# Final sanity check
+###############################################################################
+
+final_sanity_check() {
+    print_section "Final sanity check"
+
+    for language in "${LANGUAGES[@]}"; do
+        local dictionary="${OUTPUT_DIR}/${language}.dict"
+        local deletes="${OUTPUT_DIR}/${language}.deletes"
+
+        if [[ ! -s "${dictionary}" ]]; then
+            echo "ERROR: Dictionary is missing or empty:" >&2
+            echo "  ${dictionary}" >&2
+            exit 1
+        fi
+
+        if [[ ! -s "${deletes}" ]]; then
+            echo "ERROR: Deletes are missing or empty:" >&2
+            echo "  ${deletes}" >&2
+            exit 1
+        fi
+
+        echo "${language}: OK"
+    done
+}
+
+###############################################################################
+# Size report
+###############################################################################
+
+size_report() {
+    print_section "Generated dictionary size"
+
+    local TOTAL_DICTIONARY_BYTES=0
+    local TOTAL_DELETE_BYTES=0
+    local TOTAL_METADATA_BYTES=0
+    local TOTAL_GENERATED_BYTES=0
+
+    for language in "${LANGUAGES[@]}"; do
+        local dictionary="${OUTPUT_DIR}/${language}.dict"
+        local deletes="${OUTPUT_DIR}/${language}.deletes"
+
+        local dictionary_size
+        local delete_size
+        local metadata_size
+        local language_total
+
+        dictionary_size=$(
+            wc -c < "${dictionary}"
+        )
+
+        delete_size=$(
+            wc -c < "${deletes}"
+        )
+
+        # Metadata is embedded in the .deletes file.
+        metadata_size=0
+
+        language_total=$(
+            (
+                echo "${dictionary_size} + ${delete_size} + ${metadata_size}"
+            ) |
+                awk '{print $1 + $3 + $5}'
+        )
+
+        TOTAL_DICTIONARY_BYTES=$(
+            (
+                echo "${TOTAL_DICTIONARY_BYTES} + ${dictionary_size}"
+            ) |
+                awk '{print $1 + $3}'
+        )
+
+        TOTAL_DELETE_BYTES=$(
+            (
+                echo "${TOTAL_DELETE_BYTES} + ${delete_size}"
+            ) |
+                awk '{print $1 + $3}'
+        )
+
+        TOTAL_METADATA_BYTES=$(
+            (
+                echo "${TOTAL_METADATA_BYTES} + ${metadata_size}"
+            ) |
+                awk '{print $1 + $3}'
+        )
+
+        echo
+        echo "${language}:"
+        echo "  dictionary: ${dictionary_size} bytes"
+        echo "  deletes:    ${delete_size} bytes"
+        echo "  total:      ${language_total} bytes"
+    done
+
+    TOTAL_GENERATED_BYTES=$(
+        (
+            echo \
+                "${TOTAL_DICTIONARY_BYTES} + " \
+                "${TOTAL_DELETE_BYTES} + " \
+                "${TOTAL_METADATA_BYTES}"
+        ) |
+            awk '{print $1 + $3 + $5}'
     )
 
-    TOTAL_DELETE_BYTES=$(
-        (
-            printf '%s' \
-                "$((TOTAL_DELETE_BYTES + delete_size))"
-        )
+    local TOTAL_MIB
+
+    TOTAL_MIB=$(
+        awk \
+            -v bytes="${TOTAL_GENERATED_BYTES}" \
+            'BEGIN { printf "%.2f", bytes / 1024 / 1024 }'
     )
 
-    TOTAL_METADATA_BYTES=$(
-        (
-            printf '%s' \
-                "$((TOTAL_METADATA_BYTES + metadata_size))"
-        )
-    )
+    echo
+    echo "Total:"
+    echo "  dictionary: ${TOTAL_DICTIONARY_BYTES} bytes"
+    echo "  deletes:    ${TOTAL_DELETE_BYTES} bytes"
+    echo "  metadata:   ${TOTAL_METADATA_BYTES} bytes"
+    echo "  generated:  ${TOTAL_GENERATED_BYTES} bytes"
+    echo "  generated:  ${TOTAL_MIB} MiB"
+}
 
-    echo ""
-    echo "${language}"
-    echo "  Words:           ${dictionary_words}"
-    echo "  Dictionary:      ${dictionary_size} bytes"
-    echo "  Delete index:    ${delete_size} bytes"
-    echo "  Delete mappings: ${delete_mappings}"
-    echo "  Metadata:        ${metadata_size} bytes"
-    echo "  Total:           ${language_total} bytes"
+###############################################################################
+# Main
+###############################################################################
 
+print_section "PocketBoard dictionary generation"
+
+echo "Root:"
+echo "  ${ROOT_DIR}"
+
+echo "Work directory:"
+echo "  ${WORK_DIR}"
+
+echo "Output directory:"
+echo "  ${OUTPUT_DIR}"
+
+###############################################################################
+# Clean only generated working data.
+###############################################################################
+
+rm -rf "${WORK_DIR}"
+
+mkdir -p "${WORK_DIR}"
+mkdir -p "${OUTPUT_DIR}"
+
+###############################################################################
+# Download Hunspell source dictionaries.
+###############################################################################
+
+for language in "${LANGUAGES[@]}"; do
+    download_hunspell_dictionary "${language}"
 done
 
-# ============================================================
-# FINAL TOTALS
-# ============================================================
+###############################################################################
+# Download frequency sources.
+###############################################################################
 
-TOTAL_GENERATED_BYTES=$(
-    (
-        printf '%s' \
-            "$((TOTAL_DICTIONARY_BYTES + TOTAL_DELETE_BYTES + TOTAL_METADATA_BYTES))"
-    )
-)
+download_frequency_dictionary "es-AR"
+download_frequency_dictionary "en-en"
+download_german_frequency
 
-TOTAL_MIB=$(
-    (
-        printf '%s' \
-            "$((TOTAL_GENERATED_BYTES / 1024 / 1024))"
-    )
-)
+###############################################################################
+# Build vocabulary.
+###############################################################################
 
-echo ""
-echo "============================================================"
-echo " TOTAL"
-echo "============================================================"
-
-echo "Dictionary bytes: ${TOTAL_DICTIONARY_BYTES}"
-echo "Delete bytes:     ${TOTAL_DELETE_BYTES}"
-echo "Metadata bytes:   ${TOTAL_METADATA_BYTES}"
-echo "Generated bytes:  ${TOTAL_GENERATED_BYTES}"
-echo "Approximate data: ${TOTAL_MIB} MiB"
-
-echo ""
-echo "Delete budget:"
-echo "  Spanish: ${ES_DELETE_BUDGET}"
-echo "  English: ${EN_DELETE_BUDGET}"
-echo "  German:  ${DE_DELETE_BUDGET}"
-echo "  Global:  ${GLOBAL_DELETE_BUDGET}"
-
-if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
-
-    echo ""
-    echo "ERROR: global delete budget exceeded."
-    echo "  Size:   ${TOTAL_DELETE_BYTES}"
-    echo "  Budget: ${GLOBAL_DELETE_BUDGET}"
-
-    exit 1
-fi
-
-# ============================================================
-# FINAL SANITY CHECK
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Final sanity checks"
-echo "============================================================"
-
-for language in \
-    "es-AR" \
-    "en-en" \
-    "de-de"
-do
-
-    dictionary="${OUTPUT_DIR}/${language}.dict"
-    deletes="${OUTPUT_DIR}/${language}.deletes"
-    metadata="${OUTPUT_DIR}/${language}.meta"
-
-    if [[ ! -s "${dictionary}" ]]; then
-
-        echo "ERROR: empty dictionary: ${language}"
-
-        exit 1
-    fi
-
-    if [[ ! -s "${deletes}" ]]; then
-
-        echo "ERROR: empty delete index: ${language}"
-
-        exit 1
-    fi
-
-    if [[ ! -s "${metadata}" ]]; then
-
-        echo "ERROR: empty metadata: ${language}"
-
-        exit 1
-    fi
-
-    echo "OK: ${language}"
-
+for language in "${LANGUAGES[@]}"; do
+    build_candidate_vocabulary "${language}"
 done
 
-echo ""
-echo "============================================================"
-echo " Dictionary generation completed successfully"
-echo "============================================================"
+###############################################################################
+# Create final .dict assets.
+###############################################################################
+
+for language in "${LANGUAGES[@]}"; do
+    create_dictionary "${language}"
+done
+
+###############################################################################
+# Generate .deletes ONLY from final dictionaries.
+###############################################################################
+
+for language in "${LANGUAGES[@]}"; do
+    generate_deletes "${language}"
+done
+
+###############################################################################
+# Validate generated assets.
+###############################################################################
+
+for language in "${LANGUAGES[@]}"; do
+    validate_dictionary "${language}"
+done
+
+for language in "${LANGUAGES[@]}"; do
+    validate_delete_format "${language}"
+done
+
+check_required_words
+check_global_delete_budget
+final_sanity_check
+
+###############################################################################
+# Report.
+###############################################################################
+
+size_report
+
+print_section "PocketBoard dictionary generation completed"
+
+echo "Generated assets:"
+echo
+
+for language in "${LANGUAGES[@]}"; do
+    echo "  ${OUTPUT_DIR}/${language}.dict"
+    echo "  ${OUTPUT_DIR}/${language}.deletes"
+done
+
+echo
+echo "Hunspell was used only as a vocabulary source."
+echo "No word-by-word Hunspell validation was performed."
+echo "No Hunspell core overlay was created."
+echo "Delete keys were generated only from final dictionary words."
+echo
+echo "Generation completed successfully."
