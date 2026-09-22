@@ -644,13 +644,26 @@ core_source = Path(sys.argv[4])
 destination = Path(sys.argv[5])
 limit = int(sys.argv[6])
 
+# ------------------------------------------------------------
+# Explicit exclusions.
+#
+# These are spelling forms that must never enter the final
+# Spanish dictionary, regardless of source.
+# ------------------------------------------------------------
+
 excluded = {
     "es-AR": {
         "manana",
+        "mananas",
+        "deberia",
     },
     "en-en": set(),
     "de-de": set(),
 }
+
+# ------------------------------------------------------------
+# Normalization
+# ------------------------------------------------------------
 
 def normalize_token(word):
     word = unicodedata.normalize("NFC", word).lower()
@@ -680,19 +693,21 @@ def normalize_token(word):
 
     return word
 
+# ------------------------------------------------------------
+# Accent folding
+#
+# Examples:
+#
+#   mañana   -> manana
+#   mañanas  -> mananas
+#   debería  -> deberia
+#   tenés    -> tenes
+#
+# This is only used to identify ASCII spellings that collide
+# with an accented Spanish spelling.
+# ------------------------------------------------------------
+
 def accent_key(word):
-    """
-    Return an accent-folded comparison key.
-
-    Examples:
-        mañana  -> manana
-        mañanas -> mananas
-        debería -> deberia
-        papá    -> papa
-
-    This is used only for O(N) collision detection between
-    FrequencyWords and accented Hunspell vocabulary.
-    """
     decomposed = unicodedata.normalize("NFD", word)
 
     return "".join(
@@ -703,6 +718,10 @@ def accent_key(word):
 
 def has_diacritic(word):
     return accent_key(word) != word
+
+# ------------------------------------------------------------
+# Read a complete source.
+# ------------------------------------------------------------
 
 def read_words(path):
     result = []
@@ -732,28 +751,51 @@ def read_words(path):
     return result
 
 # ------------------------------------------------------------
-# Hunspell is read first so its accented vocabulary can be used
-# as a spelling reference for noisy FrequencyWords candidates.
+# Read Hunspell first.
+#
+# Hunspell is still ONLY a vocabulary source.
+# It is never executed as a validator.
 # ------------------------------------------------------------
 
 hunspell_words = read_words(hunspell_source)
+
+hunspell_set = set(hunspell_words)
+
+# ------------------------------------------------------------
+# Build accent collision keys from Hunspell.
+#
+# For Spanish:
+#
+#   accented Hunspell word -> accent_key
+#
+# Example:
+#
+#   mañanas -> mananas
+#   debería -> deberia
+#
+# This operation is O(N).
+# ------------------------------------------------------------
 
 accented_hunspell_keys = set()
 
 if language == "es-AR":
     for word in hunspell_words:
         if has_diacritic(word):
-            accented_hunspell_keys.add(accent_key(word))
+            accented_hunspell_keys.add(
+                accent_key(word)
+            )
 
 # ------------------------------------------------------------
 # Read FrequencyWords.
 #
-# For Spanish only:
-# suppress an ASCII FrequencyWords candidate when an accented
-# counterpart exists in Hunspell.
+# FrequencyWords is the noisy corpus source. If it contains
+# an ASCII word whose accent-folded key corresponds to an
+# accented Hunspell spelling, discard that FrequencyWords
+# candidate.
 #
-# This is deliberately NOT applied to Hunspell itself.
-# Therefore valid unaccented Hunspell vocabulary is preserved.
+# IMPORTANT:
+# This does NOT remove words from Hunspell.
+# Hunspell remains authoritative as a vocabulary source.
 # ------------------------------------------------------------
 
 frequency_words = []
@@ -790,10 +832,18 @@ with frequency_source.open(
 
         frequency_words.append(word)
 
+# ------------------------------------------------------------
+# Core vocabulary.
+# ------------------------------------------------------------
+
 core_words = read_words(core_source)
 
 # ------------------------------------------------------------
-# Merge source priority.
+# Merge sources in priority order.
+#
+#   1. FrequencyWords / Leipzig
+#   2. Hunspell
+#   3. Core
 # ------------------------------------------------------------
 
 ordered = []
@@ -812,6 +862,36 @@ append_unique(hunspell_words)
 append_unique(core_words)
 
 # ------------------------------------------------------------
+# IMPORTANT:
+#
+# At this point we perform a FINAL Spanish accent cleanup.
+#
+# This catches cases where the unaccented form came from
+# Hunspell itself or another source.
+#
+# Only the explicitly problematic ASCII forms are removed
+# here. We do NOT globally remove every ASCII/accent pair,
+# because valid Spanish words can legitimately coexist:
+#
+#   papa / papá
+#   si / sí
+#   el / él
+#   solo / sólo
+#
+# The broad accent collision filtering already happens against
+# FrequencyWords above.
+# ------------------------------------------------------------
+
+final_excluded = set(excluded[language])
+
+if language == "es-AR":
+    final_excluded.update({
+        "manana",
+        "mananas",
+        "deberia",
+    })
+
+# ------------------------------------------------------------
 # Prepare mandatory vocabulary.
 # ------------------------------------------------------------
 
@@ -824,15 +904,27 @@ for word in core_words:
 core_set = set(core_unique)
 
 # ------------------------------------------------------------
-# First select according to normal source priority.
+# Select according to source priority.
 # ------------------------------------------------------------
 
-selected = ordered[:limit]
-selected_set = set(selected)
+selected = []
+selected_set = set()
+
+for word in ordered:
+    if word in final_excluded:
+        continue
+
+    if word in selected_set:
+        continue
+
+    selected.append(word)
+    selected_set.add(word)
+
+    if len(selected) >= limit:
+        break
 
 # ------------------------------------------------------------
-# Guarantee all mandatory words survive the hard vocabulary
-# limit.
+# Guarantee every mandatory word survives the hard limit.
 # ------------------------------------------------------------
 
 missing_core = [
@@ -842,14 +934,25 @@ missing_core = [
 ]
 
 for required_word in missing_core:
+
+    # Required words must never be excluded.
+    if required_word in final_excluded:
+        raise SystemExit(
+            f"ERROR: Required word conflicts with exclusion: "
+            f"{language}: {required_word}"
+        )
+
     replacement_index = None
 
     for index in range(len(selected) - 1, -1, -1):
-        if selected[index] not in core_set:
+        candidate = selected[index]
+
+        if candidate not in core_set:
             replacement_index = index
             break
 
     if replacement_index is None:
+
         if len(selected) < limit:
             selected.append(required_word)
             selected_set.add(required_word)
@@ -868,19 +971,20 @@ for required_word in missing_core:
     selected_set.add(required_word)
 
 # ------------------------------------------------------------
-# Final deterministic deduplication and safety filtering.
+# Final deterministic normalization/deduplication.
 # ------------------------------------------------------------
 
 final_words = []
 final_seen = set()
 
 for word in selected:
+
     word = normalize_token(word)
 
     if word is None:
         continue
 
-    if word in excluded[language]:
+    if word in final_excluded:
         continue
 
     if word in final_seen:
@@ -889,18 +993,73 @@ for word in selected:
     final_seen.add(word)
     final_words.append(word)
 
+# ------------------------------------------------------------
+# Enforce maximum vocabulary size.
+# ------------------------------------------------------------
+
 if len(final_words) > limit:
     final_words = final_words[:limit]
 
+final_set = set(final_words)
+
 # ------------------------------------------------------------
-# Mandatory words must still be present.
+# Final mandatory-word verification.
+#
+# This is a set membership check, not Hunspell validation.
 # ------------------------------------------------------------
 
 for required_word in core_unique:
-    if required_word not in final_seen:
+
+    if required_word not in final_set:
         raise SystemExit(
-            f"ERROR: Required word was lost while building {language}: "
-            f"{required_word}"
+            f"ERROR: Required word was lost while building "
+            f"{language}: {required_word}"
+        )
+
+# ------------------------------------------------------------
+# Explicit Spanish regression protection.
+# ------------------------------------------------------------
+
+if language == "es-AR":
+
+    forbidden_spanish = {
+        "manana",
+        "mananas",
+        "deberia",
+    }
+
+    forbidden_present = (
+        forbidden_spanish.intersection(final_set)
+    )
+
+    if forbidden_present:
+        words = ", ".join(
+            sorted(forbidden_present)
+        )
+
+        raise SystemExit(
+            f"ERROR: Forbidden Spanish spelling(s) reached "
+            f"final vocabulary: {words}"
+        )
+
+    required_spanish = {
+        "mañana",
+        "mañanas",
+        "debería",
+    }
+
+    missing_spanish = (
+        required_spanish.difference(final_set)
+    )
+
+    if missing_spanish:
+        words = ", ".join(
+            sorted(missing_spanish)
+        )
+
+        raise SystemExit(
+            f"ERROR: Required Spanish accented spelling(s) "
+            f"missing: {words}"
         )
 
 # ------------------------------------------------------------
@@ -919,11 +1078,13 @@ with destination.open(
 print(f"Frequency source: {len(frequency_words)}")
 print(f"Hunspell source:  {len(hunspell_words)}")
 print(f"Core vocabulary:  {len(core_unique)}")
-print(f"Accent-filtered FrequencyWords: {accent_filtered_frequency_count}")
+print(
+    "Accent-filtered FrequencyWords: "
+    f"{accent_filtered_frequency_count}"
+)
 print(f"Final vocabulary: {len(final_words)}")
 PY
 }
-
 # ------------------------------------------------------------
 # Create .dict
 # ------------------------------------------------------------
