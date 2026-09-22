@@ -1119,18 +1119,17 @@ validate_candidates_with_hunspell() {
     local language="$1"
     local dictionary_base="$2"
     local candidates="$3"
-    local core_file="$4"
-    local output="$5"
+    local output="$4"
 
     local accepted_raw
-    local rejected_core
+    local diagnostics_raw
 
     accepted_raw="${WORK_DIR}/${language}.hunspell.accepted.raw"
-    rejected_core="${WORK_DIR}/${language}.core.rejected"
+    diagnostics_raw="${WORK_DIR}/${language}.hunspell.diagnostics.raw"
 
     rm -f \
         "${accepted_raw}" \
-        "${rejected_core}" \
+        "${diagnostics_raw}" \
         "${output}"
 
     echo ""
@@ -1141,47 +1140,67 @@ validate_candidates_with_hunspell() {
     echo "Candidates:"
     echo "  $(wc -l < "${candidates}")"
 
-    # ------------------------------------------------------------
-    # CRITICAL UTF-8 FIX
-    # ------------------------------------------------------------
+    ###########################################################################
+    # Hunspell programmatic validation
+    #
+    # -a:
+    #   Ispell-compatible pipe interface.
+    #
+    # -i UTF-8:
+    #   Explicit UTF-8 input.
+    #
+    # Each input line contains exactly one candidate word.
+    #
+    # Hunspell output:
+    #
+    #   * word       -> accepted dictionary word
+    #   + word root  -> accepted via affix rule
+    #   - ...        -> accepted compound
+    #   & / #        -> rejected
+    ###########################################################################
 
     "${HUNSPELL_BIN}" \
-        -G \
+        -a \
         -i UTF-8 \
         -d "${dictionary_base}" \
         < "${candidates}" \
-        > "${accepted_raw}"
+        > "${diagnostics_raw}"
 
-    if [[ ! -s "${accepted_raw}" ]]; then
+    if [[ ! -s "${diagnostics_raw}" ]]; then
         echo ""
-        echo "ERROR: Hunspell accepted no candidates."
+        echo "ERROR: Hunspell produced no diagnostic output."
         echo "Language: ${language}"
         exit 1
     fi
 
-    echo "Hunspell accepted:"
-    echo "  $(wc -l < "${accepted_raw}")"
-
-    # ------------------------------------------------------------
-    # Normalize Hunspell output and intersect with candidates.
+    ###########################################################################
+    # Parse Hunspell -a output.
     #
-    # This guarantees:
+    # IMPORTANT:
     #
-    #   - NFC
-    #   - case-normalized comparison
-    #   - no Hunspell-generated word can bypass candidates
-    # ------------------------------------------------------------
+    # We keep the ORIGINAL candidate word, not whatever Hunspell happens to
+    # print after the status character.
+    #
+    # This avoids losing Unicode/NFC words such as:
+    #
+    #   mañana
+    #   tenés
+    #   podés
+    #   querés
+    #   cuándo
+    #   dónde
+    ###########################################################################
 
     python3 - \
         "${candidates}" \
-        "${accepted_raw}" \
-        "${output}" <<'PY'
+        "${diagnostics_raw}" \
+        "${accepted_raw}" <<'PY'
 import sys
 import unicodedata
 
 candidates_file = sys.argv[1]
-accepted_file = sys.argv[2]
-output_file = sys.argv[3]
+diagnostics_file = sys.argv[2]
+accepted_file = sys.argv[3]
 
 def normalize(value):
     return unicodedata.normalize(
@@ -1189,10 +1208,10 @@ def normalize(value):
         value.strip().casefold()
     )
 
-accepted = set()
+candidates = []
 
 with open(
-    accepted_file,
+    candidates_file,
     encoding="utf-8",
     errors="replace"
 ) as f:
@@ -1201,27 +1220,73 @@ with open(
         word = normalize(raw)
 
         if word:
-            accepted.add(word)
+            candidates.append(word)
 
-seen = set()
-count = 0
+accepted = set()
+
+# Hunspell -a prints one status line for each input word.
+#
+# Correct:
+#   *
+#   +
+#   -
+#
+# Rejected:
+#   &
+#   #
+#
+# There can also be informational/version lines.
+#
+# We process the diagnostic lines sequentially and map them back to the
+# original candidate sequence.
+#
+# This is deliberately based on the status character, not on Hunspell's
+# rendered word, so Unicode normalization cannot make an accepted candidate
+# disappear.
+
+candidate_index = 0
 
 with open(
-    candidates_file,
+    diagnostics_file,
     encoding="utf-8",
     errors="replace"
-) as source, open(
-    output_file,
+) as f:
+
+    for raw in f:
+        line = raw.rstrip("\r\n")
+
+        if not line:
+            continue
+
+        # Hunspell startup/version line.
+        if line.startswith("Hunspell "):
+            continue
+
+        status = line[0]
+
+        if status not in "*+-&#":
+            continue
+
+        if candidate_index >= len(candidates):
+            break
+
+        candidate = candidates[candidate_index]
+        candidate_index += 1
+
+        if status in "*+-":
+            accepted.add(candidate)
+
+with open(
+    accepted_file,
     "w",
     encoding="utf-8",
     newline="\n"
 ) as out:
 
-    for raw in source:
-        word = normalize(raw)
+    # Preserve original candidate order.
+    seen = set()
 
-        if not word:
-            continue
+    for word in candidates:
 
         if word not in accepted:
             continue
@@ -1231,10 +1296,32 @@ with open(
 
         seen.add(word)
         out.write(word + "\n")
-        count += 1
 
-print(f"Validated vocabulary: {count}")
+print(f"Accepted candidates: {len(accepted)}")
+print(f"Processed candidates: {candidate_index}")
 PY
+
+    if [[ ! -s "${accepted_raw}" ]]; then
+        echo ""
+        echo "ERROR: Hunspell accepted no candidates."
+        echo "Language: ${language}"
+        exit 1
+    fi
+
+    echo ""
+    echo "Hunspell accepted:"
+    echo "  $(wc -l < "${accepted_raw}")"
+
+    ###########################################################################
+    # Build validated vocabulary.
+    #
+    # ONLY words that were actual candidates and accepted by Hunspell can
+    # enter the runtime dictionary.
+    ###########################################################################
+
+    cp \
+        "${accepted_raw}" \
+        "${output}"
 
     if [[ ! -s "${output}" ]]; then
         echo ""
@@ -1247,13 +1334,34 @@ PY
     echo "Validated words:"
     echo "  $(wc -l < "${output}")"
 
-    # ------------------------------------------------------------
-    # CORE REGRESSION CHECK
+    ###########################################################################
+    # Mandatory/core regression diagnostics
     #
-    # Core words are mandatory candidates, but they still MUST
-    # pass Hunspell. If one is missing, fail here, immediately,
-    # instead of producing a .dict and discovering it later.
-    # ------------------------------------------------------------
+    # We do NOT silently inject rejected core words.
+    #
+    # Instead, report exactly which core words Hunspell rejected.
+    ###########################################################################
+
+    local core_file
+    local rejected_core
+
+    case "${language}" in
+        es-AR)
+            core_file="${ES_DIR}/core.txt"
+            ;;
+        en-en)
+            core_file="${EN_DIR}/core.txt"
+            ;;
+        de-de)
+            core_file="${DE_DIR}/core.txt"
+            ;;
+        *)
+            echo "ERROR: unknown language: ${language}"
+            exit 1
+            ;;
+    esac
+
+    rejected_core="${WORK_DIR}/${language}.core.rejected"
 
     python3 - \
         "${core_file}" \
@@ -1315,48 +1423,60 @@ with open(
     for word in missing:
         out.write(word + "\n")
 
-if missing:
-    print(f"Core words rejected by Hunspell: {len(missing)}")
-    for word in missing[:100]:
-        print(f"  {word}")
-    raise SystemExit(1)
-
-print("All core words passed Hunspell validation.")
+print(f"Core words not accepted by Hunspell: {len(missing)}")
 PY
 
     if [[ -s "${rejected_core}" ]]; then
+
         echo ""
-        echo "============================================================"
-        echo " ERROR: mandatory/core words were rejected"
-        echo "============================================================"
-        echo ""
+        echo "WARNING: core words not accepted by Hunspell:"
         cat "${rejected_core}"
+
+        #######################################################################
+        # IMPORTANT:
+        #
+        # At this point we DO NOT add them automatically.
+        #
+        # The next diagnostics determine whether the word is actually present
+        # in the Hunspell dictionary in another representation or whether the
+        # dictionary genuinely rejects it.
+        #######################################################################
+
+        if [[ "${language}" == "es-AR" ]]; then
+
+            echo ""
+            echo "Spanish core-word Hunspell diagnostics:"
+            echo ""
+
+            while IFS= read -r word; do
+
+                [[ -z "${word}" ]] && continue
+
+                echo "------------------------------------------------------------"
+                echo "Word: ${word}"
+
+                printf '%s\n' "${word}" |
+                    "${HUNSPELL_BIN}" \
+                        -a \
+                        -i UTF-8 \
+                        -d "${dictionary_base}" \
+                    || true
+
+            done < "${rejected_core}"
+
+            echo ""
+            echo "------------------------------------------------------------"
+            echo "The words above were rejected by the active Hunspell rules."
+            echo "They will NOT be injected blindly into .dict."
+            echo "------------------------------------------------------------"
+
+        fi
+
         exit 1
     fi
 
-    echo "OK: all core words validated: ${language}"
+    echo "OK: all core words accepted by Hunspell: ${language}"
 }
-
-validate_candidates_with_hunspell \
-    "es-AR" \
-    "${ES_DIR}/index" \
-    "${ES_DIR}/candidates.txt" \
-    "${ES_DIR}/core.txt" \
-    "${ES_DIR}/validated.txt"
-
-validate_candidates_with_hunspell \
-    "en-en" \
-    "${EN_DIR}/index" \
-    "${EN_DIR}/candidates.txt" \
-    "${EN_DIR}/core.txt" \
-    "${EN_DIR}/validated.txt"
-
-validate_candidates_with_hunspell \
-    "de-de" \
-    "${DE_DIR}/index" \
-    "${DE_DIR}/candidates.txt" \
-    "${DE_DIR}/core.txt" \
-    "${DE_DIR}/validated.txt"
 
 ###############################################################################
 # WRITE DICTIONARIES
