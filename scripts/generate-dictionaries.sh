@@ -1422,6 +1422,35 @@ size_report() {
     echo "Total metadata bytes: ${total_metadata_bytes}"
     echo "Total generated:      ${total_generated_bytes} bytes"
     echo "Total generated:      ${total_mib} MiB"
+
+echo
+echo "============================================================"
+echo " Accent/delete diagnostic"
+echo "============================================================"
+
+echo "Dictionary:"
+for word in "manana" "mananas" "deberia" "mañana" "mañanas" "debería"; do
+    if grep -Fxq "$word" "${OUTPUT_DIR}/es-AR.dict"; then
+        echo "  DICT YES: $word"
+    else
+        echo "  DICT NO:  $word"
+    fi
+done
+
+echo
+echo "Delete targets containing unaccented forms:"
+for word in "manana" "mananas" "deberia"; do
+    echo "  --- $word ---"
+    grep -F $'\t'"$word" "${OUTPUT_DIR}/es-AR.deletes" | head -5 || true
+done
+
+echo
+echo "Delete targets containing accented forms:"
+for word in "mañana" "mañanas" "debería"; do
+    echo "  --- $word ---"
+    grep -F $'\t'"$word" "${OUTPUT_DIR}/es-AR.deletes" | head -5 || true
+done
+    
 }
 # ------------------------------------------------------------
 # Prepare source word lists
