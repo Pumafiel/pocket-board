@@ -2,6 +2,25 @@
 
 set -euo pipefail
 
+# PocketBoard dictionary generator
+#
+# Design goals:
+#   - Unicode/NFC-safe vocabulary (no accent stripping)
+#   - frequency-first vocabulary plus curated mandatory words
+#   - complete Hunspell validation before anything reaches .dict
+#   - edit-distance deletes generated ONLY from validated words
+#   - distance-2 correction coverage concentrated on high-value words
+#   - strict token validation
+#   - explicit Spanish (Argentina) voseo/diacritic regressions
+#
+# IMPORTANT:
+# The runtime dictionary format is intentionally unchanged:
+#   .dict    = header + one validated word per line
+#   .deletes = header + delete<TAB>validated-target mappings
+#
+# Do not add frequency metadata or new fields here unless the
+# PocketBoard runtime parser is changed at the same time.
+
 export LC_ALL=C
 export LANG=C
 
@@ -50,6 +69,285 @@ MAX_DELETE_DISTANCE=2
 MAX_DELETE_WORD_LENGTH=24
 
 MAX_CANDIDATES_PER_DELETE=3
+
+# ------------------------------------------------------------
+# Vocabulary tiers
+#
+# The runtime .dict format has no frequency field, so we do not
+# invent one here. Instead:
+#
+#   1. frequency sources provide the normal vocabulary/ranking
+#   2. CORE_WORDS are guaranteed candidates if Hunspell accepts
+#   3. PRIORITY_WORDS receive edit-distance 2 delete generation
+#
+# This improves correction coverage without changing the runtime
+# dictionary format.
+# ------------------------------------------------------------
+
+CORE_ES_AR_WORDS=(
+    "a"
+    "al"
+    "algo"
+    "alguien"
+    "ahora"
+    "allá"
+    "acá"
+    "también"
+    "bien"
+    "cada"
+    "casa"
+    "cómo"
+    "cuando"
+    "cuándo"
+    "dónde"
+    "donde"
+    "debería"
+    "decís"
+    "día"
+    "días"
+    "estás"
+    "este"
+    "esto"
+    "hacer"
+    "hacés"
+    "hay"
+    "hola"
+    "mañana"
+    "más"
+    "menos"
+    "mismo"
+    "muy"
+    "necesito"
+    "necesitás"
+    "nunca"
+    "para"
+    "pasaría"
+    "podés"
+    "porque"
+    "por"
+    "qué"
+    "querés"
+    "sabés"
+    "sé"
+    "ser"
+    "si"
+    "sí"
+    "sobre"
+    "sos"
+    "también"
+    "tenés"
+    "tengo"
+    "tiempo"
+    "todo"
+    "todos"
+    "tu"
+    "tú"
+    "una"
+    "uno"
+    "vos"
+    "voy"
+    "ya"
+    "yo"
+    "venís"
+    "sentís"
+    "decir"
+    "venir"
+    "estar"
+    "tener"
+    "poder"
+    "querer"
+    "saber"
+)
+
+CORE_EN_WORDS=(
+    "a"
+    "about"
+    "after"
+    "again"
+    "all"
+    "also"
+    "always"
+    "and"
+    "any"
+    "are"
+    "around"
+    "because"
+    "before"
+    "being"
+    "between"
+    "but"
+    "can"
+    "could"
+    "day"
+    "do"
+    "does"
+    "done"
+    "each"
+    "even"
+    "every"
+    "for"
+    "from"
+    "get"
+    "give"
+    "go"
+    "good"
+    "have"
+    "hello"
+    "here"
+    "how"
+    "i"
+    "if"
+    "in"
+    "into"
+    "is"
+    "it"
+    "just"
+    "know"
+    "like"
+    "make"
+    "more"
+    "most"
+    "my"
+    "need"
+    "never"
+    "new"
+    "no"
+    "not"
+    "now"
+    "of"
+    "on"
+    "one"
+    "only"
+    "or"
+    "other"
+    "our"
+    "out"
+    "please"
+    "really"
+    "right"
+    "say"
+    "see"
+    "she"
+    "should"
+    "so"
+    "some"
+    "than"
+    "that"
+    "the"
+    "their"
+    "there"
+    "they"
+    "this"
+    "time"
+    "to"
+    "today"
+    "tomorrow"
+    "too"
+    "under"
+    "up"
+    "us"
+    "very"
+    "want"
+    "was"
+    "we"
+    "well"
+    "were"
+    "what"
+    "when"
+    "where"
+    "which"
+    "who"
+    "why"
+    "will"
+    "with"
+    "would"
+    "you"
+    "your"
+)
+
+CORE_DE_WORDS=(
+    "aber"
+    "alle"
+    "als"
+    "also"
+    "auch"
+    "auf"
+    "aus"
+    "bei"
+    "bin"
+    "bis"
+    "bitte"
+    "da"
+    "danke"
+    "das"
+    "dass"
+    "dein"
+    "der"
+    "die"
+    "dies"
+    "diese"
+    "du"
+    "ein"
+    "eine"
+    "er"
+    "es"
+    "für"
+    "ganz"
+    "gehen"
+    "gut"
+    "haben"
+    "hallo"
+    "hier"
+    "ich"
+    "immer"
+    "in"
+    "ist"
+    "ja"
+    "jetzt"
+    "kann"
+    "kein"
+    "kommen"
+    "können"
+    "machen"
+    "man"
+    "mehr"
+    "mein"
+    "mit"
+    "morgen"
+    "möglich"
+    "möglicherweise"
+    "müssen"
+    "nach"
+    "nicht"
+    "noch"
+    "nur"
+    "oder"
+    "sehr"
+    "sein"
+    "sie"
+    "sind"
+    "so"
+    "schon"
+    "über"
+    "und"
+    "uns"
+    "vom"
+    "von"
+    "war"
+    "was"
+    "wenn"
+    "wer"
+    "wie"
+    "wieder"
+    "will"
+    "wir"
+    "wo"
+    "zu"
+    "zum"
+    "zur"
+    "entschuldigung"
+    "wahrscheinlich"
+)
 
 # ============================================================
 # REQUIRED COMMANDS
@@ -585,14 +883,60 @@ extract_hunspell_base_words \
     "${DE_DIR}/hunspell.base"
 
 # ============================================================
+# CURATED CORE VOCABULARY
+# ============================================================
+#
+# These words are not trusted blindly. They are added as
+# candidates and MUST still pass the complete Hunspell .dic+.aff
+# validation later.
+#
+# The lists are deliberately small and focused on common words
+# plus Spanish (Argentina) voseo/diacritic forms that should not
+# disappear just because an upstream frequency source changes.
+# ============================================================
+
+write_core_words() {
+    local language="$1"
+    local output="$2"
+
+    rm -f "${output}"
+
+    case "${language}" in
+        es-AR)
+            printf '%s\n' "${CORE_ES_AR_WORDS[@]}" > "${output}"
+            ;;
+        en-en)
+            printf '%s\n' "${CORE_EN_WORDS[@]}" > "${output}"
+            ;;
+        de-de)
+            printf '%s\n' "${CORE_DE_WORDS[@]}" > "${output}"
+            ;;
+        *)
+            echo "ERROR: unknown core vocabulary language: ${language}"
+            exit 1
+            ;;
+    esac
+
+    if [[ ! -s "${output}" ]]; then
+        echo "ERROR: core vocabulary is empty: ${language}"
+        exit 1
+    fi
+}
+
+write_core_words "es-AR" "${ES_DIR}/core.txt"
+write_core_words "en-en" "${EN_DIR}/core.txt"
+write_core_words "de-de" "${DE_DIR}/core.txt"
+
+# ============================================================
 # BUILD CANDIDATES
 # ============================================================
 
 build_candidates() {
     local language="$1"
     local frequency="$2"
-    local hunspell="$3"
-    local output="$4"
+    local core="$3"
+    local hunspell="$4"
+    local output="$5"
 
     echo ""
     echo "============================================================"
@@ -607,8 +951,9 @@ import sys
 import unicodedata
 
 frequency_file = sys.argv[1]
-hunspell_file = sys.argv[2]
-output_file = sys.argv[3]
+core_file = sys.argv[2]
+hunspell_file = sys.argv[3]
+output_file = sys.argv[4]
 
 def normalize(word):
     return unicodedata.normalize(
@@ -620,20 +965,31 @@ def valid_token(word):
     if not word:
         return False
 
-    has_letter = False
+    # Unicode letters are allowed, including áéíóúüñ, äöü, ß, etc.
+    # NFC is applied before this check. Do NOT ASCII-fold or strip
+    # accents: the accented spelling is the real dictionary word.
+    if not any(char.isalpha() for char in word):
+        return False
+
+    if word[0] in "'’-" or word[-1] in "'’-":
+        return False
+
+    previous_punctuation = False
 
     for char in word:
-
         if char.isalpha():
-            has_letter = True
+            previous_punctuation = False
             continue
 
-        if char in "'’'-":
+        if char in "'’-":
+            if previous_punctuation:
+                return False
+            previous_punctuation = True
             continue
 
         return False
 
-    return has_letter
+    return True
 
 seen = set()
 count = 0
@@ -665,6 +1021,33 @@ with open(
 
             seen.add(word)
 
+            out.write(word + "\n")
+            count += 1
+
+    # --------------------------------------------------------
+    # Curated core vocabulary.
+    #
+    # Added AFTER the frequency list so normal frequency order is
+    # preserved. A core word only gets into .dict if Hunspell
+    # accepts it later.
+    # --------------------------------------------------------
+
+    with open(
+        core_file,
+        encoding="utf-8"
+    ) as f:
+
+        for raw in f:
+
+            word = normalize(raw)
+
+            if not valid_token(word):
+                continue
+
+            if word in seen:
+                continue
+
+            seen.add(word)
             out.write(word + "\n")
             count += 1
 
@@ -1017,8 +1400,9 @@ write_dictionary \
 generate_delete_index() {
     local language="$1"
     local dictionary="$2"
-    local output="$3"
-    local budget="$4"
+    local priority_words="$3"
+    local output="$4"
+    local budget="$5"
 
     local words_file
     local pairs_file
@@ -1130,12 +1514,13 @@ generate_delete_index() {
 import sys
 
 words_file = sys.argv[1]
-output_file = sys.argv[2]
-budget = int(sys.argv[3])
-top_distance2_words = int(sys.argv[4])
-max_distance = int(sys.argv[5])
-max_word_length = int(sys.argv[6])
-max_candidates = int(sys.argv[7])
+priority_file = sys.argv[2]
+output_file = sys.argv[3]
+budget = int(sys.argv[4])
+top_distance2_words = int(sys.argv[5])
+max_distance = int(sys.argv[6])
+max_word_length = int(sys.argv[7])
+max_candidates = int(sys.argv[8])
 
 def generate_deletes(word, distance):
     result = set()
@@ -1171,6 +1556,18 @@ def generate_deletes(word, distance):
 
     return result
 
+priority_words = set()
+
+with open(
+    priority_file,
+    encoding="utf-8",
+    errors="replace"
+) as f:
+    for raw in f:
+        word = raw.strip()
+        if word:
+            priority_words.add(word)
+
 words = []
 
 with open(
@@ -1196,7 +1593,10 @@ for rank, word in enumerate(words):
     if len(word) > max_word_length:
         continue
 
-    if rank < top_distance2_words:
+    if (
+        rank < top_distance2_words
+        or word in priority_words
+    ):
         distance = min(
             2,
             max_distance
@@ -1501,13 +1901,97 @@ check_word "es-AR" "debería"
 check_word "es-AR" "vos"
 check_word "es-AR" "tenés"
 check_word "es-AR" "podés"
+check_word "es-AR" "querés"
+check_word "es-AR" "sabés"
 check_word "es-AR" "hacés"
+check_word "es-AR" "decís"
+check_word "es-AR" "venís"
+check_word "es-AR" "sentís"
+check_word "es-AR" "estás"
+check_word "es-AR" "sos"
 check_word "es-AR" "acá"
+check_word "es-AR" "allá"
+check_word "es-AR" "también"
+check_word "es-AR" "cómo"
+check_word "es-AR" "qué"
+check_word "es-AR" "cuándo"
+check_word "es-AR" "dónde"
 
 # These should NOT become dictionary words merely because they
 # are useful typo/delete keys.
 
 check_word_absent "es-AR" "manana"
+
+
+# ------------------------------------------------------------
+# Unicode regression checks
+# ------------------------------------------------------------
+#
+# NFC is the canonical storage form. This verifies that accented
+# Spanish words are present in composed Unicode form and that no
+# non-NFC entry slipped into the runtime dictionary.
+# ------------------------------------------------------------
+
+check_nfc_word() {
+    local language="$1"
+    local word="$2"
+    local dictionary="${OUTPUT_DIR}/${language}.dict"
+
+    if python3 -         "${dictionary}"         "${word}" <<'PY'
+import sys
+import unicodedata
+
+dictionary = sys.argv[1]
+word = sys.argv[2]
+target = unicodedata.normalize("NFC", word)
+
+found = False
+has_non_nfc = False
+
+with open(dictionary, encoding="utf-8", errors="replace") as f:
+    for raw in f:
+        value = raw.rstrip("\n\r")
+
+        if value == target:
+            found = True
+
+        if value and value != unicodedata.normalize("NFC", value):
+            has_non_nfc = True
+
+if not found:
+    raise SystemExit(1)
+
+if has_non_nfc:
+    raise SystemExit(2)
+PY
+    then
+        echo "OK: NFC: ${language}: ${word}"
+    else
+        status=$?
+        if (( status == 2 )); then
+            echo "ERROR: non-NFC dictionary entry found: ${language}"
+            exit 1
+        fi
+
+        echo "ERROR: NFC regression check failed: ${language}: ${word}"
+        exit 1
+    fi
+}
+
+check_nfc_word "es-AR" "mañana"
+check_nfc_word "es-AR" "pasaría"
+check_nfc_word "es-AR" "debería"
+check_nfc_word "es-AR" "tenés"
+check_nfc_word "es-AR" "podés"
+check_nfc_word "es-AR" "hacés"
+check_nfc_word "es-AR" "querés"
+check_nfc_word "es-AR" "sabés"
+check_nfc_word "es-AR" "decís"
+check_nfc_word "es-AR" "venís"
+check_nfc_word "es-AR" "sentís"
+check_nfc_word "es-AR" "estás"
+check_nfc_word "es-AR" "acá"
+check_nfc_word "es-AR" "allá"
 
 # ------------------------------------------------------------
 # English
@@ -1588,15 +2072,27 @@ for line in sys.stdin:
     if not word:
         continue
 
-    valid = False
+    if not any(char.isalpha() for char in word):
+        print(word)
+        continue
+
+    if word[0] in "'’-" or word[-1] in "'’-":
+        print(word)
+        continue
+
+    previous_punctuation = False
+    valid = True
 
     for char in word:
-
         if char.isalpha():
-            valid = True
+            previous_punctuation = False
             continue
 
-        if char in "'’'-":
+        if char in "'’-":
+            if previous_punctuation:
+                valid = False
+                break
+            previous_punctuation = True
             continue
 
         valid = False
@@ -1721,10 +2217,58 @@ validate_delete_targets \
     "${OUTPUT_DIR}/en-en.dict" \
     "${OUTPUT_DIR}/en-en.deletes"
 
-validate_delete_targets \
-    "de-de" \
-    "${OUTPUT_DIR}/de-de.dict" \
-    "${OUTPUT_DIR}/de-de.deletes"
+validate_delete_targets     "de-de"     "${OUTPUT_DIR}/de-de.dict"     "${OUTPUT_DIR}/de-de.deletes"
+
+# ============================================================
+# VERIFY DELETE KEYS ARE NOT BEING ADDED AS WORDS
+# ============================================================
+#
+# A delete key may legitimately also be a real word. That is not
+# an error: it can be a valid word and a valid typo/search key.
+#
+# The important invariant is that delete generation only flows
+# from validated .dict words. No delete key is ever fed back into
+# candidate generation or .dict generation.
+# ============================================================
+
+report_delete_key_overlaps() {
+    local language="$1"
+    local dictionary="$2"
+    local deletes="$3"
+
+    local dictionary_words
+    local delete_keys
+    local overlaps
+
+    dictionary_words="${WORK_DIR}/${language}.overlap.dictionary"
+    delete_keys="${WORK_DIR}/${language}.overlap.delete.keys"
+    overlaps="${WORK_DIR}/${language}.overlap.result"
+
+    tail -n +2 "${dictionary}" |
+        sort -u > "${dictionary_words}"
+
+    tail -n +5 "${deletes}" |
+        cut -f1 |
+        sort -u > "${delete_keys}"
+
+    comm -12         "${dictionary_words}"         "${delete_keys}"         > "${overlaps}"
+
+    echo ""
+    echo "Delete-key/dictionary overlap: ${language}"
+    echo "  Overlapping keys: $(wc -l < "${overlaps}")"
+
+    if [[ -s "${overlaps}" ]]; then
+        echo "  Note: overlap is allowed when the key is independently a real word."
+        echo "  Examples:"
+        head -n 10 "${overlaps}"
+    fi
+}
+
+report_delete_key_overlaps     "es-AR"     "${OUTPUT_DIR}/es-AR.dict"     "${OUTPUT_DIR}/es-AR.deletes"
+
+report_delete_key_overlaps     "en-en"     "${OUTPUT_DIR}/en-en.dict"     "${OUTPUT_DIR}/en-en.deletes"
+
+report_delete_key_overlaps     "de-de"     "${OUTPUT_DIR}/de-de.dict"     "${OUTPUT_DIR}/de-de.deletes"
 
 # ============================================================
 # FINAL SIZE REPORT
@@ -1775,34 +2319,13 @@ do
 
     delete_mappings="$(tail -n +5 "${deletes}" | wc -l)"
 
-    language_total=$(
-        (
-            dictionary_size +
-            delete_size +
-            metadata_size
-        )
-    )
+    language_total=$((         dictionary_size +         delete_size +         metadata_size     ))
 
-    TOTAL_DICTIONARY_BYTES=$(
-        (
-            TOTAL_DICTIONARY_BYTES +
-            dictionary_size
-        )
-    )
+    TOTAL_DICTIONARY_BYTES=$((         TOTAL_DICTIONARY_BYTES +         dictionary_size     ))
 
-    TOTAL_DELETE_BYTES=$(
-        (
-            TOTAL_DELETE_BYTES +
-            delete_size
-        )
-    )
+    TOTAL_DELETE_BYTES=$((         TOTAL_DELETE_BYTES +         delete_size     ))
 
-    TOTAL_METADATA_BYTES=$(
-        (
-            TOTAL_METADATA_BYTES +
-            metadata_size
-        )
-    )
+    TOTAL_METADATA_BYTES=$((         TOTAL_METADATA_BYTES +         metadata_size     ))
 
     echo ""
     echo "${language}"
@@ -1815,21 +2338,9 @@ do
 
 done
 
-TOTAL_GENERATED_BYTES=$(
-    (
-        TOTAL_DICTIONARY_BYTES +
-        TOTAL_DELETE_BYTES +
-        TOTAL_METADATA_BYTES
-    )
-)
+TOTAL_GENERATED_BYTES=$((     TOTAL_DICTIONARY_BYTES +     TOTAL_DELETE_BYTES +     TOTAL_METADATA_BYTES ))
 
-TOTAL_MIB=$(
-    (
-        TOTAL_GENERATED_BYTES /
-        1024 /
-        1024
-    )
-)
+TOTAL_MIB=$((     TOTAL_GENERATED_BYTES /     1024 /     1024 ))
 
 echo ""
 echo "============================================================"
