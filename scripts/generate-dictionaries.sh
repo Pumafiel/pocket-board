@@ -1527,114 +1527,97 @@ PY
 # Required vocabulary and Unicode regression checks
 ###############################################################################
 
-check_required_words() {
-    print_section "Checking required vocabulary"
-
-    python3 \
-        "${OUTPUT_DIR}/es-AR.dict" \
-        "${OUTPUT_DIR}/en-en.dict" \
-        "${OUTPUT_DIR}/de-de.dict" \
-        <<'PY'
+python3 - "${OUTPUT_DIR}/es-AR.dict" "${OUTPUT_DIR}/en-en.dict" "${OUTPUT_DIR}/de-de.dict" <<'PY'
 import sys
+import unicodedata
+from pathlib import Path
 
-es_file = sys.argv[1]
-en_file = sys.argv[2]
-de_file = sys.argv[3]
+paths = {
+    "es-AR": Path(sys.argv[1]),
+    "en-en": Path(sys.argv[2]),
+    "de-de": Path(sys.argv[3]),
+}
 
-def read_dictionary(path):
+required = {
+    "es-AR": [
+        "mañana",
+        "pasaría",
+        "debería",
+        "vos",
+        "tenés",
+        "podés",
+        "querés",
+        "hacés",
+        "decís",
+        "venís",
+        "sentís",
+        "acá",
+        "cuándo",
+        "dónde",
+    ],
+    "en-en": [
+        "the",
+        "have",
+        "hello",
+    ],
+    "de-de": [
+        "ich",
+        "nicht",
+        "morgen",
+        "entschuldigung",
+        "wahrscheinlich",
+        "möglicherweise",
+    ],
+}
+
+for language, path in paths.items():
+    if not path.is_file():
+        raise SystemExit(f"ERROR: Missing dictionary: {path}")
+
     words = set()
 
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            word = line.rstrip("\n")
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            word = line.rstrip("\n\r")
 
-            if not word:
+            if not word or word.startswith("#"):
                 continue
 
-            if word.startswith("#"):
-                continue
-
+            word = unicodedata.normalize("NFC", word)
             words.add(word)
 
-    return words
+    for word in required[language]:
+        word = unicodedata.normalize("NFC", word)
 
-es = read_dictionary(es_file)
-en = read_dictionary(en_file)
-de = read_dictionary(de_file)
+        if word not in words:
+            raise SystemExit(
+                f"ERROR: Required word missing: {language}: {word}"
+            )
 
-###############################################################################
-# Spanish Argentina
-###############################################################################
+    print(f"Required vocabulary OK: {language}")
 
-required_es = {
-    "mañana",
-    "pasaría",
-    "debería",
-    "vos",
-    "tenés",
-    "podés",
-    "querés",
-    "hacés",
-    "decís",
-    "venís",
-    "sentís",
-    "acá",
-    "cuándo",
-    "dónde",
-}
+# Spanish-specific regression guard.
+es_words = set()
 
-###############################################################################
-# English
-###############################################################################
+with paths["es-AR"].open("r", encoding="utf-8") as fh:
+    for line in fh:
+        word = line.rstrip("\n\r")
 
-required_en = {
-    "the",
-    "have",
-    "hello",
-}
+        if word and not word.startswith("#"):
+            es_words.add(unicodedata.normalize("NFC", word))
 
-###############################################################################
-# German
-###############################################################################
-
-required_de = {
-    "ich",
-    "nicht",
-    "morgen",
-    "entschuldigung",
-    "wahrscheinlich",
-    "möglicherweise",
-}
-
-def check(language, required, vocabulary):
-    missing = sorted(required - vocabulary)
-
-    if missing:
-        print(f"ERROR: Missing required {language} words:")
-
-        for word in missing:
-            print(f"  {word}")
-
-        raise SystemExit(1)
-
-    print(
-        f"{language}: all {len(required)} required words present"
-    )
-
-check("es-AR", required_es, es)
-check("en-en", required_en, en)
-check("de-de", required_de, de)
-
-###############################################################################
-# Spanish regression:
-#
-# The unaccented form must NOT be introduced as a replacement for mañana.
-###############################################################################
-
-if "manana" in es:
+if "manana" in es_words:
     raise SystemExit(
-        "ERROR: Spanish regression: 'manana' must not be present"
+        "ERROR: es-AR regression: unaccented 'manana' must not be present"
     )
+
+if "mañana" not in es_words:
+    raise SystemExit(
+        "ERROR: es-AR regression: accented 'mañana' must be present"
+    )
+
+print("Spanish accent regression OK: mañana present, manana absent")
+PY
 
 ###############################################################################
 # Explicit NFC checks.
