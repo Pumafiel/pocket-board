@@ -1402,33 +1402,18 @@ size_report() {
     local total_mib=0
 
     for language in "${LANGUAGES[@]}"; do
-        dictionary_size="$(
-            wc -c < "${OUTPUT_DIR}/${language}.dict"
-        )"
 
-        delete_size="$(
-            wc -c < "${OUTPUT_DIR}/${language}.deletes"
-        )"
+        dictionary_size="$(wc -c < "${OUTPUT_DIR}/${language}.dict")"
+        delete_size="$(wc -c < "${OUTPUT_DIR}/${language}.deletes")"
 
-        language_total=$(
-            (
-                dictionary_size +
-                delete_size
-            )
-        )
+        language_total=$((dictionary_size + delete_size))
 
         total_dictionary_bytes=$(
-            (
-                total_dictionary_bytes +
-                dictionary_size
-            )
+            total_dictionary_bytes + dictionary_size
         )
 
         total_delete_bytes=$(
-            (
-                total_delete_bytes +
-                delete_size
-            )
+            total_delete_bytes + delete_size
         )
 
         echo "${language}:"
@@ -1438,18 +1423,12 @@ size_report() {
     done
 
     total_generated_bytes=$(
-        (
-            total_dictionary_bytes +
-            total_delete_bytes +
-            total_metadata_bytes
-        )
+        total_dictionary_bytes +
+        total_delete_bytes +
+        total_metadata_bytes
     )
 
-    total_mib=$(
-        (
-            total_generated_bytes / 1024 / 1024
-        )
-    )
+    total_mib=$((total_generated_bytes / 1024 / 1024))
 
     echo
     echo "Total .dict bytes:    ${total_dictionary_bytes}"
