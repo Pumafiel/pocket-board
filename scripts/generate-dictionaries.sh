@@ -7,20 +7,36 @@ set -euo pipefail
 #
 # DIRECT-SOURCE VERSION
 #
+# - NO HUNSPELL
+# - FrequencyWords is used directly
+# - Unicode/NFC is preserved
+# - Accents, ñ and umlauts are preserved
+# - Curated core words are always retained
+# - Unambiguous unaccented duplicates are removed
+# - Delete indexes reference ONLY final dictionary words
+#
 # IMPORTANT:
-#   - NO HUNSPELL
-#   - FrequencyWords is used directly
-#   - Unicode/NFC is preserved
-#   - Accents, ñ and umlauts are preserved
-#   - Curated core words are always retained
-#   - Unaccented duplicate variants are removed when the
-#     accented form is an unambiguous dictionary word
-#   - Deletes are generated ONLY from final dictionary words
-#   - Delete files contain ONE candidate per line
+# The Android application expects these exact assets:
+#
+#   es-AR.dict
+#   es-AR.deletes
+#
+#   en-en.dict
+#   en-en.deletes
+#
+#   de-de.dict
+#   de-de.deletes
+#
+# The script generates them under:
+#
+#   app/src/main/assets/dictionaries/
 #
 # ============================================================
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(
+    cd "$(dirname "${BASH_SOURCE[0]}")/.." &&
+    pwd
+)"
 
 BUILD_ROOT="${BUILD_ROOT:-${PROJECT_ROOT}/build/pocketboard-dictionaries}"
 
@@ -87,12 +103,15 @@ DE_SOURCE="${SOURCE_ROOT}/de_50k.txt"
 # ============================================================
 
 download_if_missing() {
+
     local url="$1"
     local output="$2"
 
     if [[ -s "${output}" ]]; then
+
         echo "Using cached source:"
         echo "  ${output}"
+
         return
     fi
 
@@ -110,18 +129,23 @@ download_if_missing() {
         --output "${output}"
 
     if [[ ! -s "${output}" ]]; then
+
         echo ""
         echo "ERROR: downloaded source is empty:"
         echo "  ${output}"
+
         exit 1
     fi
 }
 
 normalize_source() {
+
     local input="$1"
     local output="$2"
 
-    "${PYTHON_BIN}" - "${input}" "${output}" <<'PY'
+    "${PYTHON_BIN}" \
+        - "${input}" "${output}" <<'PY'
+
 import sys
 import unicodedata
 
@@ -133,17 +157,26 @@ MAX_LEN = 40
 
 
 def normalize_word(word):
+
     word = word.strip()
 
     if not word:
         return ""
 
-    word = unicodedata.normalize("NFC", word)
+    # Preserve Unicode and normalize to NFC.
+    word = unicodedata.normalize(
+        "NFC",
+        word
+    )
 
-    if len(word) < MIN_LEN or len(word) > MAX_LEN:
+    if len(word) < MIN_LEN:
+        return ""
+
+    if len(word) > MAX_LEN:
         return ""
 
     for ch in word:
+
         category = unicodedata.category(ch)
 
         if ch in ("'", "’", "-"):
@@ -182,7 +215,9 @@ with open(
         if not parts:
             continue
 
-        word = normalize_word(parts[0])
+        word = normalize_word(
+            parts[0]
+        )
 
         if not word:
             continue
@@ -202,10 +237,17 @@ with open(
 ) as f:
 
     for word in result:
-        f.write(word + "\n")
+
+        f.write(
+            word + "\n"
+        )
 
 
-print(f"Normalized source words: {len(result)}")
+print(
+    f"Normalized source words: "
+    f"{len(result)}"
+)
+
 PY
 }
 
@@ -252,7 +294,44 @@ normalize_source \
     "${FREQUENCY_ROOT}/de-de.source"
 
 # ============================================================
-# Build final dictionaries
+# Build dictionaries
+#
+# The Python stage:
+#
+#   1. Loads FrequencyWords.
+#   2. Adds CORE vocabulary.
+#   3. Preserves FrequencyWords ranking.
+#   4. Detects unaccented/accented equivalents.
+#   5. Removes only unambiguous unaccented duplicates.
+#   6. Writes the final .dict.
+#   7. Writes a temporary .ranked file.
+#
+# Example:
+#
+#   mañana
+#   manana
+#
+# becomes:
+#
+#   dictionary:
+#       mañana
+#
+#   correction map:
+#       manana -> mañana
+#
+# Ambiguous legitimate pairs are preserved:
+#
+#   si / sí
+#   tu / tú
+#   el / él
+#
+# Core forms such as:
+#
+#   tenes
+#   podes
+#   queres
+#
+# are also protected.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -268,7 +347,9 @@ normalize_source \
 
 import sys
 import unicodedata
+
 from pathlib import Path
+
 
 es_source = Path(sys.argv[1])
 en_source = Path(sys.argv[2])
@@ -280,10 +361,12 @@ max_words = int(sys.argv[5])
 min_len = int(sys.argv[6])
 max_len = int(sys.argv[7])
 
+
 output_root.mkdir(
     parents=True,
     exist_ok=True
 )
+
 
 # ============================================================
 # Core vocabulary
@@ -292,120 +375,193 @@ output_root.mkdir(
 CORE = {
 
     "es-AR": [
+
         "vos",
+
         "tenés",
         "tenes",
+
         "podés",
         "podes",
+
         "querés",
         "queres",
+
         "sabés",
         "sabes",
+
         "venís",
         "venis",
+
         "decís",
         "decis",
+
         "hacés",
         "haces",
+
         "mirás",
         "miras",
+
         "hablás",
         "hablas",
+
         "comés",
         "comes",
+
         "vivís",
         "vivis",
+
         "salís",
         "salis",
+
         "vení",
         "veni",
+
         "decime",
         "haceme",
 
         "mañana",
         "mañanas",
+
         "también",
+
         "qué",
         "cómo",
         "cuándo",
         "dónde",
         "quién",
+
         "porque",
         "porqué",
+
         "día",
         "días",
+
         "más",
         "sí",
+
         "está",
         "estás",
         "están",
+
         "acá",
         "allá",
+
         "después",
         "así",
         "sólo",
 
         "pasaría",
         "debería",
+
         "hago",
         "hacer",
         "veré",
     ],
 
     "en-en": [
+
         "hello",
         "world",
+
         "the",
         "have",
         "this",
         "that",
+
         "what",
         "where",
         "when",
         "who",
         "which",
+
         "please",
+
         "thanks",
         "thank",
+
         "sorry",
+
         "tomorrow",
         "today",
     ],
 
     "de-de": [
+
         "hallo",
         "welt",
+
         "ich",
         "nicht",
+
         "morgen",
         "heute",
+
         "bitte",
         "danke",
         "dankeschön",
+
         "entschuldigung",
+
         "wahrscheinlich",
         "möglicherweise",
         "möglich",
+
         "für",
         "über",
+
         "schön",
         "größer",
         "größe",
+
         "später",
+
         "früh",
         "früher",
     ],
 }
 
 
+# ============================================================
+# Unicode helpers
+# ============================================================
+
 def nfc(word):
+
     return unicodedata.normalize(
         "NFC",
         word.strip()
     )
 
 
+def without_diacritics(word):
+
+    normalized = unicodedata.normalize(
+        "NFD",
+        word
+    )
+
+    return "".join(
+        ch
+        for ch in normalized
+        if unicodedata.category(ch) != "Mn"
+    )
+
+
+def has_diacritics(word):
+
+    return (
+        without_diacritics(word)
+        != word
+    )
+
+
+# ============================================================
+# Word validation
+# ============================================================
+
 def valid_word(word):
+
     word = nfc(word)
 
     if len(word) < min_len:
@@ -432,35 +588,12 @@ def valid_word(word):
     return True
 
 
-def without_diacritics(word):
-    """
-    Comparison form only.
-
-    Examples:
-
-        mañana   -> manana
-        deberías -> deberias
-        también  -> tambien
-        después  -> despues
-        für       -> fur
-        größer    -> grosser
-
-    This does NOT modify the actual dictionary word.
-    """
-
-    normalized = unicodedata.normalize(
-        "NFD",
-        word
-    )
-
-    return "".join(
-        ch
-        for ch in normalized
-        if unicodedata.category(ch) != "Mn"
-    )
-
+# ============================================================
+# Source loading
+# ============================================================
 
 def load_source(path):
+
     result = []
     seen = set()
 
@@ -485,7 +618,30 @@ def load_source(path):
     return result
 
 
+# ============================================================
+# Build equivalence groups
+# ============================================================
+
+def build_unaccented_groups(words):
+
+    groups = {}
+
+    for word in words:
+
+        key = without_diacritics(
+            word
+        )
+
+        groups.setdefault(
+            key,
+            []
+        ).append(word)
+
+    return groups
+
+
 sources = {
+
     "es-AR": es_source,
     "en-en": en_source,
     "de-de": de_source,
@@ -496,14 +652,30 @@ for language, source_path in sources.items():
 
     print("")
     print("=" * 60)
-    print(f" Building dictionary: {language}")
+    print(
+        f" Building dictionary: "
+        f"{language}"
+    )
     print("=" * 60)
 
-    source_words = load_source(source_path)
-    source_set = set(source_words)
+    source_words = load_source(
+        source_path
+    )
 
-    print(f"Source words: {len(source_words)}")
-    print(f"Core words:   {len(CORE[language])}")
+    source_set = set(
+        source_words
+    )
+
+    print(
+        f"Source words: "
+        f"{len(source_words)}"
+    )
+
+    print(
+        f"Core words:   "
+        f"{len(CORE[language])}"
+    )
+
 
     # --------------------------------------------------------
     # Core words first.
@@ -519,737 +691,8 @@ for language, source_path in sources.items():
         if not valid_word(word):
 
             print(
-                f"WARNING: invalid core word: {word}"
-            )
-
-            continue
-
-        if word not in selected_set:
-
-            selected.append(word)
-            selected_set.add(word)
-
-        if word in source_set:
-
-            print(
-                f"CORE + SOURCE: "
-                f"{language}: {word}"
-            )
-
-        else:
-
-            print(
-                f"CORE ONLY: "
-                f"{language}: {word}"
-            )
-
-    # --------------------------------------------------------
-    # Add FrequencyWords in original frequency order.
-    # --------------------------------------------------------
-
-    for word in source_words:
-
-        if word in selected_set:
-            continue
-
-        if len(selected) >= max_words:
-            break
-
-        selected.append(word)
-        selected_set.add(word)
-
-    # --------------------------------------------------------
-    # Build automatic diacritic relationships.
-    #
-    # plain form:
-    #
-    #   manana
-    #
-    # accented form:
-    #
-    #   mañana
-    #
-    # We do NOT blindly remove every plain form.
-    #
-    # A plain form is removed only when:
-    #
-    #   1. there is exactly one accented candidate;
-    #   2. the accented candidate is in the final selection;
-    #   3. the plain form is not explicitly protected by CORE.
-    #
-    # This keeps the dictionary from treating "manana" as an
-    # exact word while preserving deliberately curated pairs
-    # such as "tenes" / "tenés".
-    # --------------------------------------------------------
-
-    selected_lookup = set(selected)
-
-    core_set = {
-        nfc(word)
-        for word in CORE[language]
-        if valid_word(nfc(word))
-    }
-
-    diacritic_candidates = {}
-
-    for word in selected:
-
-        plain = without_diacritics(word)
-
-        if plain == word:
-            continue
-
-        diacritic_candidates.setdefault(
-            plain,
-            []
-        ).append(word)
-
-    # --------------------------------------------------------
-    # Remove unaccented duplicates when the accented form is
-    # unambiguous.
-    # --------------------------------------------------------
-
-    removed_diacritic_variants = {}
-
-    filtered_selected = []
-
-    for word in selected:
-
-        if word in core_set:
-            filtered_selected.append(word)
-            continue
-
-        candidates = diacritic_candidates.get(
-            word,
-            []
-        )
-
-        if len(candidates) == 1:
-
-            target = candidates[0]
-
-            if target != word:
-
-                removed_diacritic_variants[
-                    word
-                ] = target
-
-                print(
-                    "ACCENT VARIANT REMOVED: "
-                    f"{language}: "
-                    f"{word} -> {target}"
-                )
-
-                continue
-
-        filtered_selected.append(word)
-
-    selected = filtered_selected
-    selected_set = set(selected)
-
-    # --------------------------------------------------------
-    # Rebuild the diacritic map using the FINAL dictionary.
-    #
-    # This guarantees that every generated correction target
-    # really exists in the final .dict.
-    # --------------------------------------------------------
-
-    final_diacritic_map = {}
-
-    for word in selected:
-
-        plain = without_diacritics(word)
-
-        if plain == word:
-            continue
-
-        final_diacritic_map.setdefault(
-            plain,
-            []
-        ).append(word)
-
-    # --------------------------------------------------------
-    # Runtime dictionary is sorted deterministically.
-    # --------------------------------------------------------
-
-    runtime_words = sorted(
-        selected,
-        key=lambda x: (
-            x.casefold(),
-            x
-        )
-    )
-
-    dictionary_path = (
-        output_root /
-        f"{language}.dict"
-    )
-
-    with dictionary_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
-
-        f.write(
-            "#POCKETBOARD-DICT-1\n"
-        )
-
-        for word in runtime_words:
-            f.write(word + "\n")
-
-    # --------------------------------------------------------
-    # Save final frequency-ranked order.
-    #
-    # IMPORTANT:
-    # Only final dictionary words are written here.
-    # --------------------------------------------------------
-
-    ranking_path = (
-        output_root /
-        f"{language}.ranked"
-    )
-
-    with ranking_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
-
-        for word in selected:
-            f.write(word + "\n")
-
-    # --------------------------------------------------------
-    # Save metadata.
-    # --------------------------------------------------------
-
-    meta_path = (
-        output_root /
-        f"{language}.meta"
-    )
-
-    with meta_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
-
-        f.write(
-            f"language={language}\n"
-        )
-
-        f.write(
-            "source=FrequencyWords\n"
-        )
-
-        f.write(
-            "hunspell=false\n"
-        )
-
-        f.write(
-            f"source_words={len(source_words)}\n"
-        )
-
-        f.write(
-            f"core_words={len(CORE[language])}\n"
-        )
-
-        f.write(
-            f"dictionary_words={len(runtime_words)}\n"
-        )
-
-        f.write(
-            "diacritic_variants_removed="
-            f"{len(removed_diacritic_variants)}\n"
-        )
-
-        unicode_words = sum(
-            any(
-                ord(ch) > 127
-                for ch in word
-            )
-            for word in runtime_words
-        )
-
-        f.write(
-            f"unicode_words={unicode_words}\n"
-        )
-
-    # --------------------------------------------------------
-    # Expected/core verification.
-    # --------------------------------------------------------
-
-    print("")
-    print("Expected/core verification:")
-
-    for word in CORE[language]:
-
-        word = nfc(word)
-
-        if word in selected_set:
-
-            print(
-                f"OK: {language}: {word}"
-            )
-
-        else:
-
-            print(
-                "ERROR: core word missing: "
-                f"{language}: {word}"
-            )
-
-            raise SystemExit(1)
-
-    # --------------------------------------------------------
-    # Important examples.
-    # --------------------------------------------------------
-
-    if language == "es-AR":
-
-        checks = {
-            "manana": "mañana",
-            "deberias": None,
-            "tambien": "también",
-            "despues": "después",
-        }
-
-        print("")
-        print(
-            "Automatic diacritic checks:"
-        )
-
-        for plain, expected in checks.items():
-
-            candidates = final_diacritic_map.get(
-                plain,
-                []
-            )
-
-            if expected is not None:
-
-                if expected in candidates:
-
-                    print(
-                        f"OK: {plain} -> {expected}"
-                    )
-
-                else:
-
-                    print(
-                        f"INFO: no automatic mapping "
-                        f"for {plain}"
-                    )
-
-            else:
-
-                print(
-                    f"{plain} -> "
-                    f"{candidates}"
-                )
-
-    print("")
-    print(
-        f"Dictionary words: "
-        f"{len(runtime_words)}"
-    )
-
-    print(
-        f"Output: {dictionary_path}"
-    )
-
-PY
-# ============================================================
-# Download sources
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Downloading FrequencyWords sources"
-echo "============================================================"
-
-download_if_missing \
-    "${FREQUENCY_ES_URL}" \
-    "${ES_SOURCE}"
-
-download_if_missing \
-    "${FREQUENCY_EN_URL}" \
-    "${EN_SOURCE}"
-
-download_if_missing \
-    "${FREQUENCY_DE_URL}" \
-    "${DE_SOURCE}"
-
-# ============================================================
-# Normalize sources
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Normalizing sources"
-echo "============================================================"
-
-normalize_source \
-    "${ES_SOURCE}" \
-    "${FREQUENCY_ROOT}/es-AR.source"
-
-normalize_source \
-    "${EN_SOURCE}" \
-    "${FREQUENCY_ROOT}/en-en.source"
-
-normalize_source \
-    "${DE_SOURCE}" \
-    "${FREQUENCY_ROOT}/de-de.source"
-
-# ============================================================
-# Build final dictionaries
-#
-# Important:
-#
-# The source remains frequency-ranked.
-#
-# We build two representations:
-#
-#   selected:
-#       final dictionary words
-#
-#   selected_ranked:
-#       same words in FrequencyWords order
-#
-# For Spanish, when an unaccented form has exactly one
-# accented equivalent in the final vocabulary, the unaccented
-# form is NOT kept as a dictionary word.
-#
-# Example:
-#
-#   mañana  -> kept
-#   manana  -> removed
-#
-# But ambiguous/legitimate pairs are preserved:
-#
-#   si / sí
-#   tu / tú
-#   el / él
-#
-# The unaccented form is only removed when the relationship is
-# unambiguous.
-# ============================================================
-
-"${PYTHON_BIN}" \
-    - \
-    "${FREQUENCY_ROOT}/es-AR.source" \
-    "${FREQUENCY_ROOT}/en-en.source" \
-    "${FREQUENCY_ROOT}/de-de.source" \
-    "${OUTPUT_ROOT}" \
-    "${MAX_WORDS}" \
-    "${MIN_WORD_LEN}" \
-    "${MAX_WORD_LEN}" \
-    <<'PY'
-
-import sys
-import unicodedata
-from pathlib import Path
-
-es_source = Path(sys.argv[1])
-en_source = Path(sys.argv[2])
-de_source = Path(sys.argv[3])
-output_root = Path(sys.argv[4])
-
-max_words = int(sys.argv[5])
-min_len = int(sys.argv[6])
-max_len = int(sys.argv[7])
-
-output_root.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
-# ============================================================
-# Core vocabulary
-# ============================================================
-
-CORE = {
-
-    "es-AR": [
-        "vos",
-        "tenés",
-        "tenes",
-        "podés",
-        "podes",
-        "querés",
-        "queres",
-        "sabés",
-        "sabes",
-        "venís",
-        "venis",
-        "decís",
-        "decis",
-        "hacés",
-        "haces",
-        "mirás",
-        "miras",
-        "hablás",
-        "hablas",
-        "comés",
-        "comes",
-        "vivís",
-        "vivis",
-        "salís",
-        "salis",
-        "vení",
-        "veni",
-        "decime",
-        "haceme",
-
-        "mañana",
-        "mañanas",
-        "también",
-        "qué",
-        "cómo",
-        "cuándo",
-        "dónde",
-        "quién",
-        "porque",
-        "porqué",
-        "día",
-        "días",
-        "más",
-        "sí",
-        "está",
-        "estás",
-        "están",
-        "acá",
-        "allá",
-        "después",
-        "así",
-        "sólo",
-
-        "pasaría",
-        "debería",
-
-        "hago",
-        "hacer",
-        "veré",
-    ],
-
-    "en-en": [
-        "hello",
-        "world",
-        "the",
-        "have",
-        "this",
-        "that",
-        "what",
-        "where",
-        "when",
-        "who",
-        "which",
-        "please",
-        "thanks",
-        "thank",
-        "sorry",
-        "tomorrow",
-        "today",
-    ],
-
-    "de-de": [
-        "hallo",
-        "welt",
-        "ich",
-        "nicht",
-        "morgen",
-        "heute",
-        "bitte",
-        "danke",
-        "dankeschön",
-        "entschuldigung",
-        "wahrscheinlich",
-        "möglicherweise",
-        "möglich",
-        "für",
-        "über",
-        "schön",
-        "größer",
-        "größe",
-        "später",
-        "früh",
-        "früher",
-    ],
-}
-
-
-def nfc(word):
-    return unicodedata.normalize(
-        "NFC",
-        word.strip()
-    )
-
-
-def without_diacritics(word):
-    """
-    Build a comparison key without Unicode combining marks.
-
-    Examples:
-
-        mañana   -> manana
-        deberías -> deberias
-        también  -> tambien
-        después  -> despues
-
-    Important:
-        This is ONLY a comparison key.
-        It must never be used as a dictionary word.
-    """
-
-    normalized = unicodedata.normalize(
-        "NFD",
-        word
-    )
-
-    return "".join(
-        ch
-        for ch in normalized
-        if unicodedata.category(ch) != "Mn"
-    )
-
-
-def has_diacritics(word):
-    """
-    Return True when removing Unicode combining marks changes
-    the word.
-    """
-
-    return (
-        without_diacritics(word)
-        != word
-    )
-
-
-def valid_word(word):
-    word = nfc(word)
-
-    if len(word) < min_len:
-        return False
-
-    if len(word) > max_len:
-        return False
-
-    for ch in word:
-
-        category = unicodedata.category(ch)
-
-        if ch in ("'", "’", "-"):
-            continue
-
-        if category.startswith("L"):
-            continue
-
-        if category.startswith("M"):
-            continue
-
-        return False
-
-    return True
-
-
-def load_source(path):
-    result = []
-    seen = set()
-
-    with path.open(
-        "r",
-        encoding="utf-8"
-    ) as f:
-
-        for line in f:
-
-            word = nfc(line)
-
-            if not valid_word(word):
-                continue
-
-            if word in seen:
-                continue
-
-            seen.add(word)
-            result.append(word)
-
-    return result
-
-
-def build_unaccented_groups(words):
-    """
-    Build:
-
-        unaccented form -> all real words sharing that form
-
-    Example:
-
-        manana -> ["manana", "mañana"]
-
-    The map is used ONLY to decide which source words should
-    remain dictionary entries.
-    """
-
-    groups = {}
-
-    for word in words:
-
-        key = without_diacritics(word)
-
-        groups.setdefault(
-            key,
-            []
-        ).append(word)
-
-    return groups
-
-
-sources = {
-    "es-AR": es_source,
-    "en-en": en_source,
-    "de-de": de_source,
-}
-
-
-for language, source_path in sources.items():
-
-    print("")
-    print("=" * 60)
-    print(f" Building dictionary: {language}")
-    print("=" * 60)
-
-    source_words = load_source(
-        source_path
-    )
-
-    source_set = set(
-        source_words
-    )
-
-    print(
-        f"Source words: {len(source_words)}"
-    )
-
-    print(
-        f"Core words:   {len(CORE[language])}"
-    )
-
-    # --------------------------------------------------------
-    # Start with CORE words.
-    # --------------------------------------------------------
-
-    selected = []
-    selected_set = set()
-
-    for word in CORE[language]:
-
-        word = nfc(word)
-
-        if not valid_word(word):
-
-            print(
-                f"WARNING: invalid core word: {word}"
+                f"WARNING: invalid core word: "
+                f"{word}"
             )
 
             continue
@@ -1273,12 +716,9 @@ for language, source_path in sources.items():
                 f"{language}: {word}"
             )
 
+
     # --------------------------------------------------------
-    # Add FrequencyWords in original frequency order.
-    #
-    # At this stage we still collect the source vocabulary.
-    # Diacritic cleanup happens after all source words have
-    # been selected.
+    # FrequencyWords in original ranking order.
     # --------------------------------------------------------
 
     for word in source_words:
@@ -1292,42 +732,32 @@ for language, source_path in sources.items():
         selected.append(word)
         selected_set.add(word)
 
+
     # --------------------------------------------------------
-    # Build unaccented equivalence groups.
+    # Remove unambiguous unaccented duplicates.
     #
-    # This is especially important for Spanish.
+    # IMPORTANT:
     #
-    # Example:
+    # This is NOT a general spell checker.
     #
-    #   manana
-    #   mañana
+    # We only remove:
     #
-    # become:
+    #     unaccented form
     #
-    #   manana -> [manana, mañana]
+    # when there is exactly one accented form sharing the
+    # same Unicode-normalized base.
     #
-    # We only remove the unaccented form when:
-    #
-    #   1. There is exactly one accented equivalent.
-    #   2. The accented equivalent is a real selected word.
-    #
-    # This prevents destructive handling of:
-    #
-    #   si / sí
-    #   tu / tú
-    #   el / él
-    #
-    # when both forms are legitimate dictionary words.
+    # Core vocabulary is always protected.
     # --------------------------------------------------------
+
+    accent_targets = {}
+    remove_unaccented = set()
 
     if language == "es-AR":
 
         groups = build_unaccented_groups(
             selected
         )
-
-        remove_unaccented = set()
-        accent_targets = {}
 
         for plain, candidates in groups.items():
 
@@ -1343,26 +773,16 @@ for language, source_path in sources.items():
                 if not has_diacritics(word)
             ]
 
-            # We only act when there is exactly one accented
-            # real word.
             if len(accented) != 1:
+                continue
+
+            if not unaccented:
                 continue
 
             target = accented[0]
 
-            # If there is more than one unaccented word,
-            # do not make assumptions.
-            if len(unaccented) == 0:
-                continue
-
-            # Only remove an unaccented source word when its
-            # accented equivalent is unambiguous.
             for plain_word in unaccented:
 
-                # Keep CORE unaccented words.
-                #
-                # This protects intentional vocabulary such as
-                # "tenes", "podes", "queres", etc.
                 if plain_word in CORE[language]:
                     continue
 
@@ -1374,11 +794,12 @@ for language, source_path in sources.items():
                     plain_word
                 ] = target
 
+
         if remove_unaccented:
 
             print("")
             print(
-                "Automatic unaccented-word cleanup:"
+                "Automatic unaccented cleanup:"
             )
 
             for plain_word in sorted(
@@ -1389,15 +810,13 @@ for language, source_path in sources.items():
                 )
             ):
 
-                target = accent_targets[
-                    plain_word
-                ]
-
                 print(
                     f"  REMOVE: "
                     f"{plain_word} "
-                    f"-> {target}"
+                    f"-> "
+                    f"{accent_targets[plain_word]}"
                 )
+
 
             selected = [
                 word
@@ -1409,17 +828,18 @@ for language, source_path in sources.items():
                 selected
             )
 
+
         print("")
         print(
-            "Unaccented cleanup removed:"
-            f" {len(remove_unaccented)}"
+            "Unaccented words removed: "
+            f"{len(remove_unaccented)}"
         )
 
+
     # --------------------------------------------------------
-    # Runtime dictionary is sorted deterministically.
+    # Runtime dictionary.
     #
-    # Dictionary.java performs binary-search/prefix operations,
-    # therefore deterministic lexical ordering is required.
+    # Dictionary.java expects deterministic lexical ordering.
     # --------------------------------------------------------
 
     runtime_words = sorted(
@@ -1430,10 +850,12 @@ for language, source_path in sources.items():
         )
     )
 
+
     dictionary_path = (
         output_root /
         f"{language}.dict"
     )
+
 
     with dictionary_path.open(
         "w",
@@ -1451,16 +873,16 @@ for language, source_path in sources.items():
                 word + "\n"
             )
 
+
     # --------------------------------------------------------
-    # Save frequency-ranked order for delete generation.
-    #
-    # This file is temporary and removed after delete generation.
+    # Frequency-ranked temporary file.
     # --------------------------------------------------------
 
     ranking_path = (
         output_root /
         f"{language}.ranked"
     )
+
 
     with ranking_path.open(
         "w",
@@ -1474,18 +896,13 @@ for language, source_path in sources.items():
                 word + "\n"
             )
 
+
     # --------------------------------------------------------
-    # Save automatic diacritic correction map.
+    # Temporary diacritic correction map.
     #
-    # This is a BUILD-ONLY file.
+    # This is consumed by Part 2.
     #
-    # It allows the next generation stage to reserve/insert
-    # high-priority mappings such as:
-    #
-    #   manana -> mañana
-    #   deberias -> deberías
-    #
-    # It is NOT packaged into Android assets.
+    # It is NOT copied to Android assets.
     # --------------------------------------------------------
 
     accent_path = (
@@ -1493,44 +910,45 @@ for language, source_path in sources.items():
         f"{language}.accent"
     )
 
+
     with accent_path.open(
         "w",
         encoding="utf-8",
         newline="\n"
     ) as f:
 
-        if language == "es-AR":
+        for plain_word in sorted(
+            accent_targets,
+            key=lambda x: (
+                x.casefold(),
+                x
+            )
+        ):
 
-            for plain_word in sorted(
-                accent_targets,
-                key=lambda x: (
-                    x.casefold(),
-                    x
-                )
-            ):
+            target = accent_targets[
+                plain_word
+            ]
 
-                target = accent_targets[
-                    plain_word
-                ]
+            if target not in selected_set:
+                continue
 
-                if target not in selected_set:
-                    continue
+            f.write(
+                plain_word
+                + "\t"
+                + target
+                + "\n"
+            )
 
-                f.write(
-                    plain_word
-                    + "\t"
-                    + target
-                    + "\n"
-                )
 
     # --------------------------------------------------------
-    # Metadata
+    # Metadata.
     # --------------------------------------------------------
 
     meta_path = (
         output_root /
         f"{language}.meta"
     )
+
 
     with meta_path.open(
         "w",
@@ -1578,8 +996,14 @@ for language, source_path in sources.items():
             f"{unicode_words}\n"
         )
 
+        f.write(
+            f"accent_corrections="
+            f"{len(accent_targets)}\n"
+        )
+
+
     # --------------------------------------------------------
-    # Expected/core verification
+    # Core verification.
     # --------------------------------------------------------
 
     print("")
@@ -1594,17 +1018,21 @@ for language, source_path in sources.items():
         if word in selected_set:
 
             print(
-                f"OK: {language}: {word}"
+                f"OK: "
+                f"{language}: "
+                f"{word}"
             )
 
         else:
 
             print(
                 f"ERROR: core word missing: "
-                f"{language}: {word}"
+                f"{language}: "
+                f"{word}"
             )
 
             raise SystemExit(1)
+
 
     print("")
     print(
@@ -1618,3 +1046,1331 @@ for language, source_path in sources.items():
     )
 
 PY
+# ============================================================
+# Generate compact delete indexes
+#
+# FORMAT EXPECTED BY DictionaryManager:
+#
+#   #POCKETBOARD-DELETES-1
+#   delete<TAB>candidate
+#
+# IMPORTANT:
+#
+# Each line contains ONE candidate.
+# Do NOT put multiple candidates on the same line.
+#
+# Only final dictionary words can become candidates.
+# ============================================================
+
+"${PYTHON_BIN}" \
+    - \
+    "${OUTPUT_ROOT}" \
+    "${DELETE_WORDS}" \
+    "${MAX_DELETES_PER_WORD}" \
+    "${MAX_DELETE_ENTRIES}" \
+    "${ES_DELETE_BUDGET}" \
+    "${EN_DELETE_BUDGET}" \
+    "${DE_DELETE_BUDGET}" \
+    <<'PY'
+
+import sys
+from pathlib import Path
+
+
+output_root = Path(sys.argv[1])
+
+delete_words_limit = int(sys.argv[2])
+max_deletes_per_word = int(sys.argv[3])
+max_delete_entries = int(sys.argv[4])
+
+budgets = {
+    "es-AR": int(sys.argv[5]),
+    "en-en": int(sys.argv[6]),
+    "de-de": int(sys.argv[7]),
+}
+
+
+DELETE_HEADER = "#POCKETBOARD-DELETES-1"
+
+
+def delete_variants(word):
+    """
+    Generate deterministic one-character deletes.
+
+    These are the dictionary-side deletes used by the runtime
+    symmetric-delete lookup.
+
+    We deliberately limit the number generated for each word
+    to keep the APK small.
+    """
+
+    if len(word) <= 1:
+        return []
+
+    result = []
+    seen = set()
+
+    # Prefer interior characters and then the beginning.
+    positions = list(range(len(word)))
+
+    positions.sort(
+        key=lambda index: (
+            0 if index > 0 else 1,
+            index
+        )
+    )
+
+    for index in positions:
+
+        deleted = (
+            word[:index]
+            +
+            word[index + 1:]
+        )
+
+        if not deleted:
+            continue
+
+        if deleted in seen:
+            continue
+
+        seen.add(deleted)
+        result.append(deleted)
+
+        if len(result) >= max_deletes_per_word:
+            break
+
+    return result
+
+
+total_entries_global = 0
+total_bytes_global = 0
+
+
+for language in (
+    "es-AR",
+    "en-en",
+    "de-de",
+):
+
+    dictionary_path = (
+        output_root /
+        f"{language}.dict"
+    )
+
+    ranked_path = (
+        output_root /
+        f"{language}.ranked"
+    )
+
+    accent_path = (
+        output_root /
+        f"{language}.accent"
+    )
+
+    deletes_path = (
+        output_root /
+        f"{language}.deletes"
+    )
+
+    budget = budgets[language]
+
+
+    # --------------------------------------------------------
+    # Load final dictionary.
+    # --------------------------------------------------------
+
+    with dictionary_path.open(
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        dictionary_lines = [
+            line.rstrip("\r\n")
+            for line in f
+        ]
+
+
+    if not dictionary_lines:
+        raise RuntimeError(
+            f"Empty dictionary: "
+            f"{dictionary_path}"
+        )
+
+
+    if dictionary_lines[0] != \
+            "#POCKETBOARD-DICT-1":
+
+        raise RuntimeError(
+            f"Invalid dictionary header: "
+            f"{dictionary_path}"
+        )
+
+
+    dictionary_words = set(
+        dictionary_lines[1:]
+    )
+
+
+    # --------------------------------------------------------
+    # Load frequency-ranked words.
+    # --------------------------------------------------------
+
+    with ranked_path.open(
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        ranked_words = [
+            line.rstrip("\r\n")
+            for line in f
+            if line.rstrip("\r\n")
+        ]
+
+
+    # Only words that survived into the final dictionary.
+    ranked_words = [
+        word
+        for word in ranked_words
+        if word in dictionary_words
+    ]
+
+
+    priority_words = ranked_words[
+        :delete_words_limit
+    ]
+
+
+    # --------------------------------------------------------
+    # Delete -> candidates.
+    #
+    # One line per candidate.
+    #
+    # Example:
+    #
+    #   manan    mañana
+    #
+    # NOT:
+    #
+    #   manan    mañana mañanas
+    # --------------------------------------------------------
+
+    mappings = []
+
+    seen_mappings = set()
+
+    estimated_bytes = (
+        len(DELETE_HEADER.encode("utf-8"))
+        + 1
+    )
+
+
+    # --------------------------------------------------------
+    # First generate normal delete corrections.
+    # --------------------------------------------------------
+
+    for word in priority_words:
+
+        variants = delete_variants(
+            word
+        )
+
+        for deleted in variants:
+
+            mapping = (
+                deleted,
+                word
+            )
+
+            if mapping in seen_mappings:
+                continue
+
+            additional = (
+                len(
+                    deleted.encode("utf-8")
+                )
+                + 1
+                + len(
+                    word.encode("utf-8")
+                )
+                + 1
+            )
+
+
+            # Per-language byte budget.
+            if (
+                estimated_bytes
+                + additional
+                > budget
+            ):
+                break
+
+
+            # Global entry limit.
+            if (
+                total_entries_global
+                + len(mappings)
+                >= max_delete_entries
+            ):
+                break
+
+
+            seen_mappings.add(
+                mapping
+            )
+
+            mappings.append(
+                mapping
+            )
+
+            estimated_bytes += (
+                additional
+            )
+
+
+        if (
+            estimated_bytes
+            >= budget
+        ):
+            break
+
+
+        if (
+            total_entries_global
+            + len(mappings)
+            >= max_delete_entries
+        ):
+            break
+
+
+    # --------------------------------------------------------
+    # Add unaccented -> accented corrections.
+    #
+    # These are NOT arbitrary deletes.
+    #
+    # They come from Part 1's automatic accent detection.
+    #
+    # Example:
+    #
+    #   manana -> mañana
+    #   deberias -> deberías
+    #
+    # This is the important part for Spanish precision.
+    # --------------------------------------------------------
+
+    accent_mappings = []
+
+    if accent_path.exists():
+
+        with accent_path.open(
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            for line in f:
+
+                line = line.rstrip(
+                    "\r\n"
+                )
+
+                if not line:
+                    continue
+
+                parts = line.split(
+                    "\t",
+                    1
+                )
+
+                if len(parts) != 2:
+                    continue
+
+                plain_word = parts[0]
+                accented_word = parts[1]
+
+                if (
+                    not plain_word
+                    or not accented_word
+                ):
+                    continue
+
+                # Candidate MUST be in final dictionary.
+                if (
+                    accented_word
+                    not in dictionary_words
+                ):
+                    continue
+
+                accent_mappings.append(
+                    (
+                        plain_word,
+                        accented_word
+                    )
+                )
+
+
+    # --------------------------------------------------------
+    # Accent mappings get priority.
+    #
+    # Remove an existing generic mapping for the same key
+    # when the precise accented correction is available.
+    # --------------------------------------------------------
+
+    accent_keys = {
+        plain
+        for plain, target
+        in accent_mappings
+    }
+
+
+    if accent_keys:
+
+        mappings = [
+            (
+                deleted,
+                target
+            )
+            for deleted, target
+            in mappings
+            if deleted not in accent_keys
+        ]
+
+
+        seen_mappings = set(
+            mappings
+        )
+
+
+        # Recalculate serialized size.
+        estimated_bytes = (
+            len(
+                DELETE_HEADER.encode(
+                    "utf-8"
+                )
+            )
+            + 1
+        )
+
+        for deleted, target in mappings:
+
+            estimated_bytes += (
+                len(
+                    deleted.encode(
+                        "utf-8"
+                    )
+                )
+                + 1
+                + len(
+                    target.encode(
+                        "utf-8"
+                    )
+                )
+                + 1
+            )
+
+
+    # --------------------------------------------------------
+    # Add accent mappings first.
+    # --------------------------------------------------------
+
+    for plain_word, accented_word \
+            in accent_mappings:
+
+        mapping = (
+            plain_word,
+            accented_word
+        )
+
+        if mapping in seen_mappings:
+            continue
+
+        additional = (
+            len(
+                plain_word.encode(
+                    "utf-8"
+                )
+            )
+            + 1
+            + len(
+                accented_word.encode(
+                    "utf-8"
+                )
+            )
+            + 1
+        )
+
+
+        if (
+            estimated_bytes
+            + additional
+            > budget
+        ):
+            break
+
+
+        if (
+            total_entries_global
+            + len(mappings)
+            >= max_delete_entries
+        ):
+            break
+
+
+        seen_mappings.add(
+            mapping
+        )
+
+        mappings.append(
+            mapping
+        )
+
+        estimated_bytes += (
+            additional
+        )
+
+
+    # --------------------------------------------------------
+    # Deterministic ordering.
+    #
+    # DictionaryManager does not require sorting to load the
+    # file, but deterministic output is useful for reproducible
+    # GitHub Actions builds.
+    # --------------------------------------------------------
+
+    mappings.sort(
+        key=lambda pair: (
+            pair[0],
+            pair[1]
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Write delete index.
+    # --------------------------------------------------------
+
+    with deletes_path.open(
+        "w",
+        encoding="utf-8",
+        newline="\n"
+    ) as f:
+
+        f.write(
+            DELETE_HEADER
+            + "\n"
+        )
+
+        for deleted, target in mappings:
+
+            f.write(
+                deleted
+                + "\t"
+                + target
+                + "\n"
+            )
+
+
+    actual_size = (
+        deletes_path.stat().st_size
+    )
+
+
+    entries = len(mappings)
+
+    total_entries_global += entries
+    total_bytes_global += actual_size
+
+
+    print("")
+    print(
+        f"Delete index: "
+        f"{language}"
+    )
+
+    print(
+        f"  Priority words: "
+        f"{len(priority_words)}"
+    )
+
+    print(
+        f"  Accent mappings: "
+        f"{len(accent_mappings)}"
+    )
+
+    print(
+        f"  Delete entries: "
+        f"{entries}"
+    )
+
+    print(
+        f"  Bytes: "
+        f"{actual_size}"
+    )
+
+    print(
+        f"  Budget: "
+        f"{budget}"
+    )
+
+
+    if actual_size > budget:
+
+        raise RuntimeError(
+            f"Delete budget exceeded "
+            f"for {language}: "
+            f"{actual_size} > {budget}"
+        )
+
+
+print("")
+print(
+    "Delete generation totals:"
+)
+
+print(
+    f"  Entries: "
+    f"{total_entries_global}"
+)
+
+print(
+    f"  Bytes: "
+    f"{total_bytes_global}"
+)
+
+PY
+
+
+# ============================================================
+# Remove temporary build-only files.
+#
+# IMPORTANT:
+# .ranked and .accent are NOT Android assets.
+# ============================================================
+
+rm -f \
+    "${OUTPUT_ROOT}/es-AR.ranked" \
+    "${OUTPUT_ROOT}/en-en.ranked" \
+    "${OUTPUT_ROOT}/de-de.ranked" \
+    "${OUTPUT_ROOT}/es-AR.accent" \
+    "${OUTPUT_ROOT}/en-en.accent" \
+    "${OUTPUT_ROOT}/de-de.accent"
+
+
+# ============================================================
+# Install generated assets into Android project.
+#
+# This is executed during GitHub Actions build time.
+# No local CLI is required.
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " Installing generated assets"
+echo "============================================================"
+
+mkdir -p \
+    "${ASSETS_ROOT}"
+
+
+rm -f \
+    "${ASSETS_ROOT}/es-AR.dict" \
+    "${ASSETS_ROOT}/en-en.dict" \
+    "${ASSETS_ROOT}/de-de.dict" \
+    "${ASSETS_ROOT}/es-AR.deletes" \
+    "${ASSETS_ROOT}/en-en.deletes" \
+    "${ASSETS_ROOT}/de-de.deletes" \
+    "${ASSETS_ROOT}/es-AR.meta" \
+    "${ASSETS_ROOT}/en-en.meta" \
+    "${ASSETS_ROOT}/de-de.meta"
+
+
+cp \
+    "${OUTPUT_ROOT}/es-AR.dict" \
+    "${ASSETS_ROOT}/es-AR.dict"
+
+cp \
+    "${OUTPUT_ROOT}/en-en.dict" \
+    "${ASSETS_ROOT}/en-en.dict"
+
+cp \
+    "${OUTPUT_ROOT}/de-de.dict" \
+    "${ASSETS_ROOT}/de-de.dict"
+
+
+cp \
+    "${OUTPUT_ROOT}/es-AR.deletes" \
+    "${ASSETS_ROOT}/es-AR.deletes"
+
+cp \
+    "${OUTPUT_ROOT}/en-en.deletes" \
+    "${ASSETS_ROOT}/en-en.deletes"
+
+cp \
+    "${OUTPUT_ROOT}/de-de.deletes" \
+    "${ASSETS_ROOT}/de-de.deletes"
+
+
+cp \
+    "${OUTPUT_ROOT}/es-AR.meta" \
+    "${ASSETS_ROOT}/es-AR.meta"
+
+cp \
+    "${OUTPUT_ROOT}/en-en.meta" \
+    "${ASSETS_ROOT}/en-en.meta"
+
+cp \
+    "${OUTPUT_ROOT}/de-de.meta" \
+    "${ASSETS_ROOT}/de-de.meta"
+
+
+# ============================================================
+# Validate dictionary headers and expected words.
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " Validating generated assets"
+echo "============================================================"
+
+
+"${PYTHON_BIN}" \
+    - \
+    "${ASSETS_ROOT}" \
+    <<'PY'
+
+import sys
+import unicodedata
+from pathlib import Path
+
+
+assets = Path(sys.argv[1])
+
+
+EXPECTED = {
+
+    "es-AR": [
+        "mañana",
+        "tenés",
+        "podés",
+        "hacés",
+        "acá",
+        "pasaría",
+        "debería",
+        "vos",
+    ],
+
+    "en-en": [
+        "the",
+        "have",
+        "hello",
+        "world",
+    ],
+
+    "de-de": [
+        "ich",
+        "nicht",
+        "morgen",
+        "entschuldigung",
+        "wahrscheinlich",
+        "möglicherweise",
+        "für",
+    ],
+}
+
+
+DICT_HEADER = (
+    "#POCKETBOARD-DICT-1"
+)
+
+DELETE_HEADER = (
+    "#POCKETBOARD-DELETES-1"
+)
+
+
+def read_dictionary(language):
+
+    path = (
+        assets /
+        f"{language}.dict"
+    )
+
+    if not path.exists():
+
+        raise RuntimeError(
+            f"Missing dictionary: "
+            f"{path}"
+        )
+
+
+    with path.open(
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        lines = [
+            line.rstrip("\r\n")
+            for line in f
+        ]
+
+
+    if not lines:
+
+        raise RuntimeError(
+            f"Empty dictionary: "
+            f"{path}"
+        )
+
+
+    if lines[0] != DICT_HEADER:
+
+        raise RuntimeError(
+            f"Invalid dictionary header: "
+            f"{path}"
+        )
+
+
+    return set(
+        lines[1:]
+    )
+
+
+for language, words in EXPECTED.items():
+
+    print("")
+    print(
+        f"Checking dictionary: "
+        f"{language}"
+    )
+
+
+    dictionary = read_dictionary(
+        language
+    )
+
+
+    for word in words:
+
+        word = unicodedata.normalize(
+            "NFC",
+            word
+        )
+
+
+        if word not in dictionary:
+
+            print(
+                f"ERROR: expected word "
+                f"missing: "
+                f"{language}: "
+                f"{word}"
+            )
+
+            raise SystemExit(1)
+
+
+        print(
+            f"OK: "
+            f"{language}: "
+            f"{word}"
+        )
+
+
+print("")
+print(
+    "All expected dictionary words "
+    "are present."
+)
+
+PY
+
+
+# ============================================================
+# Validate delete indexes.
+#
+# Every target MUST exist in the corresponding .dict.
+#
+# Also verify:
+#
+#   - correct header
+#   - tab-separated format
+#   - non-empty key
+#   - non-empty target
+#   - candidate is a real dictionary word
+# ============================================================
+
+"${PYTHON_BIN}" \
+    - \
+    "${ASSETS_ROOT}" \
+    <<'PY'
+
+import sys
+from pathlib import Path
+
+
+assets = Path(sys.argv[1])
+
+DELETE_HEADER = (
+    "#POCKETBOARD-DELETES-1"
+)
+
+
+for language in (
+    "es-AR",
+    "en-en",
+    "de-de",
+):
+
+    dictionary_path = (
+        assets /
+        f"{language}.dict"
+    )
+
+    deletes_path = (
+        assets /
+        f"{language}.deletes"
+    )
+
+
+    with dictionary_path.open(
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        dictionary_lines = [
+            line.rstrip("\r\n")
+            for line in f
+        ]
+
+
+    if not dictionary_lines:
+
+        raise RuntimeError(
+            f"Empty dictionary: "
+            f"{dictionary_path}"
+        )
+
+
+    dictionary = set(
+        dictionary_lines[1:]
+    )
+
+
+    with deletes_path.open(
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        lines = [
+            line.rstrip("\r\n")
+            for line in f
+        ]
+
+
+    if not lines:
+
+        raise RuntimeError(
+            f"Empty delete index: "
+            f"{deletes_path}"
+        )
+
+
+    if lines[0] != DELETE_HEADER:
+
+        raise RuntimeError(
+            f"Invalid delete header: "
+            f"{deletes_path}"
+        )
+
+
+    invalid = 0
+    mappings = 0
+
+
+    for line_number, line in enumerate(
+        lines[1:],
+        start=2
+    ):
+
+        if not line:
+            continue
+
+
+        parts = line.split(
+            "\t"
+        )
+
+
+        if len(parts) != 2:
+
+            print(
+                f"INVALID FORMAT: "
+                f"{language}:"
+                f"{line_number}: "
+                f"{line!r}"
+            )
+
+            invalid += 1
+            continue
+
+
+        delete_key = parts[0]
+        target = parts[1]
+
+
+        if not delete_key:
+
+            print(
+                f"INVALID DELETE KEY: "
+                f"{language}:"
+                f"{line_number}"
+            )
+
+            invalid += 1
+            continue
+
+
+        if not target:
+
+            print(
+                f"INVALID TARGET: "
+                f"{language}:"
+                f"{line_number}"
+            )
+
+            invalid += 1
+            continue
+
+
+        mappings += 1
+
+
+        if target not in dictionary:
+
+            print(
+                f"INVALID TARGET: "
+                f"{language}: "
+                f"{target}"
+            )
+
+            invalid += 1
+
+
+    print("")
+    print(
+        f"Delete validation: "
+        f"{language}"
+    )
+
+    print(
+        f"  Mappings: "
+        f"{mappings}"
+    )
+
+    print(
+        f"  Invalid: "
+        f"{invalid}"
+    )
+
+
+    if invalid:
+
+        raise SystemExit(1)
+
+
+    print(
+        f"OK: all delete targets "
+        f"exist in {language}.dict"
+    )
+
+
+PY
+
+
+# ============================================================
+# Verify the exact assets expected by DictionaryManager.
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " Checking Android dictionary assets"
+echo "============================================================"
+
+
+for language in \
+    "es-AR" \
+    "en-en" \
+    "de-de"
+do
+
+    for suffix in \
+        "dict" \
+        "deletes"
+    do
+
+        file="${ASSETS_ROOT}/${language}.${suffix}"
+
+
+        if [[ ! -s "${file}" ]]; then
+
+            echo ""
+            echo "ERROR: missing/empty asset:"
+            echo "  ${file}"
+
+            exit 1
+        fi
+
+
+        echo "OK: ${language}.${suffix}"
+
+    done
+
+done
+
+
+# ============================================================
+# Final size report
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " PocketBoard dictionary build summary"
+echo "============================================================"
+
+
+TOTAL_DICTIONARY_BYTES=0
+TOTAL_DELETE_BYTES=0
+TOTAL_METADATA_BYTES=0
+
+
+for language in \
+    "es-AR" \
+    "en-en" \
+    "de-de"
+do
+
+    dictionary="${OUTPUT_ROOT}/${language}.dict"
+    deletes="${OUTPUT_ROOT}/${language}.deletes"
+    metadata="${OUTPUT_ROOT}/${language}.meta"
+
+
+    if [[ ! -f "${dictionary}" ]]; then
+
+        echo "ERROR: missing dictionary:"
+        echo "  ${dictionary}"
+
+        exit 1
+    fi
+
+
+    if [[ ! -f "${deletes}" ]]; then
+
+        echo "ERROR: missing delete index:"
+        echo "  ${deletes}"
+
+        exit 1
+    fi
+
+
+    if [[ ! -f "${metadata}" ]]; then
+
+        echo "ERROR: missing metadata:"
+        echo "  ${metadata}"
+
+        exit 1
+    fi
+
+
+    dictionary_size="$(
+        wc -c < "${dictionary}"
+    )"
+
+
+    delete_size="$(
+        wc -c < "${deletes}"
+    )"
+
+
+    metadata_size="$(
+        wc -c < "${metadata}"
+    )"
+
+
+    dictionary_words="$(
+        tail -n +2 "${dictionary}" |
+        wc -l
+    )"
+
+
+    delete_mappings="$(
+        tail -n +2 "${deletes}" |
+        wc -l
+    )"
+
+
+    language_total=$(
+        printf '%s\n' \
+            "$(( \
+                dictionary_size \
+                + delete_size \
+                + metadata_size \
+            ))"
+    )
+
+
+    TOTAL_DICTIONARY_BYTES=$(
+        printf '%s\n' \
+            "$(( \
+                TOTAL_DICTIONARY_BYTES \
+                + dictionary_size \
+            ))"
+    )
+
+
+    TOTAL_DELETE_BYTES=$(
+        printf '%s\n' \
+            "$(( \
+                TOTAL_DELETE_BYTES \
+                + delete_size \
+            ))"
+    )
+
+
+    TOTAL_METADATA_BYTES=$(
+        printf '%s\n' \
+            "$(( \
+                TOTAL_METADATA_BYTES \
+                + metadata_size \
+            ))"
+    )
+
+
+    echo ""
+    echo "${language}"
+
+    echo "  Words:           ${dictionary_words}"
+    echo "  Dictionary:      ${dictionary_size} bytes"
+    echo "  Delete index:    ${delete_size} bytes"
+    echo "  Delete mappings: ${delete_mappings}"
+    echo "  Metadata:        ${metadata_size} bytes"
+    echo "  Total:           ${language_total} bytes"
+
+done
+
+
+TOTAL_GENERATED_BYTES=$(
+    printf '%s\n' \
+        "$(( \
+            TOTAL_DICTIONARY_BYTES \
+            + TOTAL_DELETE_BYTES \
+            + TOTAL_METADATA_BYTES \
+        ))"
+)
+
+
+TOTAL_MIB=$(
+    printf '%s\n' \
+        "$(( \
+            TOTAL_GENERATED_BYTES \
+            / 1024 \
+            / 1024 \
+        ))"
+)
+
+
+echo ""
+echo "============================================================"
+echo " TOTAL"
+echo "============================================================"
+
+echo \
+    "Dictionary bytes: ${TOTAL_DICTIONARY_BYTES}"
+
+echo \
+    "Delete bytes:     ${TOTAL_DELETE_BYTES}"
+
+echo \
+    "Metadata bytes:   ${TOTAL_METADATA_BYTES}"
+
+echo \
+    "Generated bytes:  ${TOTAL_GENERATED_BYTES}"
+
+echo \
+    "Approximate data: ${TOTAL_MIB} MiB"
+
+
+echo ""
+echo "Delete budget:"
+echo "  Spanish: ${ES_DELETE_BUDGET}"
+echo "  English: ${EN_DELETE_BUDGET}"
+echo "  German:  ${DE_DELETE_BUDGET}"
+echo "  Global:  ${GLOBAL_DELETE_BUDGET}"
+
+
+if (
+    (
+        TOTAL_DELETE_BYTES
+        > GLOBAL_DELETE_BUDGET
+    )
+); then
+
+    echo ""
+    echo "ERROR: global delete budget exceeded."
+
+    echo \
+        "  Size:   ${TOTAL_DELETE_BYTES}"
+
+    echo \
+        "  Budget: ${GLOBAL_DELETE_BUDGET}"
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# Final sanity checks
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " FINAL SANITY CHECKS"
+echo "============================================================"
+
+
+for language in \
+    "es-AR" \
+    "en-en" \
+    "de-de"
+do
+
+    for suffix in \
+        "dict" \
+        "deletes" \
+        "meta"
+    do
+
+        file="${ASSETS_ROOT}/${language}.${suffix}"
+
+
+        if [[ ! -s "${file}" ]]; then
+
+            echo "ERROR: missing/empty asset:"
+            echo "  ${file}"
+
+            exit 1
+        fi
+
+    done
+
+done
+
+
+echo "OK: all generated assets exist."
+echo "OK: dictionary headers are valid."
+echo "OK: delete headers are valid."
+echo "OK: delete targets reference final dictionary words."
+echo "OK: Android asset names are correct."
+echo "OK: Unicode/NFC preserved."
+echo "OK: accented words / ñ / umlauts retained."
+echo "OK: no Hunspell required."
+echo ""
+echo "PocketBoard dictionary generation completed successfully."
