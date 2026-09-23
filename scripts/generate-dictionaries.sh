@@ -982,21 +982,17 @@ for language in \
     "de-de"
 do
 
-    dictionary="${OUTPUT_ROOT}/${language}.dict"
-    deletes="${OUTPUT_ROOT}/${language}.deletes"
-    metadata="${OUTPUT_ROOT}/${language}.meta"
+    dictionary="${GENERATED_DIR}/${language}.dict"
+    deletes="${GENERATED_DIR}/${language}.deletes"
+    metadata="${GENERATED_DIR}/${language}.meta"
 
     dictionary_size="$(wc -c < "${dictionary}")"
     delete_size="$(wc -c < "${deletes}")"
     metadata_size="$(wc -c < "${metadata}")"
 
-    dictionary_words="$(
-        tail -n +2 "${dictionary}" | wc -l
-    )"
+    dictionary_words="$(tail -n +2 "${dictionary}" | wc -l)"
 
-    delete_mappings="$(
-        tail -n +5 "${deletes}" | wc -l
-    )"
+    delete_mappings="$(tail -n +5 "${deletes}" | wc -l)"
 
     language_total=$(
         printf '%s\n' \
@@ -1057,56 +1053,16 @@ echo "  English: ${EN_DELETE_BUDGET}"
 echo "  German:  ${DE_DELETE_BUDGET}"
 echo "  Global:  ${GLOBAL_DELETE_BUDGET}"
 
-# ============================================================
-# GLOBAL DELETE MAPPING BUDGET
-# ============================================================
-
-TOTAL_DELETE_MAPPINGS=0
-
-for language in \
-    "es-AR" \
-    "en-en" \
-    "de-de"
-do
-    deletes="${OUTPUT_DIR}/${language}.deletes"
-
-    if [[ -f "${deletes}" ]]; then
-        mappings="$(
-            tail -n +5 "${deletes}" |
-            awk -F '\t' '
-                NF >= 2 {
-                    n = split($2, targets, ",")
-                    total += n
-                }
-                END {
-                    print total + 0
-                }
-            '
-        )"
-    else
-        mappings=0
-    fi
-
-    TOTAL_DELETE_MAPPINGS=$(
-        printf '%s\n' \
-            "$((TOTAL_DELETE_MAPPINGS + mappings))"
-    )
-done
-
-echo ""
-echo "Delete mappings:"
-echo "  Total:  ${TOTAL_DELETE_MAPPINGS}"
-echo "  Budget: ${GLOBAL_DELETE_BUDGET}"
-
-if (( TOTAL_DELETE_MAPPINGS > GLOBAL_DELETE_BUDGET )); then
+if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
 
     echo ""
-    echo "ERROR: global delete mapping budget exceeded."
-    echo "  Mappings: ${TOTAL_DELETE_MAPPINGS}"
-    echo "  Budget:   ${GLOBAL_DELETE_BUDGET}"
+    echo "ERROR: global delete budget exceeded."
+    echo "  Size:   ${TOTAL_DELETE_BYTES}"
+    echo "  Budget: ${GLOBAL_DELETE_BUDGET}"
 
     exit 1
 fi
+
 
 echo ""
 echo "============================================================"
