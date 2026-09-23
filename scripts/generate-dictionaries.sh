@@ -1805,9 +1805,9 @@ do
 
     language_total=$(
         (
-            dictionary_size +
-            delete_size +
-            metadata_size
+               dictionary_size="$(wc -c < "${OUTPUT_DIR}/${language}.dict")"
+               delete_size="$(wc -c < "${OUTPUT_DIR}/${language}.deletes")"
+               metadata_size="$(wc -c < "${OUTPUT_DIR}/${language}.meta")"
         )
     )
 
