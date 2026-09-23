@@ -1578,50 +1578,77 @@ validate_dictionary_tokens() {
     echo ""
     echo "Checking dictionary format: ${language}"
 
-    tail -n +2 "${dictionary}" |
-        python3 - > "${invalid_file}" <<'PY'
+    # IMPORTANT:
+    #
+    # Do NOT use:
+    #
+    #   tail ... | python3 <<'PY'
+    #
+    # because the heredoc becomes Python's stdin. With
+    # `set -o pipefail`, tail receives SIGPIPE and the whole
+    # pipeline can return exit code 141.
+    #
+    # Pass the dictionary filename to Python instead.
+
+    python3 \
+        "${dictionary}" \
+        > "${invalid_file}" <<'PY'
 import sys
 
-for line in sys.stdin:
-    word = line.rstrip("\n\r")
+dictionary = sys.argv[1]
 
-    if not word:
-        continue
+with open(
+    dictionary,
+    encoding="utf-8",
+    errors="replace"
+) as f:
 
-    valid = False
+    # Skip dictionary header.
+    next(f, None)
 
-    for char in word:
+    for raw in f:
 
-        if char.isalpha():
-            valid = True
+        word = raw.rstrip("\n\r")
+
+        if not word:
             continue
 
-        if char in "'’'-":
-            continue
+        valid = True
 
-        valid = False
-        break
+        for char in word:
 
-    if not valid:
-        print(word)
+            if char.isalpha():
+                continue
+
+            if char in "'’'-":
+                continue
+
+            valid = False
+            break
+
+        if not valid:
+            print(word)
 PY
 
-    local invalid_count
-
-    invalid_count="$(wc -l < "${invalid_file}")"
-
-    echo "Invalid dictionary entries: ${invalid_count}"
-
-    if (( invalid_count > 0 )); then
+    if [[ -s "${invalid_file}" ]]; then
 
         echo ""
-        echo "ERROR: invalid dictionary entries found:"
-        head -n 50 "${invalid_file}"
+        echo "ERROR: invalid dictionary tokens found:"
+        echo "  Language: ${language}"
+        echo "  Dictionary: ${dictionary}"
+        echo ""
+
+        sed -n '1,50p' "${invalid_file}"
+
+        echo ""
+
+        echo "Invalid token count:"
+        wc -l < "${invalid_file}"
 
         exit 1
     fi
 
-    echo "OK: ${language}.dict contains only valid token format"
+    echo "OK: dictionary tokens: ${language}"
 }
 
 echo ""
