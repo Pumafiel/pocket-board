@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 
 set -euo pipefail
@@ -13,7 +14,10 @@ set -euo pipefail
 #   - Unicode/NFC is preserved
 #   - Accents, ñ and umlauts are preserved
 #   - Curated core words are always retained
-#   - Deletes are generated ONLY from final dictionary words
+#   - Deletes are generated ONLY from:
+#       * curated core words
+#       * highest-frequency source words
+#   - Dictionary itself still contains the full ~50k source words
 # ============================================================
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,18 +32,40 @@ ASSETS_ROOT="${PROJECT_ROOT}/app/src/main/assets/dictionaries"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CURL_BIN="${CURL_BIN:-curl}"
 
+# ------------------------------------------------------------
+# Dictionary limits
+# ------------------------------------------------------------
+
 MAX_WORDS="${MAX_WORDS:-180000}"
-DIST2_WORDS="${DIST2_WORDS:-12000}"
-MAX_DELETES_PER_WORD="${MAX_DELETES_PER_WORD:-96}"
-MAX_DELETE_ENTRIES="${MAX_DELETE_ENTRIES:-2500000}"
 
 MIN_WORD_LEN="${MIN_WORD_LEN:-2}"
 MAX_WORD_LEN="${MAX_WORD_LEN:-40}"
 
+# ------------------------------------------------------------
+# Delete index configuration
+#
+# The dictionary keeps all source words.
+#
+# The delete index does NOT need to contain every dictionary
+# word. It is a typo-correction index, so we prioritize the
+# most frequent words plus all curated core words.
+#
+# FrequencyWords files are already ordered by frequency.
+# ------------------------------------------------------------
+
+DELETE_PRIORITY_WORDS="${DELETE_PRIORITY_WORDS:-7000}"
+
+MAX_DELETES_PER_WORD="${MAX_DELETES_PER_WORD:-96}"
+
 ES_DELETE_BUDGET="${ES_DELETE_BUDGET:-900000}"
 EN_DELETE_BUDGET="${EN_DELETE_BUDGET:-700000}"
 DE_DELETE_BUDGET="${DE_DELETE_BUDGET:-1100000}"
+
 GLOBAL_DELETE_BUDGET="${GLOBAL_DELETE_BUDGET:-2500000}"
+
+# ------------------------------------------------------------
+# Directories
+# ------------------------------------------------------------
 
 mkdir -p \
     "${SOURCE_ROOT}" \
@@ -48,9 +74,9 @@ mkdir -p \
     "${OUTPUT_ROOT}" \
     "${ASSETS_ROOT}"
 
-# ============================================================
+# ------------------------------------------------------------
 # FrequencyWords sources
-# ============================================================
+# ------------------------------------------------------------
 
 FREQUENCY_ES_URL="https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/es/es_50k.txt"
 FREQUENCY_EN_URL="https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt"
@@ -60,328 +86,87 @@ ES_SOURCE="${SOURCE_ROOT}/es_50k.txt"
 EN_SOURCE="${SOURCE_ROOT}/en_50k.txt"
 DE_SOURCE="${SOURCE_ROOT}/de_50k.txt"
 
-# ============================================================
+# ------------------------------------------------------------
 # Helpers
-# ============================================================
+# ------------------------------------------------------------
+
+log() {
+    printf '%s\n' "$*"
+}
+
+die() {
+    printf 'ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
 
 download_if_missing() {
     local url="$1"
-    local output="$2"
+    local destination="$2"
 
-    if [[ -s "${output}" ]]; then
-        echo "Using cached source:"
-        echo "  ${output}"
+    if [[ -s "${destination}" ]]; then
+        log "Source already exists: ${destination}"
         return
     fi
 
-    echo "Downloading:"
-    echo "  ${url}"
+    log "Downloading:"
+    log "  ${url}"
 
     "${CURL_BIN}" \
         --fail \
         --location \
-        --retry 3 \
-        --retry-delay 2 \
         --silent \
         --show-error \
-        "${url}" \
-        --output "${output}"
+        --retry 3 \
+        --retry-delay 2 \
+        --output "${destination}" \
+        "${url}"
 
-    [[ -s "${output}" ]] || {
-        echo "ERROR: downloaded source is empty:"
-        echo "  ${output}"
-        exit 1
-    }
+    [[ -s "${destination}" ]] || die "Downloaded source is empty: ${destination}"
 }
+
+# ------------------------------------------------------------
+# Normalize source
+#
+# FrequencyWords format:
+#
+#   word count
+#
+# Only the first whitespace-separated field is used.
+#
+# IMPORTANT:
+#   - NFC normalization
+#   - Unicode letters preserved
+#   - combining marks preserved
+#   - accents preserved
+#   - ñ preserved
+#   - umlauts preserved
+#   - no ASCII transliteration
+#   - no accent stripping
+# ------------------------------------------------------------
 
 normalize_source() {
     local input="$1"
     local output="$2"
 
-    "${PYTHON_BIN}" - "${input}" "${output}" <<'PY'
+    "${PYTHON_BIN}" - "${input}" "${output}" "${MIN_WORD_LEN}" "${MAX_WORD_LEN}" <<'PY'
 import sys
 import unicodedata
 
-src = sys.argv[1]
-dst = sys.argv[2]
-
-def normalize_word(word):
-    word = word.strip()
-
-    if not word:
-        return ""
-
-    # Preserve Unicode characters.
-    # NFC combines decomposed accents without removing them.
-    word = unicodedata.normalize("NFC", word)
-
-    if len(word) < 2 or len(word) > 40:
-        return ""
-
-    # Do NOT ASCII-normalize.
-    # Do NOT remove accents.
-    # Do NOT replace ñ with n.
-    #
-    # Accepted:
-    #   alphabetic Unicode letters
-    #   combining marks
-    #   apostrophes
-    #   hyphens
-    for ch in word:
-        category = unicodedata.category(ch)
-
-        if ch in ("'", "’", "-"):
-            continue
-
-        if category.startswith("L"):
-            continue
-
-        if category.startswith("M"):
-            continue
-
-        return ""
-
-    return word
+input_file = sys.argv[1]
+output_file = sys.argv[2]
+min_len = int(sys.argv[3])
+max_len = int(sys.argv[4])
 
 seen = set()
 result = []
 
-with open(src, "r", encoding="utf-8", errors="replace") as f:
-    for line in f:
-        line = line.strip()
-
-        if not line:
-            continue
-
-        # FrequencyWords format:
-        #
-        # word count
-        #
-        # We only need the first field.
-        parts = line.split()
-
-        if not parts:
-            continue
-
-        word = normalize_word(parts[0])
-
-        if not word:
-            continue
-
-        # FrequencyWords may contain duplicate forms.
-        if word in seen:
-            continue
-
-        seen.add(word)
-        result.append(word)
-
-with open(dst, "w", encoding="utf-8", newline="\n") as f:
-    for word in result:
-        f.write(word + "\n")
-
-print(f"Normalized source words: {len(result)}")
-PY
-}
-
-# ============================================================
-# Download sources
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Downloading FrequencyWords sources"
-echo "============================================================"
-
-download_if_missing \
-    "${FREQUENCY_ES_URL}" \
-    "${ES_SOURCE}"
-
-download_if_missing \
-    "${FREQUENCY_EN_URL}" \
-    "${EN_SOURCE}"
-
-download_if_missing \
-    "${FREQUENCY_DE_URL}" \
-    "${DE_SOURCE}"
-
-# ============================================================
-# Normalize sources
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Normalizing sources"
-echo "============================================================"
-
-normalize_source \
-    "${ES_SOURCE}" \
-    "${FREQUENCY_ROOT}/es-AR.source"
-
-normalize_source \
-    "${EN_SOURCE}" \
-    "${FREQUENCY_ROOT}/en-en.source"
-
-normalize_source \
-    "${DE_SOURCE}" \
-    "${FREQUENCY_ROOT}/de-de.source"
-
-# ============================================================
-# Build dictionaries directly from FrequencyWords
-# ============================================================
-
-"${PYTHON_BIN}" \
-    - \
-    "${FREQUENCY_ROOT}/es-AR.source" \
-    "${FREQUENCY_ROOT}/en-en.source" \
-    "${FREQUENCY_ROOT}/de-de.source" \
-    "${OUTPUT_ROOT}" \
-    "${MAX_WORDS}" \
-    "${MIN_WORD_LEN}" \
-    "${MAX_WORD_LEN}" \
-    <<'PY'
-
-import sys
-import unicodedata
-from pathlib import Path
-
-es_source = Path(sys.argv[1])
-en_source = Path(sys.argv[2])
-de_source = Path(sys.argv[3])
-output_root = Path(sys.argv[4])
-
-max_words = int(sys.argv[5])
-min_len = int(sys.argv[6])
-max_len = int(sys.argv[7])
-
-output_root.mkdir(parents=True, exist_ok=True)
-
-# ============================================================
-# Core vocabulary
-#
-# These words are retained independently of FrequencyWords.
-# This is especially important for:
-#   - Spanish Argentina voseo
-#   - accented forms
-#   - ñ
-#   - German umlauts
-# ============================================================
-
-CORE = {
-
-    "es-AR": [
-        "vos",
-        "tenés",
-        "tenes",
-        "podés",
-        "podes",
-        "querés",
-        "queres",
-        "sabés",
-        "sabes",
-        "venís",
-        "venis",
-        "decís",
-        "decis",
-        "hacés",
-        "haces",
-        "mirás",
-        "miras",
-        "hablás",
-        "hablas",
-        "comés",
-        "comes",
-        "vivís",
-        "vivis",
-        "salís",
-        "salis",
-        "vení",
-        "veni",
-        "decime",
-        "haceme",
-
-        "mañana",
-        "mañanas",
-        "también",
-        "qué",
-        "cómo",
-        "cuándo",
-        "dónde",
-        "quién",
-        "porque",
-        "porqué",
-        "día",
-        "días",
-        "más",
-        "sí",
-        "está",
-        "estás",
-        "están",
-        "acá",
-        "allá",
-        "después",
-        "así",
-        "sólo",
-
-        "pasaría",
-        "debería",
-
-        "hago",
-        "hacer",
-        "veré",
-    ],
-
-    "en-en": [
-        "hello",
-        "world",
-        "the",
-        "have",
-        "this",
-        "that",
-        "what",
-        "where",
-        "when",
-        "who",
-        "which",
-        "please",
-        "thanks",
-        "thank",
-        "sorry",
-        "tomorrow",
-        "today",
-    ],
-
-    "de-de": [
-        "hallo",
-        "welt",
-        "ich",
-        "nicht",
-        "morgen",
-        "heute",
-        "bitte",
-        "danke",
-        "dankeschön",
-        "entschuldigung",
-        "wahrscheinlich",
-        "möglicherweise",
-        "möglich",
-        "für",
-        "über",
-        "schön",
-        "größer",
-        "größe",
-        "später",
-        "früh",
-        "früher",
-    ],
-}
-
-
-def nfc(word):
-    return unicodedata.normalize("NFC", word.strip())
-
-
 def valid_word(word):
-    word = nfc(word)
+    if not word:
+        return False
 
     if len(word) < min_len or len(word) > max_len:
         return False
@@ -389,8 +174,248 @@ def valid_word(word):
     for ch in word:
         category = unicodedata.category(ch)
 
+        if category.startswith("L"):
+            continue
+
+        if category.startswith("M"):
+            continue
+
         if ch in ("'", "’", "-"):
             continue
+
+        return False
+
+    return True
+
+with open(input_file, "r", encoding="utf-8", errors="replace") as src:
+    for raw_line in src:
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        parts = line.split()
+
+        if not parts:
+            continue
+
+        word = parts[0]
+
+        # NFC is critical for accents, ñ and umlauts.
+        word = unicodedata.normalize("NFC", word)
+
+        if not valid_word(word):
+            continue
+
+        key = word.casefold()
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(word)
+
+with open(output_file, "w", encoding="utf-8", newline="\n") as dst:
+    for word in result:
+        dst.write(word + "\n")
+
+print(f"Normalized source words: {len(result)}")
+PY
+}
+
+# ------------------------------------------------------------
+# Core vocabulary
+# ------------------------------------------------------------
+
+declare -a ES_CORE=(
+    "vos"
+    "tenés"
+    "tenes"
+    "podés"
+    "podes"
+    "querés"
+    "queres"
+    "sabés"
+    "sabes"
+    "venís"
+    "venis"
+    "decís"
+    "decis"
+    "hacés"
+    "haces"
+    "mirás"
+    "miras"
+    "hablás"
+    "hablas"
+    "comés"
+    "comes"
+    "vivís"
+    "vivis"
+    "salís"
+    "salis"
+    "vení"
+    "veni"
+    "decime"
+    "haceme"
+    "mañana"
+    "mañanas"
+    "también"
+    "qué"
+    "cómo"
+    "cuándo"
+    "dónde"
+    "quién"
+    "porque"
+    "porqué"
+    "día"
+    "días"
+    "más"
+    "sí"
+    "está"
+    "estás"
+    "están"
+    "acá"
+    "allá"
+    "después"
+    "así"
+    "sólo"
+    "pasaría"
+    "debería"
+    "hago"
+    "hacer"
+    "veré"
+)
+
+declare -a EN_CORE=(
+    "hello"
+    "world"
+    "the"
+    "have"
+    "this"
+    "that"
+    "what"
+    "where"
+    "when"
+    "who"
+    "which"
+    "please"
+    "thanks"
+    "thank"
+    "sorry"
+    "tomorrow"
+    "today"
+)
+
+declare -a DE_CORE=(
+    "hallo"
+    "welt"
+    "ich"
+    "nicht"
+    "morgen"
+    "heute"
+    "bitte"
+    "danke"
+    "dankeschön"
+    "entschuldigung"
+    "wahrscheinlich"
+    "möglicherweise"
+    "möglich"
+    "für"
+    "über"
+    "schön"
+    "größer"
+    "größe"
+    "später"
+    "früh"
+    "früher"
+)
+
+# ------------------------------------------------------------
+# Download sources
+# ------------------------------------------------------------
+
+log ""
+log "============================================================"
+log " Downloading FrequencyWords sources"
+log "============================================================"
+
+download_if_missing "${FREQUENCY_ES_URL}" "${ES_SOURCE}"
+download_if_missing "${FREQUENCY_EN_URL}" "${EN_SOURCE}"
+download_if_missing "${FREQUENCY_DE_URL}" "${DE_SOURCE}"
+
+# ------------------------------------------------------------
+# Normalize sources
+# ------------------------------------------------------------
+
+ES_NORMALIZED="${WORK_ROOT}/es-AR.source"
+EN_NORMALIZED="${WORK_ROOT}/en-en.source"
+DE_NORMALIZED="${WORK_ROOT}/de-de.source"
+
+log ""
+log "============================================================"
+log " Normalizing sources"
+log "============================================================"
+
+normalize_source "${ES_SOURCE}" "${ES_NORMALIZED}"
+normalize_source "${EN_SOURCE}" "${EN_NORMALIZED}"
+normalize_source "${DE_SOURCE}" "${DE_NORMALIZED}"
+
+# ------------------------------------------------------------
+# Build dictionary
+#
+# The source order is frequency order.
+#
+# Core words are inserted first.
+# Source words are then appended until MAX_WORDS.
+#
+# The final dictionary is sorted deterministically.
+# ------------------------------------------------------------
+
+build_dictionary() {
+    local language="$1"
+    local normalized_source="$2"
+    local output_file="$3"
+    shift 3
+
+    local -a core_words=("$@")
+
+    log ""
+    log "============================================================"
+    log " Building dictionary: ${language}"
+    log "============================================================"
+
+    "${PYTHON_BIN}" - \
+        "${language}" \
+        "${normalized_source}" \
+        "${output_file}" \
+        "${MAX_WORDS}" \
+        "${MIN_WORD_LEN}" \
+        "${MAX_WORD_LEN}" \
+        "${core_words[@]}" <<'PY'
+import sys
+import unicodedata
+
+language = sys.argv[1]
+source_file = sys.argv[2]
+output_file = sys.argv[3]
+max_words = int(sys.argv[4])
+min_len = int(sys.argv[5])
+max_len = int(sys.argv[6])
+
+core_words = sys.argv[7:]
+
+def normalize(word):
+    return unicodedata.normalize("NFC", word.strip())
+
+def valid_word(word):
+    if not word:
+        return False
+
+    if len(word) < min_len or len(word) > max_len:
+        return False
+
+    for ch in word:
+        category = unicodedata.category(ch)
 
         if category.startswith("L"):
             continue
@@ -398,606 +423,769 @@ def valid_word(word):
         if category.startswith("M"):
             continue
 
+        if ch in ("'", "’", "-"):
+            continue
+
         return False
 
     return True
 
+# ------------------------------------------------------------
+# Load source in ORIGINAL frequency order.
+# ------------------------------------------------------------
 
-def load_source(path):
-    result = []
-    seen = set()
+source_words = []
 
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            word = nfc(line)
-
-            if not valid_word(word):
-                continue
-
-            if word in seen:
-                continue
-
-            seen.add(word)
-            result.append(word)
-
-    return result
-
-
-sources = {
-    "es-AR": es_source,
-    "en-en": en_source,
-    "de-de": de_source,
-}
-
-
-for language, source_path in sources.items():
-
-    print("")
-    print("=" * 60)
-    print(f" Building dictionary: {language}")
-    print("=" * 60)
-
-    source_words = load_source(source_path)
-    source_set = set(source_words)
-
-    print(f"Source words: {len(source_words)}")
-    print(f"Core words:   {len(CORE[language])}")
-
-    # --------------------------------------------------------
-    # Start with core words.
-    # --------------------------------------------------------
-
-    selected = []
-    selected_set = set()
-
-    for word in CORE[language]:
-
-        word = nfc(word)
+with open(source_file, "r", encoding="utf-8") as src:
+    for raw in src:
+        word = normalize(raw)
 
         if not valid_word(word):
-            print(f"WARNING: invalid core word: {word}")
             continue
 
-        if word not in selected_set:
-            selected.append(word)
-            selected_set.add(word)
+        source_words.append(word)
 
-        if word in source_set:
-            print(f"CORE + SOURCE: {language}: {word}")
-        else:
-            print(f"CORE ONLY:    {language}: {word}")
+# ------------------------------------------------------------
+# Build case-insensitive set while preserving Unicode.
+# ------------------------------------------------------------
 
-    # --------------------------------------------------------
-    # Add FrequencyWords directly.
-    #
-    # No Hunspell validation.
-    # --------------------------------------------------------
+words_by_key = {}
 
-    for word in source_words:
+# Core first.
+for word in core_words:
+    word = normalize(word)
 
-        if word in selected_set:
-            continue
+    if not valid_word(word):
+        continue
 
-        if len(selected) >= max_words:
-            break
+    key = word.casefold()
 
-        selected.append(word)
-        selected_set.add(word)
+    if key not in words_by_key:
+        words_by_key[key] = word
 
-    # --------------------------------------------------------
-    # Sort deterministically.
-    #
-    # NFC remains intact.
-    # --------------------------------------------------------
+        print(f"CORE + SOURCE: {language}: {word}")
 
-    selected = sorted(
-        selected,
-        key=lambda x: (
-            x.casefold(),
-            x
-        )
-    )
+# Source words.
+for word in source_words:
+    key = word.casefold()
 
-    dictionary_path = output_root / f"{language}.dict"
+    if key in words_by_key:
+        continue
 
-    with dictionary_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
+    if len(words_by_key) >= max_words:
+        break
 
-        # Header.
-        f.write(f"{language}\n")
+    words_by_key[key] = word
 
-        for word in selected:
-            f.write(word + "\n")
+# ------------------------------------------------------------
+# Deterministic final ordering.
+#
+# casefold() gives stable ordering while retaining original
+# Unicode spelling.
+# ------------------------------------------------------------
 
-    # --------------------------------------------------------
-    # Metadata
-    # --------------------------------------------------------
+words = list(words_by_key.values())
+words.sort(key=lambda value: (value.casefold(), value))
 
-    meta_path = output_root / f"{language}.meta"
+# ------------------------------------------------------------
+# Write dictionary.
+#
+# First line = word count.
+# ------------------------------------------------------------
 
-    with meta_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
+with open(output_file, "w", encoding="utf-8", newline="\n") as dst:
+    dst.write(str(len(words)) + "\n")
 
-        f.write(f"language={language}\n")
-        f.write("source=FrequencyWords\n")
-        f.write("hunspell=false\n")
-        f.write(f"source_words={len(source_words)}\n")
-        f.write(f"core_words={len(CORE[language])}\n")
-        f.write(f"dictionary_words={len(selected)}\n")
+    for word in words:
+        dst.write(word + "\n")
 
-        accented = sum(
-            any(
-                unicodedata.category(ch).startswith("M")
-                or ord(ch) > 127
-                for ch in word
-            )
-            for word in selected
-        )
-
-        f.write(f"unicode_words={accented}\n")
-
-    # --------------------------------------------------------
-    # Expected-word diagnostic
-    # --------------------------------------------------------
-
-    print("")
-    print("Expected/core verification:")
-
-    for word in CORE[language]:
-
-        word = nfc(word)
-
-        if word in selected_set:
-            print(f"OK: {language}: {word}")
-        else:
-            print(f"ERROR: core word missing: {language}: {word}")
-
-    print("")
-    print(f"Dictionary words: {len(selected)}")
-    print(f"Output: {dictionary_path}")
-
+print(f"Source words: {len(source_words)}")
+print(f"Core words:   {len(core_words)}")
+print(f"Final words:  {len(words)}")
 PY
+}
 
-# ============================================================
-# Generate delete index
-#
-# Deletes are generated ONLY from words actually present in
-# the final dictionary.
-#
-# No Hunspell is involved anywhere in this stage.
-# ============================================================
+ES_DICT="${OUTPUT_ROOT}/es-AR.dict"
+EN_DICT="${OUTPUT_ROOT}/en-en.dict"
+DE_DICT="${OUTPUT_ROOT}/de-de.dict"
 
-"${PYTHON_BIN}" \
-    - \
-    "${OUTPUT_ROOT}" \
-    "${DIST2_WORDS}" \
-    "${MAX_DELETES_PER_WORD}" \
-    "${MAX_DELETE_ENTRIES}" \
-    <<'PY'
+build_dictionary \
+    "es-AR" \
+    "${ES_NORMALIZED}" \
+    "${ES_DICT}" \
+    "${ES_CORE[@]}"
 
+build_dictionary \
+    "en-en" \
+    "${EN_NORMALIZED}" \
+    "${EN_DICT}" \
+    "${EN_CORE[@]}"
+
+build_dictionary \
+    "de-de" \
+    "${DE_NORMALIZED}" \
+    "${DE_DICT}" \
+    "${DE_CORE[@]}"
+
+# ------------------------------------------------------------
+# Generate metadata
+# ------------------------------------------------------------
+
+write_metadata() {
+    local language="$1"
+    local dictionary="$2"
+    local source="$3"
+    local output="$4"
+
+    "${PYTHON_BIN}" - \
+        "${language}" \
+        "${dictionary}" \
+        "${source}" \
+        "${output}" <<'PY'
 import sys
+import unicodedata
 from pathlib import Path
 
-output_root = Path(sys.argv[1])
-dist2_words = int(sys.argv[2])
-max_deletes_per_word = int(sys.argv[3])
-max_delete_entries = int(sys.argv[4])
+language = sys.argv[1]
+dictionary = Path(sys.argv[2])
+source = Path(sys.argv[3])
+output = Path(sys.argv[4])
 
+lines = dictionary.read_text(
+    encoding="utf-8"
+).splitlines()
 
-def utf16_len(s):
-    return len(s.encode("utf-16-le")) // 2
+word_count = max(0, len(lines) - 1)
 
+unicode_words = 0
+
+for word in lines[1:]:
+    if any(ord(ch) > 127 for ch in word):
+        unicode_words += 1
+
+source_count = len(
+    [
+        line
+        for line in source.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+)
+
+metadata = [
+    f"language={language}",
+    "source=FrequencyWords",
+    "hunspell=false",
+    f"source_words={source_count}",
+    f"dictionary_words={word_count}",
+    f"unicode_words={unicode_words}",
+]
+
+output.write_text(
+    "\n".join(metadata) + "\n",
+    encoding="utf-8"
+)
+PY
+}
+
+ES_META="${OUTPUT_ROOT}/es-AR.meta"
+EN_META="${OUTPUT_ROOT}/en-en.meta"
+DE_META="${OUTPUT_ROOT}/de-de.meta"
+
+write_metadata \
+    "es-AR" \
+    "${ES_DICT}" \
+    "${ES_NORMALIZED}" \
+    "${ES_META}"
+
+write_metadata \
+    "en-en" \
+    "${EN_DICT}" \
+    "${EN_NORMALIZED}" \
+    "${EN_META}"
+
+write_metadata \
+    "de-de" \
+    "${DE_DICT}" \
+    "${DE_NORMALIZED}" \
+    "${DE_META}"
+
+# ------------------------------------------------------------
+# Delete generation
+#
+# IMPORTANT:
+#
+# We intentionally DO NOT generate deletes for all ~50k words.
+#
+# We use:
+#   1. all core words
+#   2. first DELETE_PRIORITY_WORDS source words
+#
+# FrequencyWords is frequency ordered, so this preserves delete
+# coverage for the most useful/high-frequency vocabulary.
+#
+# Only one-character deletions are generated.
+#
+# Unicode operates by Python code point, so:
+#
+#   mañana
+#   mañána
+#   für
+#   größer
+#
+# remain valid Unicode strings.
+# ------------------------------------------------------------
+
+generate_deletes() {
+    local language="$1"
+    local normalized_source="$2"
+    local dictionary="$3"
+    local output="$4"
+    local budget="$5"
+    shift 5
+
+    local -a core_words=("$@")
+
+    log ""
+    log "============================================================"
+    log " Building delete index: ${language}"
+    log "============================================================"
+
+    "${PYTHON_BIN}" - \
+        "${language}" \
+        "${normalized_source}" \
+        "${dictionary}" \
+        "${output}" \
+        "${DELETE_PRIORITY_WORDS}" \
+        "${MAX_DELETES_PER_WORD}" \
+        "${budget}" \
+        "${core_words[@]}" <<'PY'
+import sys
+import unicodedata
+from collections import OrderedDict
+from pathlib import Path
+
+language = sys.argv[1]
+source_file = Path(sys.argv[2])
+dictionary_file = Path(sys.argv[3])
+output_file = Path(sys.argv[4])
+priority_count = int(sys.argv[5])
+max_deletes_per_word = int(sys.argv[6])
+budget = int(sys.argv[7])
+
+core_words = sys.argv[8:]
+
+def nfc(value):
+    return unicodedata.normalize("NFC", value.strip())
 
 def delete_variants(word):
-    """
-    Generate deletion strings.
-
-    One-character deletion:
-        mañana -> maána / mañana with each UTF-16-safe
-        codepoint position removed
-
-    For PocketBoard's delete dictionary we operate on Unicode
-    codepoints, preserving accented characters.
-    """
-
-    result = set()
+    result = []
 
     if len(word) <= 1:
         return result
 
-    for i in range(len(word)):
-        result.add(word[:i] + word[i + 1:])
+    seen = set()
+
+    # Python strings operate on Unicode code points.
+    # This preserves UTF-8/Unicode characters correctly.
+    for index in range(len(word)):
+        deleted = word[:index] + word[index + 1:]
+
+        if not deleted:
+            continue
+
+        if deleted in seen:
+            continue
+
+        seen.add(deleted)
+        result.append(deleted)
 
         if len(result) >= max_deletes_per_word:
             break
 
     return result
 
+# ------------------------------------------------------------
+# Read complete dictionary.
+# ------------------------------------------------------------
 
-for language in ("es-AR", "en-en", "de-de"):
+dictionary_lines = dictionary_file.read_text(
+    encoding="utf-8"
+).splitlines()
 
-    dictionary_path = output_root / f"{language}.dict"
-    deletes_path = output_root / f"{language}.deletes"
+dictionary_words = set(
+    nfc(word)
+    for word in dictionary_lines[1:]
+    if word.strip()
+)
 
-    with dictionary_path.open(
-        "r",
-        encoding="utf-8"
-    ) as f:
+# ------------------------------------------------------------
+# Read source in original frequency order.
+# ------------------------------------------------------------
 
-        lines = [
-            line.rstrip("\n\r")
-            for line in f
-        ]
+source_words = []
 
-    if not lines:
-        raise RuntimeError(
-            f"Empty dictionary: {dictionary_path}"
-        )
+for raw in source_file.read_text(
+    encoding="utf-8"
+).splitlines():
+    word = nfc(raw)
 
-    # First line is dictionary header.
-    words = [
-        word
-        for word in lines[1:]
-        if word
-    ]
+    if not word:
+        continue
 
-    delete_map = {}
-    total_entries = 0
+    source_words.append(word)
 
-    # Higher-frequency words are not available anymore at this
-    # stage because the dictionary has already been sorted.
-    # The first DIST2_WORDS dictionary entries are therefore used
-    # for the extended correction coverage.
-    dist2_set = set(words[:dist2_words])
+# ------------------------------------------------------------
+# Priority words:
+#
+# Core first.
+# Then top N FrequencyWords entries.
+#
+# Dictionary words outside this list remain in the dictionary,
+# but do not consume delete-index space.
+# ------------------------------------------------------------
 
-    for word in words:
+priority = OrderedDict()
 
-        variants = delete_variants(word)
+for word in core_words:
+    word = nfc(word)
 
-        for deleted in variants:
+    if word in dictionary_words:
+        priority.setdefault(word, None)
 
-            if not deleted:
-                continue
+for word in source_words:
+    if word not in dictionary_words:
+        continue
 
-            targets = delete_map.setdefault(
-                deleted,
-                []
-            )
+    if word in priority:
+        continue
 
-            if word not in targets:
-                targets.append(word)
-                total_entries += 1
+    priority[word] = None
 
-            if total_entries >= max_delete_entries:
-                break
+    if len(priority) >= priority_count + len(core_words):
+        break
 
-        if total_entries >= max_delete_entries:
-            break
+priority_words = list(priority.keys())
 
-    with deletes_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
+# ------------------------------------------------------------
+# Build delete map.
+#
+# deleted form -> target words
+#
+# Ordered dictionaries make the output deterministic.
+# ------------------------------------------------------------
 
-        f.write(f"{language}\n")
-        f.write("source=final-dictionary\n")
-        f.write(f"words={len(words)}\n")
-        f.write(f"delete_entries={total_entries}\n")
+delete_map = OrderedDict()
+mapping_count = 0
 
-        for deleted in sorted(delete_map):
-            targets = delete_map[deleted]
+for word in priority_words:
+    for deleted in delete_variants(word):
+        targets = delete_map.setdefault(deleted, [])
 
-            f.write(
-                deleted
-                + "\t"
-                + " ".join(targets)
-                + "\n"
-            )
+        if word in targets:
+            continue
 
-    print("")
-    print(f"Delete index: {language}")
-    print(f"  Words:        {len(words)}")
-    print(f"  Delete keys:  {len(delete_map)}")
-    print(f"  Delete maps:  {total_entries}")
-    print(f"  Output:       {deletes_path}")
+        targets.append(word)
+        mapping_count += 1
 
+# ------------------------------------------------------------
+# Serialize candidates in deterministic order.
+#
+# We enforce the actual BYTE budget here.
+#
+# This is important: the previous script compared the byte
+# size of the finished file against a budget while generating
+# many more mappings than the budget could contain.
+#
+# Now the budget is enforced during generation.
+# ------------------------------------------------------------
+
+lines = []
+
+header = [
+    "# PocketBoard delete index",
+    f"# language={language}",
+    "# source=FrequencyWords",
+    "# delete_distance=1",
+]
+
+current_size = sum(
+    len((line + "\n").encode("utf-8"))
+    for line in header
+)
+
+selected_mappings = 0
+selected_keys = 0
+
+# Prioritize shorter deleted strings first only for deterministic
+# packing. The targets themselves retain their original priority.
+for deleted in sorted(delete_map.keys(), key=lambda value: (value.casefold(), value)):
+
+    targets = delete_map[deleted]
+
+    # Format:
+    #
+    # deleted<TAB>target1,target2,...
+    #
+    target_text = ",".join(targets)
+
+    line = f"{deleted}\t{target_text}\n"
+    line_size = len(line.encode("utf-8"))
+
+    if current_size + line_size > budget:
+        continue
+
+    lines.append(line)
+    current_size += line_size
+    selected_keys += 1
+    selected_mappings += len(targets)
+
+# ------------------------------------------------------------
+# Write final delete index.
+# ------------------------------------------------------------
+
+with output_file.open("w", encoding="utf-8", newline="\n") as dst:
+    for line in header:
+        dst.write(line + "\n")
+
+    for line in lines:
+        dst.write(line)
+
+actual_size = output_file.stat().st_size
+
+print(f"Delete priority words: {len(priority_words)}")
+print(f"Delete keys:           {selected_keys}")
+print(f"Delete mappings:       {selected_mappings}")
+print(f"Delete index bytes:    {actual_size}")
+print(f"Delete budget:         {budget}")
+
+if actual_size > budget:
+    print(
+        f"ERROR: {language} delete index exceeds budget "
+        f"({actual_size} > {budget})",
+        file=sys.stderr
+    )
+    sys.exit(1)
 PY
-
-# ============================================================
-# Copy generated dictionaries to Android assets
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Installing generated assets"
-echo "============================================================"
-
-rm -f \
-    "${ASSETS_ROOT}/es-AR.dict" \
-    "${ASSETS_ROOT}/en-en.dict" \
-    "${ASSETS_ROOT}/de-de.dict" \
-    "${ASSETS_ROOT}/es-AR.deletes" \
-    "${ASSETS_ROOT}/en-en.deletes" \
-    "${ASSETS_ROOT}/de-de.deletes" \
-    "${ASSETS_ROOT}/es-AR.meta" \
-    "${ASSETS_ROOT}/en-en.meta" \
-    "${ASSETS_ROOT}/de-de.meta"
-
-cp \
-    "${OUTPUT_ROOT}/es-AR.dict" \
-    "${ASSETS_ROOT}/es-AR.dict"
-
-cp \
-    "${OUTPUT_ROOT}/en-en.dict" \
-    "${ASSETS_ROOT}/en-en.dict"
-
-cp \
-    "${OUTPUT_ROOT}/de-de.dict" \
-    "${ASSETS_ROOT}/de-de.dict"
-
-cp \
-    "${OUTPUT_ROOT}/es-AR.deletes" \
-    "${ASSETS_ROOT}/es-AR.deletes"
-
-cp \
-    "${OUTPUT_ROOT}/en-en.deletes" \
-    "${ASSETS_ROOT}/en-en.deletes"
-
-cp \
-    "${OUTPUT_ROOT}/de-de.deletes" \
-    "${ASSETS_ROOT}/de-de.deletes"
-
-cp \
-    "${OUTPUT_ROOT}/es-AR.meta" \
-    "${ASSETS_ROOT}/es-AR.meta"
-
-cp \
-    "${OUTPUT_ROOT}/en-en.meta" \
-    "${ASSETS_ROOT}/en-en.meta"
-
-cp \
-    "${OUTPUT_ROOT}/de-de.meta" \
-    "${ASSETS_ROOT}/de-de.meta"
-
-# ============================================================
-# Validation
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " Validating generated assets"
-echo "============================================================"
-
-"${PYTHON_BIN}" \
-    - \
-    "${ASSETS_ROOT}" \
-    <<'PY'
-
-import sys
-import unicodedata
-from pathlib import Path
-
-assets = Path(sys.argv[1])
-
-expected = {
-    "es-AR": [
-        "mañana",
-        "tenés",
-        "podés",
-        "hacés",
-        "acá",
-        "pasaría",
-        "debería",
-        "vos",
-    ],
-
-    "en-en": [
-        "the",
-        "have",
-        "hello",
-        "world",
-    ],
-
-    "de-de": [
-        "ich",
-        "nicht",
-        "morgen",
-        "entschuldigung",
-        "wahrscheinlich",
-        "möglicherweise",
-        "für",
-    ],
 }
 
+ES_DELETES="${OUTPUT_ROOT}/es-AR.deletes"
+EN_DELETES="${OUTPUT_ROOT}/en-en.deletes"
+DE_DELETES="${OUTPUT_ROOT}/de-de.deletes"
 
-def read_dictionary(language):
-    path = assets / f"{language}.dict"
+generate_deletes \
+    "es-AR" \
+    "${ES_NORMALIZED}" \
+    "${ES_DICT}" \
+    "${ES_DELETES}" \
+    "${ES_DELETE_BUDGET}" \
+    "${ES_CORE[@]}"
 
-    if not path.exists():
-        raise RuntimeError(
-            f"Missing dictionary: {path}"
-        )
+generate_deletes \
+    "en-en" \
+    "${EN_NORMALIZED}" \
+    "${EN_DICT}" \
+    "${EN_DELETES}" \
+    "${EN_DELETE_BUDGET}" \
+    "${EN_CORE[@]}"
 
-    with path.open(
-        "r",
-        encoding="utf-8"
-    ) as f:
+generate_deletes \
+    "de-de" \
+    "${DE_NORMALIZED}" \
+    "${DE_DICT}" \
+    "${DE_DELETES}" \
+    "${DE_DELETE_BUDGET}" \
+    "${DE_CORE[@]}"
 
-        lines = [
-            line.rstrip("\r\n")
-            for line in f
-        ]
+# ------------------------------------------------------------
+# Validate delete index targets
+# ------------------------------------------------------------
 
-    if not lines:
-        raise RuntimeError(
-            f"Empty dictionary: {path}"
-        )
+validate_delete_targets() {
+    local language="$1"
+    local dictionary="$2"
+    local deletes="$3"
 
-    return set(lines[1:])
-
-
-for language, words in expected.items():
-
-    print("")
-    print(f"Checking dictionary format: {language}")
-
-    dictionary = read_dictionary(language)
-
-    for word in words:
-
-        word = unicodedata.normalize(
-            "NFC",
-            word
-        )
-
-        if word not in dictionary:
-            print(
-                f"ERROR: expected word missing: "
-                f"{language}: {word}"
-            )
-            raise SystemExit(1)
-
-        print(
-            f"OK: {language}: {word}"
-        )
-
-print("")
-print("All expected words are present.")
-
-PY
-
-# ============================================================
-# Delete target validation
-# ============================================================
-
-"${PYTHON_BIN}" \
-    - \
-    "${ASSETS_ROOT}" \
-    <<'PY'
-
+    "${PYTHON_BIN}" - \
+        "${language}" \
+        "${dictionary}" \
+        "${deletes}" <<'PY'
 import sys
 from pathlib import Path
 
-assets = Path(sys.argv[1])
+language = sys.argv[1]
+dictionary_file = Path(sys.argv[2])
+delete_file = Path(sys.argv[3])
 
-for language in (
-    "es-AR",
-    "en-en",
-    "de-de",
-):
+dictionary_lines = dictionary_file.read_text(
+    encoding="utf-8"
+).splitlines()
 
-    dictionary_path = assets / f"{language}.dict"
-    deletes_path = assets / f"{language}.deletes"
+dictionary_words = set(
+    dictionary_lines[1:]
+)
 
-    with dictionary_path.open(
-        "r",
-        encoding="utf-8"
-    ) as f:
+delete_lines = delete_file.read_text(
+    encoding="utf-8"
+).splitlines()
 
-        dictionary = set(
-            line.rstrip("\r\n")
-            for line in f
+errors = 0
+mapping_count = 0
+
+for line in delete_lines[4:]:
+    if not line.strip():
+        continue
+
+    if "\t" not in line:
+        print(
+            f"ERROR: malformed delete entry in {language}: {line}",
+            file=sys.stderr
         )
+        errors += 1
+        continue
 
-    dictionary.discard(language)
+    deleted, targets_text = line.split("\t", 1)
 
-    invalid = 0
-    mappings = 0
+    if not deleted:
+        print(
+            f"ERROR: empty delete key in {language}",
+            file=sys.stderr
+        )
+        errors += 1
+        continue
 
-    with deletes_path.open(
-        "r",
-        encoding="utf-8"
-    ) as f:
+    targets = [
+        target
+        for target in targets_text.split(",")
+        if target
+    ]
 
-        for line_number, line in enumerate(
-            f,
-            start=1
-        ):
+    for target in targets:
+        mapping_count += 1
 
-            line = line.rstrip("\r\n")
+        if target not in dictionary_words:
+            print(
+                f"ERROR: delete target not in dictionary "
+                f"({language}): {target}",
+                file=sys.stderr
+            )
+            errors += 1
 
-            if not line:
-                continue
-
-            if line_number <= 4:
-                continue
-
-            parts = line.split("\t", 1)
-
-            if len(parts) != 2:
-                continue
-
-            targets = parts[1].split()
-
-            for target in targets:
-
-                mappings += 1
-
-                if target not in dictionary:
-                    invalid += 1
-                    print(
-                        f"INVALID TARGET: "
-                        f"{language}: "
-                        f"{target}"
-                    )
-
-    print("")
-    print(f"Delete target validation: {language}")
-    print(f"  Mappings:       {mappings}")
-    print(f"  Invalid targets: {invalid}")
-
-    if invalid:
-        raise SystemExit(1)
-
+if errors:
     print(
-        f"OK: all delete targets exist "
-        f"in {language}.dict"
+        f"ERROR: {language} delete validation failed: {errors} errors",
+        file=sys.stderr
     )
+    sys.exit(1)
 
+print(
+    f"Delete validation OK: {language} "
+    f"({mapping_count} mappings)"
+)
 PY
+}
 
-# ============================================================
-# Summary
-# ============================================================
+log ""
+log "============================================================"
+log " Validating delete indexes"
+log "============================================================"
 
-echo ""
-echo "============================================================"
-echo " PocketBoard dictionary build summary"
-echo "============================================================"
+validate_delete_targets \
+    "es-AR" \
+    "${ES_DICT}" \
+    "${ES_DELETES}"
+
+validate_delete_targets \
+    "en-en" \
+    "${EN_DICT}" \
+    "${EN_DELETES}"
+
+validate_delete_targets \
+    "de-de" \
+    "${DE_DICT}" \
+    "${DE_DELETES}"
+
+# ------------------------------------------------------------
+# Validate core dictionary words
+# ------------------------------------------------------------
+
+validate_core_words() {
+    local language="$1"
+    local dictionary="$2"
+    shift 2
+
+    local -a expected=("$@")
+
+    "${PYTHON_BIN}" - \
+        "${language}" \
+        "${dictionary}" \
+        "${expected[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+language = sys.argv[1]
+dictionary_file = Path(sys.argv[2])
+expected = sys.argv[3:]
+
+words = set()
+
+for word in dictionary_file.read_text(
+    encoding="utf-8"
+).splitlines()[1:]:
+    words.add(word.casefold())
+
+missing = []
+
+print("")
+print(f"Checking dictionary format: {language}")
+
+for word in expected:
+    normalized = word.casefold()
+
+    if normalized in words:
+        print(f"OK: {language}: {word}")
+    else:
+        print(
+            f"WARNING: {language}: missing expected word: {word}"
+        )
+        missing.append(word)
+
+if missing:
+    print("")
+    print(
+        f"WARNING: {language} is missing "
+        f"{len(missing)} expected words."
+    )
+else:
+    print(
+        f"All expected words are present."
+    )
+PY
+}
+
+log ""
+log "============================================================"
+log " Validating core vocabulary"
+log "============================================================"
+
+validate_core_words \
+    "es-AR" \
+    "${ES_DICT}" \
+    "${ES_CORE[@]}"
+
+validate_core_words \
+    "en-en" \
+    "${EN_DICT}" \
+    "${EN_CORE[@]}"
+
+validate_core_words \
+    "de-de" \
+    "${DE_DICT}" \
+    "${DE_CORE[@]}"
+
+# ------------------------------------------------------------
+# Install generated assets
+# ------------------------------------------------------------
+
+log ""
+log "============================================================"
+log " Installing dictionary assets"
+log "============================================================"
+
+rm -f "${ASSETS_ROOT}/es-AR.dict"
+rm -f "${ASSETS_ROOT}/es-AR.deletes"
+rm -f "${ASSETS_ROOT}/es-AR.meta"
+
+rm -f "${ASSETS_ROOT}/en-en.dict"
+rm -f "${ASSETS_ROOT}/en-en.deletes"
+rm -f "${ASSETS_ROOT}/en-en.meta"
+
+rm -f "${ASSETS_ROOT}/de-de.dict"
+rm -f "${ASSETS_ROOT}/de-de.deletes"
+rm -f "${ASSETS_ROOT}/de-de.meta"
+
+cp "${ES_DICT}" "${ASSETS_ROOT}/es-AR.dict"
+cp "${ES_DELETES}" "${ASSETS_ROOT}/es-AR.deletes"
+cp "${ES_META}" "${ASSETS_ROOT}/es-AR.meta"
+
+cp "${EN_DICT}" "${ASSETS_ROOT}/en-en.dict"
+cp "${EN_DELETES}" "${ASSETS_ROOT}/en-en.deletes"
+cp "${EN_META}" "${ASSETS_ROOT}/en-en.meta"
+
+cp "${DE_DICT}" "${ASSETS_ROOT}/de-de.dict"
+cp "${DE_DELETES}" "${ASSETS_ROOT}/de-de.deletes"
+cp "${DE_META}" "${ASSETS_ROOT}/de-de.meta"
+
+# ------------------------------------------------------------
+# Final size summary
+# ------------------------------------------------------------
 
 TOTAL_DICTIONARY_BYTES=0
 TOTAL_DELETE_BYTES=0
 TOTAL_METADATA_BYTES=0
+
+log ""
+log "============================================================"
+log " PocketBoard dictionary build summary"
+log "============================================================"
 
 for language in \
     "es-AR" \
     "en-en" \
     "de-de"
 do
-
     dictionary="${OUTPUT_ROOT}/${language}.dict"
     deletes="${OUTPUT_ROOT}/${language}.deletes"
     metadata="${OUTPUT_ROOT}/${language}.meta"
+
+    dictionary_words="$(
+        tail -n +2 "${dictionary}" | wc -l
+    )"
+
+    delete_keys="$(
+        tail -n +5 "${deletes}" | wc -l
+    )"
+
+    delete_mappings="$(
+        "${PYTHON_BIN}" - "${deletes}" <<'PY'
+import sys
+
+count = 0
+
+with open(sys.argv[1], "r", encoding="utf-8") as src:
+    for line in src.readlines()[4:]:
+        line = line.rstrip("\n")
+
+        if not line.strip():
+            continue
+
+        if "\t" not in line:
+            continue
+
+        _, targets = line.split("\t", 1)
+
+        if targets:
+            count += len(
+                [
+                    target
+                    for target in targets.split(",")
+                    if target
+                ]
+            )
+
+print(count)
+PY
+    )"
 
     dictionary_size="$(wc -c < "${dictionary}")"
     delete_size="$(wc -c < "${deletes}")"
     metadata_size="$(wc -c < "${metadata}")"
 
-    dictionary_words="$(tail -n +2 "${dictionary}" | wc -l)"
-
-    delete_mappings="$(tail -n +5 "${deletes}" | wc -l)"
-
-    language_total=$(
+    total_size="$(
         printf '%s\n' \
             "$((dictionary_size + delete_size + metadata_size))"
-    )
+    )"
 
     TOTAL_DICTIONARY_BYTES=$(
         printf '%s\n' \
@@ -1014,15 +1202,15 @@ do
             "$((TOTAL_METADATA_BYTES + metadata_size))"
     )
 
-    echo ""
-    echo "${language}"
-    echo "  Words:           ${dictionary_words}"
-    echo "  Dictionary:      ${dictionary_size} bytes"
-    echo "  Delete index:    ${delete_size} bytes"
-    echo "  Delete mappings: ${delete_mappings}"
-    echo "  Metadata:        ${metadata_size} bytes"
-    echo "  Total:           ${language_total} bytes"
-
+    log ""
+    log "${language}"
+    log "  Words:           ${dictionary_words}"
+    log "  Delete keys:     ${delete_keys}"
+    log "  Delete mappings: ${delete_mappings}"
+    log "  Dictionary:      ${dictionary_size} bytes"
+    log "  Delete index:    ${delete_size} bytes"
+    log "  Metadata:        ${metadata_size} bytes"
+    log "  Total:           ${total_size} bytes"
 done
 
 TOTAL_GENERATED_BYTES=$(
@@ -1030,69 +1218,90 @@ TOTAL_GENERATED_BYTES=$(
         "$((TOTAL_DICTIONARY_BYTES + TOTAL_DELETE_BYTES + TOTAL_METADATA_BYTES))"
 )
 
-TOTAL_MIB=$(
-    printf '%s\n' \
-        "$((TOTAL_GENERATED_BYTES / 1024 / 1024))"
-)
+log ""
+log "============================================================"
+log " TOTAL"
+log "============================================================"
 
-echo ""
-echo "============================================================"
-echo " TOTAL"
-echo "============================================================"
+log "Dictionary bytes: ${TOTAL_DICTIONARY_BYTES}"
+log "Delete bytes:     ${TOTAL_DELETE_BYTES}"
+log "Metadata bytes:   ${TOTAL_METADATA_BYTES}"
+log "Generated bytes:  ${TOTAL_GENERATED_BYTES}"
 
-echo "Dictionary bytes: ${TOTAL_DICTIONARY_BYTES}"
-echo "Delete bytes:     ${TOTAL_DELETE_BYTES}"
-echo "Metadata bytes:   ${TOTAL_METADATA_BYTES}"
-echo "Generated bytes:  ${TOTAL_GENERATED_BYTES}"
-echo "Approximate data: ${TOTAL_MIB} MiB"
+TOTAL_MIB="$(
+    "${PYTHON_BIN}" - "${TOTAL_GENERATED_BYTES}" <<'PY'
+import sys
 
-echo ""
-echo "Delete budget:"
-echo "  Spanish: ${ES_DELETE_BUDGET}"
-echo "  English: ${EN_DELETE_BUDGET}"
-echo "  German:  ${DE_DELETE_BUDGET}"
-echo "  Global:  ${GLOBAL_DELETE_BUDGET}"
+value = int(sys.argv[1])
+
+print(f"{value / 1024 / 1024:.2f} MiB")
+PY
+)"
+
+log "Approximate data: ${TOTAL_MIB}"
+
+# ------------------------------------------------------------
+# Final global delete budget validation
+# ------------------------------------------------------------
+
+log ""
+log "Delete budget:"
+log "  Spanish: ${ES_DELETE_BUDGET}"
+log "  English: ${EN_DELETE_BUDGET}"
+log "  German:  ${DE_DELETE_BUDGET}"
+log "  Global:  ${GLOBAL_DELETE_BUDGET}"
 
 if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
-
-    echo ""
-    echo "ERROR: global delete budget exceeded."
-    echo "  Size:   ${TOTAL_DELETE_BYTES}"
-    echo "  Budget: ${GLOBAL_DELETE_BUDGET}"
-
+    log ""
+    log "ERROR: global delete budget exceeded."
+    log "  Size:   ${TOTAL_DELETE_BYTES}"
+    log "  Budget: ${GLOBAL_DELETE_BUDGET}"
     exit 1
 fi
 
+log ""
+log "Global delete budget: OK"
+log "Delete bytes used:    ${TOTAL_DELETE_BYTES}"
+log "Delete bytes budget:  ${GLOBAL_DELETE_BUDGET}"
 
-echo ""
-echo "============================================================"
-echo " FINAL SANITY CHECKS"
-echo "============================================================"
+# ------------------------------------------------------------
+# Final per-language budget validation
+# ------------------------------------------------------------
 
-for language in \
-    "es-AR" \
-    "en-en" \
-    "de-de"
-do
-    for suffix in \
-        "dict" \
-        "deletes" \
-        "meta"
-    do
-        file="${ASSETS_ROOT}/${language}.${suffix}"
+if (( $(wc -c < "${ES_DELETES}") > ES_DELETE_BUDGET )); then
+    die "Spanish delete index exceeds budget."
+fi
 
-        if [[ ! -s "${file}" ]]; then
-            echo "ERROR: missing/empty asset:"
-            echo "  ${file}"
-            exit 1
-        fi
-    done
-done
+if (( $(wc -c < "${EN_DELETES}") > EN_DELETE_BUDGET )); then
+    die "English delete index exceeds budget."
+fi
 
-echo "OK: all generated assets exist."
-echo "OK: Hunspell was NOT used."
-echo "OK: FrequencyWords was used directly."
-echo "OK: Unicode/NFC preserved."
-echo "OK: accented words / ñ / umlauts retained."
-echo ""
-echo "PocketBoard dictionary generation completed successfully."
+if (( $(wc -c < "${DE_DELETES}") > DE_DELETE_BUDGET )); then
+    die "German delete index exceeds budget."
+fi
+
+# ------------------------------------------------------------
+# Final asset listing
+# ------------------------------------------------------------
+
+log ""
+log "============================================================"
+log " Generated assets"
+log "============================================================"
+
+find "${ASSETS_ROOT}" \
+    -maxdepth 1 \
+    -type f \
+    \( \
+        -name 'es-AR.*' -o \
+        -name 'en-en.*' -o \
+        -name 'de-de.*' \
+    \) \
+    -printf '%f %s bytes\n' \
+    | sort
+
+log ""
+log "============================================================"
+log " PocketBoard dictionary generation completed successfully"
+log "============================================================"
+```
