@@ -1580,17 +1580,18 @@ validate_dictionary_tokens() {
 
     # IMPORTANT:
     #
-    # Do NOT use:
+    # Python source is provided through stdin by the heredoc.
+    # The dictionary path is passed as sys.argv[1].
     #
-    #   tail ... | python3 <<'PY'
+    # The '-' is essential:
     #
-    # because the heredoc becomes Python's stdin. With
-    # `set -o pipefail`, tail receives SIGPIPE and the whole
-    # pipeline can return exit code 141.
+    #   python3 - "${dictionary}"
     #
-    # Pass the dictionary filename to Python instead.
+    # Without '-', Python would interpret the dictionary itself
+    # as a Python source file.
 
     python3 \
+        - \
         "${dictionary}" \
         > "${invalid_file}" <<'PY'
 import sys
