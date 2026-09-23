@@ -20,7 +20,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BUILD_ROOT="${BUILD_ROOT:-${PROJECT_ROOT}/build/pocketboard-dictionaries}"
 SOURCE_ROOT="${BUILD_ROOT}/sources"
-FREQUENCY_ROOT="${BUILD_ROOT}/frequency}"
+FREQUENCY_ROOT="${BUILD_ROOT}/frequency"
 WORK_ROOT="${BUILD_ROOT}/work"
 OUTPUT_ROOT="${BUILD_ROOT}/generated"
 ASSETS_ROOT="${PROJECT_ROOT}/app/src/main/assets/dictionaries"
@@ -982,9 +982,9 @@ for language in \
     "de-de"
 do
 
-    dictionary="${GENERATED_DIR}/${language}.dict"
-    deletes="${GENERATED_DIR}/${language}.deletes"
-    metadata="${GENERATED_DIR}/${language}.meta"
+    dictionary="${OUTPUT_ROOT}/${language}.dict"
+    deletes="${OUTPUT_ROOT}/${language}.deletes"
+    metadata="${OUTPUT_ROOT}/${language}.meta"
 
     dictionary_size="$(wc -c < "${dictionary}")"
     delete_size="$(wc -c < "${deletes}")"
