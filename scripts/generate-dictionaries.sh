@@ -45,19 +45,6 @@ MAX_WORD_LEN="${MAX_WORD_LEN:-40}"
 
 # ============================================================
 # Delete index limits
-#
-# IMPORTANT:
-#
-# The previous implementation generated every possible
-# one-character deletion for approximately 150,000 words.
-#
-# That created ~19 MB of delete data.
-#
-# For PocketBoard we deliberately keep the delete index small.
-#
-# Only the most useful/high-frequency words receive delete
-# mappings, and only a limited number of delete variants are
-# generated per word.
 # ============================================================
 
 DELETE_WORDS="${DELETE_WORDS:-12000}"
@@ -70,7 +57,6 @@ ES_DELETE_BUDGET="${ES_DELETE_BUDGET:-1500000}"
 EN_DELETE_BUDGET="${EN_DELETE_BUDGET:-1500000}"
 DE_DELETE_BUDGET="${DE_DELETE_BUDGET:-1500000}"
 
-# Hard safety limit.
 MAX_DELETE_ENTRIES="${MAX_DELETE_ENTRIES:-220000}"
 
 # ============================================================
@@ -152,7 +138,6 @@ def normalize_word(word):
     if not word:
         return ""
 
-    # Preserve Unicode and normalize to NFC.
     word = unicodedata.normalize("NFC", word)
 
     if len(word) < MIN_LEN or len(word) > MAX_LEN:
@@ -253,11 +238,6 @@ normalize_source \
 
 # ============================================================
 # Build final dictionaries
-#
-# FrequencyWords order is preserved internally.
-#
-# This is important because FrequencyWords is frequency-ranked.
-# We use that order later when selecting delete-index words.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -467,10 +447,6 @@ for language, source_path in sources.items():
     print(f"Source words: {len(source_words)}")
     print(f"Core words:   {len(CORE[language])}")
 
-    # --------------------------------------------------------
-    # Core words first.
-    # --------------------------------------------------------
-
     selected = []
     selected_set = set()
 
@@ -491,10 +467,6 @@ for language, source_path in sources.items():
         else:
             print(f"CORE ONLY:    {language}: {word}")
 
-    # --------------------------------------------------------
-    # Add FrequencyWords in original frequency order.
-    # --------------------------------------------------------
-
     for word in source_words:
 
         if word in selected_set:
@@ -506,12 +478,6 @@ for language, source_path in sources.items():
         selected.append(word)
         selected_set.add(word)
 
-    # --------------------------------------------------------
-    # Runtime dictionary is sorted deterministically.
-    #
-    # Frequency order is saved separately for delete generation.
-    # --------------------------------------------------------
-
     runtime_words = sorted(
         selected,
         key=lambda x: (
@@ -520,20 +486,27 @@ for language, source_path in sources.items():
         )
     )
 
-dictionary_path = output_root / f"{language}.dict"
+    # --------------------------------------------------------
+    # Runtime dictionary
+    # --------------------------------------------------------
 
-with dictionary_path.open(
-    "w",
-    encoding="utf-8",
-    newline="\n"
-) as f:
-    f.write("#POCKETBOARD-DICT-1\n")
+    dictionary_path = output_root / f"{language}.dict"
 
-    for word in runtime_words:
-        f.write(word + "\n")
+    with dictionary_path.open(
+        "w",
+        encoding="utf-8",
+        newline="\n"
+    ) as f:
 
+        f.write("#POCKETBOARD-DICT-1\n")
 
-    # Save frequency-ranked order for delete generation.
+        for word in runtime_words:
+            f.write(word + "\n")
+
+    # --------------------------------------------------------
+    # Frequency-ranked order
+    # --------------------------------------------------------
+
     ranking_path = output_root / f"{language}.ranked"
 
     with ranking_path.open(
@@ -599,23 +572,6 @@ PY
 
 # ============================================================
 # Generate compact delete indexes
-#
-# IMPORTANT:
-#
-# The previous implementation generated deletes for every word
-# in every dictionary.
-#
-# That was the reason the delete data grew to ~19.5 MB.
-#
-# This implementation:
-#
-#   1. Uses only the highest-frequency DELETE_WORDS words.
-#   2. Generates at most MAX_DELETES_PER_WORD deletes.
-#   3. Stops when the per-language byte budget is reached.
-#   4. Stops at MAX_DELETE_ENTRIES globally.
-#   5. Uses only final dictionary words as targets.
-#
-# The dictionary itself is NOT reduced.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -646,23 +602,14 @@ budgets = {
 
 
 def delete_variants(word):
-    """
-    Generate a small deterministic set of one-character
-    deletion variants.
-
-    The first variants are retained because they are the
-    cheapest/highest-priority candidates for typo correction.
-    """
 
     if len(word) <= 1:
         return []
 
     result = []
 
-    # Prefer deleting characters from the interior/end first.
     positions = list(range(len(word)))
 
-    # Deterministic order.
     positions.sort(
         key=lambda i: (
             0 if i > 0 else 1,
@@ -734,7 +681,6 @@ for language in (
             if line.rstrip("\r\n")
         ]
 
-    # Only final dictionary words can become targets.
     ranked_words = [
         word
         for word in ranked_words
@@ -743,7 +689,6 @@ for language in (
 
     priority_words = ranked_words[:delete_words_limit]
 
-    # delete -> list of dictionary targets
     delete_map = {}
 
     entries = 0
@@ -763,9 +708,6 @@ for language in (
             if word in targets:
                 continue
 
-            # Estimate the serialized line size before adding it.
-            #
-            # deleted + tab + target + newline
             additional = (
                 len(deleted.encode("utf-8"))
                 + 1
@@ -773,12 +715,9 @@ for language in (
                 + 1
             )
 
-            # If this individual mapping would exceed the language
-            # budget, stop adding more mappings.
             if estimated_bytes + additional > budget:
                 break
 
-            # Global safety limit.
             if total_entries_global + entries >= max_delete_entries:
                 break
 
@@ -793,7 +732,6 @@ for language in (
         if total_entries_global + entries >= max_delete_entries:
             break
 
-    # Remove empty keys.
     delete_map = {
         key: value
         for key, value in delete_map.items()
@@ -806,7 +744,7 @@ for language in (
         newline="\n"
     ) as f:
 
-        f.write(f"{language}\n")
+        f.write("#POCKETBOARD-DELETES-1\n")
         f.write("source=final-dictionary\n")
         f.write(f"priority_words={len(priority_words)}\n")
         f.write(f"delete_entries={entries}\n")
@@ -849,9 +787,7 @@ print(f"  Bytes:   {total_bytes_global}")
 PY
 
 # ============================================================
-# Remove temporary ranking files from generated assets.
-#
-# They are build-only files and must NEVER be packaged into APK.
+# Remove temporary ranking files
 # ============================================================
 
 rm -f \
@@ -1056,8 +992,8 @@ for language in (
             for line in f
         )
 
-    # Header is not a word.
     dictionary.discard(language)
+    dictionary.discard("#POCKETBOARD-DICT-1")
 
     invalid = 0
     mappings = 0
@@ -1077,7 +1013,6 @@ for language in (
             if not line:
                 continue
 
-            # Four metadata/header lines.
             if line_number <= 4:
                 continue
 
