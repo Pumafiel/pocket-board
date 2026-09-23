@@ -1057,11 +1057,54 @@ echo "  English: ${EN_DELETE_BUDGET}"
 echo "  German:  ${DE_DELETE_BUDGET}"
 echo "  Global:  ${GLOBAL_DELETE_BUDGET}"
 
-if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
+# ============================================================
+# GLOBAL DELETE MAPPING BUDGET
+# ============================================================
+
+TOTAL_DELETE_MAPPINGS=0
+
+for language in \
+    "es-AR" \
+    "en-en" \
+    "de-de"
+do
+    deletes="${OUTPUT_DIR}/${language}.deletes"
+
+    if [[ -f "${deletes}" ]]; then
+        mappings="$(
+            tail -n +5 "${deletes}" |
+            awk -F '\t' '
+                NF >= 2 {
+                    n = split($2, targets, ",")
+                    total += n
+                }
+                END {
+                    print total + 0
+                }
+            '
+        )"
+    else
+        mappings=0
+    fi
+
+    TOTAL_DELETE_MAPPINGS=$(
+        printf '%s\n' \
+            "$((TOTAL_DELETE_MAPPINGS + mappings))"
+    )
+done
+
+echo ""
+echo "Delete mappings:"
+echo "  Total:  ${TOTAL_DELETE_MAPPINGS}"
+echo "  Budget: ${GLOBAL_DELETE_BUDGET}"
+
+if (( TOTAL_DELETE_MAPPINGS > GLOBAL_DELETE_BUDGET )); then
+
     echo ""
-    echo "ERROR: global delete budget exceeded."
-    echo "  Size:   ${TOTAL_DELETE_BYTES}"
-    echo "  Budget: ${GLOBAL_DELETE_BUDGET}"
+    echo "ERROR: global delete mapping budget exceeded."
+    echo "  Mappings: ${TOTAL_DELETE_MAPPINGS}"
+    echo "  Budget:   ${GLOBAL_DELETE_BUDGET}"
+
     exit 1
 fi
 
