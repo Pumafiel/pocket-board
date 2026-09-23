@@ -81,15 +81,13 @@ def pocketBoardDictionaryGenerator = file(
  *
  * IMPORTANT:
  *   es-AR -> es-AR.dict
- *   en-US -> en-US.dict
- *   de    -> de.dict
- *
- * Do not use en-en.dict or de-de.dict.
+ *   en-en -> en-en.dict
+ *   de-de -> de-de.dict
  */
 def pocketBoardDictionaries = [
     'es-AR.dict',
-    'en-US.dict',
-    'de.dict'
+    'en-en.dict',
+    'de-de.dict'
 ]
 
 /*
@@ -109,12 +107,12 @@ def pocketBoardExpectedWords = [
         'hacés'
     ],
 
-    'en-US': [
+    'en-en': [
         'hello',
         'world'
     ],
 
-    'de': [
+    'de-de': [
         'hallo',
         'welt'
     ]
@@ -191,8 +189,8 @@ tasks.register('validatePocketBoardDictionaries') {
          * The language key itself is the dictionary filename:
          *
          *   es-AR -> es-AR.dict
-         *   en-US -> en-US.dict
-         *   de    -> de.dict
+         *   en-en -> en-en.dict
+         *   de-de -> de-de.dict
          */
         pocketBoardExpectedWords.each { language, words ->
 
