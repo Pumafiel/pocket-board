@@ -520,18 +520,18 @@ for language, source_path in sources.items():
         )
     )
 
-    dictionary_path = output_root / f"{language}.dict"
+dictionary_path = output_root / f"{language}.dict"
 
-    with dictionary_path.open(
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as f:
+with dictionary_path.open(
+    "w",
+    encoding="utf-8",
+    newline="\n"
+) as f:
+    f.write("#POCKETBOARD-DICT-1\n")
 
-        f.write(f"{language}\n")
+    for word in runtime_words:
+        f.write(word + "\n")
 
-        for word in runtime_words:
-            f.write(word + "\n")
 
     # Save frequency-ranked order for delete generation.
     ranking_path = output_root / f"{language}.ranked"
