@@ -870,6 +870,32 @@ for language, source_path in sources.items():
 
             for plain_word in unaccented:
 
+                # ------------------------------------------------
+                # CORE words are NEVER removed.
+                #
+                # This is important for Argentine Spanish:
+                #
+                #   tenes
+                #   podes
+                #   queres
+                #   sabes
+                #   venis
+                #   decis
+                #   haces
+                #   miras
+                #   hablas
+                #   comes
+                #   vivis
+                #   salis
+                #   veni
+                #
+                # These forms are intentionally part of the
+                # PocketBoard CORE vocabulary.
+                # ------------------------------------------------
+
+                if plain_word in CORE[language]:
+                    continue
+
                 if plain_word in PRESERVE_UNACCENTED_ES:
                     continue
 
