@@ -2107,55 +2107,42 @@ do
     deletes="${OUTPUT_ROOT}/${language}.deletes"
     metadata="${OUTPUT_ROOT}/${language}.meta"
 
-    dictionary_size="$(
+    dictionary_size=$(
         wc -c < "${dictionary}"
-    )"
+    )
 
-    delete_size="$(
+    delete_size=$(
         wc -c < "${deletes}"
-    )"
+    )
 
-    metadata_size="$(
+    metadata_size=$(
         wc -c < "${metadata}"
-    )"
+    )
 
-    dictionary_words="$(
+    dictionary_words=$(
         tail -n +2 "${dictionary}" |
         wc -l
-    )"
+    )
 
-    delete_mappings="$(
+    delete_mappings=$(
         tail -n +2 "${deletes}" |
         wc -l
-    )"
+    )
 
     language_total=$(
-        (
-            dictionary_size +
-            delete_size +
-            metadata_size
-        )
+        echo $((dictionary_size + delete_size + metadata_size))
     )
 
     TOTAL_DICTIONARY_BYTES=$(
-        (
-            TOTAL_DICTIONARY_BYTES +
-            dictionary_size
-        )
+        echo $((TOTAL_DICTIONARY_BYTES + dictionary_size))
     )
 
     TOTAL_DELETE_BYTES=$(
-        (
-            TOTAL_DELETE_BYTES +
-            delete_size
-        )
+        echo $((TOTAL_DELETE_BYTES + delete_size))
     )
 
     TOTAL_METADATA_BYTES=$(
-        (
-            TOTAL_METADATA_BYTES +
-            metadata_size
-        )
+        echo $((TOTAL_METADATA_BYTES + metadata_size))
     )
 
     echo ""
@@ -2170,19 +2157,11 @@ do
 done
 
 TOTAL_GENERATED_BYTES=$(
-    (
-        TOTAL_DICTIONARY_BYTES +
-        TOTAL_DELETE_BYTES +
-        TOTAL_METADATA_BYTES
-    )
+    echo $((TOTAL_DICTIONARY_BYTES + TOTAL_DELETE_BYTES + TOTAL_METADATA_BYTES))
 )
 
 TOTAL_MIB=$(
-    (
-        TOTAL_GENERATED_BYTES /
-        1024 /
-        1024
-    )
+    echo $((TOTAL_GENERATED_BYTES / 1024 / 1024))
 )
 
 echo ""
