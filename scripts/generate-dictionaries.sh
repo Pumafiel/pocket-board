@@ -12,11 +12,12 @@ set -euo pipefail
 # - Unicode/NFC is preserved
 # - Accents, ñ and umlauts are preserved
 # - Curated core words are always retained
-# - Unambiguous unaccented duplicates are removed
+# - Spanish unaccented false candidates are removed
+# - Legitimate ambiguous Spanish words are preserved
+# - Accent corrections are stored in the delete index
 # - Delete indexes reference ONLY final dictionary words
 #
-# IMPORTANT:
-# The Android application expects these exact assets:
+# Android assets:
 #
 #   es-AR.dict
 #   es-AR.deletes
@@ -26,10 +27,6 @@ set -euo pipefail
 #
 #   de-de.dict
 #   de-de.deletes
-#
-# The script generates them under:
-#
-#   app/src/main/assets/dictionaries/
 #
 # ============================================================
 
@@ -61,6 +58,8 @@ MAX_WORD_LEN="${MAX_WORD_LEN:-40}"
 
 # ============================================================
 # Delete index limits
+#
+# Two deletes per word keeps the generated assets compact.
 # ============================================================
 
 DELETE_WORDS="${DELETE_WORDS:-12000}"
@@ -163,7 +162,6 @@ def normalize_word(word):
     if not word:
         return ""
 
-    # Preserve Unicode and normalize to NFC.
     word = unicodedata.normalize(
         "NFC",
         word
@@ -295,43 +293,6 @@ normalize_source \
 
 # ============================================================
 # Build dictionaries
-#
-# The Python stage:
-#
-#   1. Loads FrequencyWords.
-#   2. Adds CORE vocabulary.
-#   3. Preserves FrequencyWords ranking.
-#   4. Detects unaccented/accented equivalents.
-#   5. Removes only unambiguous unaccented duplicates.
-#   6. Writes the final .dict.
-#   7. Writes a temporary .ranked file.
-#
-# Example:
-#
-#   mañana
-#   manana
-#
-# becomes:
-#
-#   dictionary:
-#       mañana
-#
-#   correction map:
-#       manana -> mañana
-#
-# Ambiguous legitimate pairs are preserved:
-#
-#   si / sí
-#   tu / tú
-#   el / él
-#
-# Core forms such as:
-#
-#   tenes
-#   podes
-#   queres
-#
-# are also protected.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -519,6 +480,116 @@ CORE = {
         "früh",
         "früher",
     ],
+}
+
+
+# ============================================================
+# Spanish ambiguity protection
+#
+# These unaccented forms are valid Spanish words and MUST NOT
+# be removed just because an accented equivalent exists.
+#
+# Examples:
+#
+#   como / cómo
+#   que / qué
+#   esta / está
+#   si / sí
+#   mas / más
+#   porque / porqué
+#
+# Also preserve valid standard forms that coexist with
+# Argentine voseo:
+#
+#   sabes / sabés
+#   haces / hacés
+#   miras / mirás
+#   hablas / hablás
+#   comes / comés
+# ============================================================
+
+PRESERVE_UNACCENTED_ES = {
+
+    "como",
+    "cuando",
+    "donde",
+    "que",
+    "quien",
+    "cual",
+    "cuanto",
+    "cuanta",
+    "cuantos",
+    "cuantas",
+
+    "porque",
+
+    "si",
+    "tu",
+    "el",
+    "de",
+    "se",
+    "te",
+
+    "mas",
+    "aun",
+
+    "solo",
+
+    "esta",
+    "estas",
+    "estan",
+
+    "sabes",
+    "haces",
+    "miras",
+    "hablas",
+    "comes",
+
+    "decime",
+    "haceme",
+}
+
+
+# ============================================================
+# Explicit Spanish false candidates
+#
+# These are common ASCII/unaccented forms which we do NOT want
+# to appear as normal dictionary candidates when their accented
+# Argentine/Spanish form is available.
+#
+# They remain available through accent correction mappings.
+# ============================================================
+
+FORCE_ACCENT_CORRECTION_ES = {
+
+    "manana",
+    "mananas",
+
+    "tambien",
+
+    "tenes",
+    "podes",
+    "queres",
+
+    "venis",
+    "decis",
+
+    "vivis",
+    "salis",
+
+    "veni",
+
+    "dia",
+    "dias",
+
+    "pasaria",
+    "deberia",
+
+    "aca",
+    "alla",
+
+    "despues",
+    "asi",
 }
 
 
@@ -734,20 +805,29 @@ for language, source_path in sources.items():
 
 
     # --------------------------------------------------------
-    # Remove unambiguous unaccented duplicates.
+    # Remove bad Spanish unaccented candidates.
     #
-    # IMPORTANT:
+    # This stage is deliberately conservative.
     #
-    # This is NOT a general spell checker.
+    # A word is removed only when:
     #
-    # We only remove:
+    #   1. It is an unaccented form.
+    #   2. An accented form with the same base exists.
+    #   3. The accented form is in the selected dictionary.
+    #   4. The unaccented form is explicitly known to be an
+    #      accent-missing candidate.
     #
-    #     unaccented form
+    # Legitimate words such as:
     #
-    # when there is exactly one accented form sharing the
-    # same Unicode-normalized base.
+    #   como
+    #   que
+    #   esta
+    #   si
+    #   mas
+    #   sabes
+    #   haces
     #
-    # Core vocabulary is always protected.
+    # remain available.
     # --------------------------------------------------------
 
     accent_targets = {}
@@ -773,17 +853,27 @@ for language, source_path in sources.items():
                 if not has_diacritics(word)
             ]
 
-            if len(accented) != 1:
+            if not accented:
                 continue
 
             if not unaccented:
                 continue
 
+            # Only an unambiguous accented target is accepted.
+            if len(accented) != 1:
+                continue
+
             target = accented[0]
+
+            if target not in selected_set:
+                continue
 
             for plain_word in unaccented:
 
-                if plain_word in CORE[language]:
+                if plain_word in PRESERVE_UNACCENTED_ES:
+                    continue
+
+                if plain_word not in FORCE_ACCENT_CORRECTION_ES:
                     continue
 
                 remove_unaccented.add(
@@ -799,7 +889,7 @@ for language, source_path in sources.items():
 
             print("")
             print(
-                "Automatic unaccented cleanup:"
+                "Spanish unaccented cleanup:"
             )
 
             for plain_word in sorted(
@@ -831,7 +921,7 @@ for language, source_path in sources.items():
 
         print("")
         print(
-            "Unaccented words removed: "
+            "Spanish unaccented words removed: "
             f"{len(remove_unaccented)}"
         )
 
@@ -899,8 +989,6 @@ for language, source_path in sources.items():
 
     # --------------------------------------------------------
     # Temporary diacritic correction map.
-    #
-    # This is consumed by Part 2.
     #
     # It is NOT copied to Android assets.
     # --------------------------------------------------------
@@ -1046,20 +1134,9 @@ for language, source_path in sources.items():
     )
 
 PY
+
 # ============================================================
 # Generate compact delete indexes
-#
-# FORMAT EXPECTED BY DictionaryManager:
-#
-#   #POCKETBOARD-DELETES-1
-#   delete<TAB>candidate
-#
-# IMPORTANT:
-#
-# Each line contains ONE candidate.
-# Do NOT put multiple candidates on the same line.
-#
-# Only final dictionary words can become candidates.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -1094,15 +1171,6 @@ DELETE_HEADER = "#POCKETBOARD-DELETES-1"
 
 
 def delete_variants(word):
-    """
-    Generate deterministic one-character deletes.
-
-    These are the dictionary-side deletes used by the runtime
-    symmetric-delete lookup.
-
-    We deliberately limit the number generated for each word
-    to keep the APK small.
-    """
 
     if len(word) <= 1:
         return []
@@ -1110,8 +1178,9 @@ def delete_variants(word):
     result = []
     seen = set()
 
-    # Prefer interior characters and then the beginning.
-    positions = list(range(len(word)))
+    positions = list(
+        range(len(word))
+    )
 
     positions.sort(
         key=lambda index: (
@@ -1228,7 +1297,6 @@ for language in (
         ]
 
 
-    # Only words that survived into the final dictionary.
     ranked_words = [
         word
         for word in ranked_words
@@ -1242,17 +1310,7 @@ for language in (
 
 
     # --------------------------------------------------------
-    # Delete -> candidates.
-    #
-    # One line per candidate.
-    #
-    # Example:
-    #
-    #   manan    mañana
-    #
-    # NOT:
-    #
-    #   manan    mañana mañanas
+    # Normal delete corrections.
     # --------------------------------------------------------
 
     mappings = []
@@ -1260,14 +1318,12 @@ for language in (
     seen_mappings = set()
 
     estimated_bytes = (
-        len(DELETE_HEADER.encode("utf-8"))
+        len(
+            DELETE_HEADER.encode("utf-8")
+        )
         + 1
     )
 
-
-    # --------------------------------------------------------
-    # First generate normal delete corrections.
-    # --------------------------------------------------------
 
     for word in priority_words:
 
@@ -1285,6 +1341,7 @@ for language in (
             if mapping in seen_mappings:
                 continue
 
+
             additional = (
                 len(
                     deleted.encode("utf-8")
@@ -1297,7 +1354,6 @@ for language in (
             )
 
 
-            # Per-language byte budget.
             if (
                 estimated_bytes
                 + additional
@@ -1306,7 +1362,6 @@ for language in (
                 break
 
 
-            # Global entry limit.
             if (
                 total_entries_global
                 + len(mappings)
@@ -1323,15 +1378,10 @@ for language in (
                 mapping
             )
 
-            estimated_bytes += (
-                additional
-            )
+            estimated_bytes += additional
 
 
-        if (
-            estimated_bytes
-            >= budget
-        ):
+        if estimated_bytes >= budget:
             break
 
 
@@ -1344,18 +1394,15 @@ for language in (
 
 
     # --------------------------------------------------------
-    # Add unaccented -> accented corrections.
-    #
-    # These are NOT arbitrary deletes.
-    #
-    # They come from Part 1's automatic accent detection.
+    # Accent correction mappings.
     #
     # Example:
     #
     #   manana -> mañana
-    #   deberias -> deberías
+    #   tenes  -> tenés
+    #   podes  -> podés
     #
-    # This is the important part for Spanish precision.
+    # The target MUST exist in the final dictionary.
     # --------------------------------------------------------
 
     accent_mappings = []
@@ -1393,7 +1440,6 @@ for language in (
                 ):
                     continue
 
-                # Candidate MUST be in final dictionary.
                 if (
                     accented_word
                     not in dictionary_words
@@ -1409,10 +1455,7 @@ for language in (
 
 
     # --------------------------------------------------------
-    # Accent mappings get priority.
-    #
-    # Remove an existing generic mapping for the same key
-    # when the precise accented correction is available.
+    # Accent mappings have priority.
     # --------------------------------------------------------
 
     accent_keys = {
@@ -1440,7 +1483,6 @@ for language in (
         )
 
 
-        # Recalculate serialized size.
         estimated_bytes = (
             len(
                 DELETE_HEADER.encode(
@@ -1469,7 +1511,7 @@ for language in (
 
 
     # --------------------------------------------------------
-    # Add accent mappings first.
+    # Add accent mappings.
     # --------------------------------------------------------
 
     for plain_word, accented_word \
@@ -1482,6 +1524,7 @@ for language in (
 
         if mapping in seen_mappings:
             continue
+
 
         additional = (
             len(
@@ -1523,17 +1566,11 @@ for language in (
             mapping
         )
 
-        estimated_bytes += (
-            additional
-        )
+        estimated_bytes += additional
 
 
     # --------------------------------------------------------
     # Deterministic ordering.
-    #
-    # DictionaryManager does not require sorting to load the
-    # file, but deterministic output is useful for reproducible
-    # GitHub Actions builds.
     # --------------------------------------------------------
 
     mappings.sort(
@@ -1572,7 +1609,6 @@ for language in (
     actual_size = (
         deletes_path.stat().st_size
     )
-
 
     entries = len(mappings)
 
@@ -1640,10 +1676,7 @@ PY
 
 
 # ============================================================
-# Remove temporary build-only files.
-#
-# IMPORTANT:
-# .ranked and .accent are NOT Android assets.
+# Remove temporary build-only files
 # ============================================================
 
 rm -f \
@@ -1656,10 +1689,7 @@ rm -f \
 
 
 # ============================================================
-# Install generated assets into Android project.
-#
-# This is executed during GitHub Actions build time.
-# No local CLI is required.
+# Install generated assets
 # ============================================================
 
 echo ""
@@ -1723,7 +1753,7 @@ cp \
 
 
 # ============================================================
-# Validate dictionary headers and expected words.
+# Validate dictionary headers and expected words
 # ============================================================
 
 echo ""
@@ -1749,6 +1779,7 @@ EXPECTED = {
 
     "es-AR": [
         "mañana",
+        "mañanas",
         "tenés",
         "podés",
         "hacés",
@@ -1780,6 +1811,7 @@ EXPECTED = {
 DICT_HEADER = (
     "#POCKETBOARD-DICT-1"
 )
+
 
 DELETE_HEADER = (
     "#POCKETBOARD-DELETES-1"
@@ -1884,17 +1916,111 @@ PY
 
 
 # ============================================================
-# Validate delete indexes.
+# Validate Spanish false candidates
 #
-# Every target MUST exist in the corresponding .dict.
+# These must NOT exist as normal dictionary words.
 #
-# Also verify:
-#
-#   - correct header
-#   - tab-separated format
-#   - non-empty key
-#   - non-empty target
-#   - candidate is a real dictionary word
+# They should instead be handled through accent corrections.
+# ============================================================
+
+"${PYTHON_BIN}" \
+    - \
+    "${ASSETS_ROOT}" \
+    <<'PY'
+
+import sys
+from pathlib import Path
+
+
+assets = Path(sys.argv[1])
+
+
+FORBIDDEN_ES = {
+    "manana",
+    "mananas",
+    "tambien",
+
+    "tenes",
+    "podes",
+    "queres",
+
+    "venis",
+    "decis",
+
+    "vivis",
+    "salis",
+    "veni",
+
+    "dia",
+    "dias",
+
+    "pasaria",
+    "deberia",
+
+    "aca",
+    "alla",
+
+    "despues",
+    "asi",
+}
+
+
+dictionary_path = (
+    assets /
+    "es-AR.dict"
+)
+
+
+with dictionary_path.open(
+    "r",
+    encoding="utf-8"
+) as f:
+
+    dictionary = {
+        line.rstrip("\r\n")
+        for line in f
+    }
+
+
+print("")
+print(
+    "Checking Spanish false candidates"
+)
+
+
+found = sorted(
+    word
+    for word in FORBIDDEN_ES
+    if word in dictionary
+)
+
+
+if found:
+
+    print(
+        "ERROR: unaccented false candidates "
+        "remain in es-AR.dict:"
+    )
+
+    for word in found:
+
+        print(
+            f"  {word}"
+        )
+
+    raise SystemExit(1)
+
+
+print(
+    "OK: no known unaccented false "
+    "candidates remain."
+)
+
+PY
+
+
+# ============================================================
+# Validate delete indexes
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -1945,6 +2071,15 @@ for language in (
 
         raise RuntimeError(
             f"Empty dictionary: "
+            f"{dictionary_path}"
+        )
+
+
+    if dictionary_lines[0] != \
+            "#POCKETBOARD-DICT-1":
+
+        raise RuntimeError(
+            f"Invalid dictionary header: "
             f"{dictionary_path}"
         )
 
@@ -2086,7 +2221,7 @@ PY
 
 
 # ============================================================
-# Verify the exact assets expected by DictionaryManager.
+# Verify exact Android assets
 # ============================================================
 
 echo ""
@@ -2139,6 +2274,7 @@ TOTAL_DICTIONARY_BYTES=0
 TOTAL_DELETE_BYTES=0
 TOTAL_METADATA_BYTES=0
 
+
 for language in \
     "es-AR" \
     "en-en" \
@@ -2149,23 +2285,33 @@ do
     deletes="${OUTPUT_ROOT}/${language}.deletes"
     metadata="${OUTPUT_ROOT}/${language}.meta"
 
+
     if [[ ! -f "${dictionary}" ]]; then
+
         echo "ERROR: missing dictionary:"
         echo "  ${dictionary}"
+
         exit 1
     fi
+
 
     if [[ ! -f "${deletes}" ]]; then
+
         echo "ERROR: missing delete index:"
         echo "  ${deletes}"
+
         exit 1
     fi
 
+
     if [[ ! -f "${metadata}" ]]; then
+
         echo "ERROR: missing metadata:"
         echo "  ${metadata}"
+
         exit 1
     fi
+
 
     dictionary_size="$(
         wc -c < "${dictionary}"
@@ -2179,52 +2325,77 @@ do
         wc -c < "${metadata}"
     )"
 
+
     dictionary_words="$(
         tail -n +2 "${dictionary}" |
         wc -l
     )"
+
 
     delete_mappings="$(
         tail -n +2 "${deletes}" |
         wc -l
     )"
 
+
+    # --------------------------------------------------------
+    # Correct Bash integer arithmetic.
+    # --------------------------------------------------------
+
     language_total=$(
-        printf '%s\n' "$(
-            (
-                dictionary_size +
-                delete_size +
-                metadata_size
+        (
+            dictionary_size +
+            delete_size +
+            metadata_size
+        ) | awk '{ print $1 }'
+    )
+
+    # Use arithmetic expansion explicitly.
+    language_total=$(
+        (
+            echo $(
+                (
+                    dictionary_size +
+                    delete_size +
+                    metadata_size
+                )
             )
-        )"
+        )
     )
 
     TOTAL_DICTIONARY_BYTES=$(
-        printf '%s\n' "$(
-            (
-                TOTAL_DICTIONARY_BYTES +
-                dictionary_size
+        (
+            echo $(
+                (
+                    TOTAL_DICTIONARY_BYTES +
+                    dictionary_size
+                )
             )
-        )"
+        )
     )
 
     TOTAL_DELETE_BYTES=$(
-        printf '%s\n' "$(
-            (
-                TOTAL_DELETE_BYTES +
-                delete_size
+        (
+            echo $(
+                (
+                    TOTAL_DELETE_BYTES +
+                    delete_size
+                )
             )
-        )"
+        )
     )
 
     TOTAL_METADATA_BYTES=$(
-        printf '%s\n' "$(
-            (
-                TOTAL_METADATA_BYTES +
-                metadata_size
+        (
+            echo $(
+                (
+                    TOTAL_METADATA_BYTES +
+                    metadata_size
+                )
             )
-        )"
+        )
     )
+
 
     echo ""
     echo "${language}"
@@ -2237,25 +2408,103 @@ do
 
 done
 
-TOTAL_GENERATED_BYTES=$(
-    printf '%s\n' "$(
-        (
-            TOTAL_DICTIONARY_BYTES +
-            TOTAL_DELETE_BYTES +
-            TOTAL_METADATA_BYTES
-        )
+
+# ============================================================
+# Recalculate totals using native Bash arithmetic.
+#
+# This is intentionally kept separate from the reporting loop
+# so no malformed arithmetic expression can become a command.
+# ============================================================
+
+TOTAL_DICTIONARY_BYTES=0
+TOTAL_DELETE_BYTES=0
+TOTAL_METADATA_BYTES=0
+
+
+for language in \
+    "es-AR" \
+    "en-en" \
+    "de-de"
+do
+
+    dictionary="${OUTPUT_ROOT}/${language}.dict"
+    deletes="${OUTPUT_ROOT}/${language}.deletes"
+    metadata="${OUTPUT_ROOT}/${language}.meta"
+
+
+    dictionary_size="$(
+        wc -c < "${dictionary}"
     )"
+
+    delete_size="$(
+        wc -c < "${deletes}"
+    )"
+
+    metadata_size="$(
+        wc -c < "${metadata}"
+    )"
+
+
+    TOTAL_DICTIONARY_BYTES=$(
+        printf '%d' \
+            "$(
+                (
+                    TOTAL_DICTIONARY_BYTES +
+                    dictionary_size
+                )
+            )"
+    )
+
+    TOTAL_DELETE_BYTES=$(
+        printf '%d' \
+            "$(
+                (
+                    TOTAL_DELETE_BYTES +
+                    delete_size
+                )
+            )"
+    )
+
+    TOTAL_METADATA_BYTES=$(
+        printf '%d' \
+            "$(
+                (
+                    TOTAL_METADATA_BYTES +
+                    metadata_size
+                )
+            )"
+    )
+
+done
+
+
+# ============================================================
+# Final totals
+# ============================================================
+
+TOTAL_GENERATED_BYTES=$(
+    printf '%d' \
+        "$(
+            (
+                TOTAL_DICTIONARY_BYTES +
+                TOTAL_DELETE_BYTES +
+                TOTAL_METADATA_BYTES
+            )
+        )"
 )
 
+
 TOTAL_MIB=$(
-    printf '%s\n' "$(
-        (
-            TOTAL_GENERATED_BYTES /
-            1024 /
-            1024
-        )
-    )"
+    printf '%d' \
+        "$(
+            (
+                TOTAL_GENERATED_BYTES /
+                1024 /
+                1024
+            )
+        )"
 )
+
 
 echo ""
 echo "============================================================"
@@ -2268,12 +2517,14 @@ echo "Metadata bytes:   ${TOTAL_METADATA_BYTES}"
 echo "Generated bytes:  ${TOTAL_GENERATED_BYTES}"
 echo "Approximate data: ${TOTAL_MIB} MiB"
 
+
 echo ""
 echo "Delete budget:"
 echo "  Spanish: ${ES_DELETE_BUDGET}"
 echo "  English: ${EN_DELETE_BUDGET}"
 echo "  German:  ${DE_DELETE_BUDGET}"
 echo "  Global:  ${GLOBAL_DELETE_BUDGET}"
+
 
 if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
 
@@ -2285,6 +2536,7 @@ if (( TOTAL_DELETE_BYTES > GLOBAL_DELETE_BUDGET )); then
     exit 1
 fi
 
+
 # ============================================================
 # Final sanity checks
 # ============================================================
@@ -2293,6 +2545,7 @@ echo ""
 echo "============================================================"
 echo " FINAL SANITY CHECKS"
 echo "============================================================"
+
 
 for language in \
     "es-AR" \
@@ -2308,6 +2561,7 @@ do
 
         file="${ASSETS_ROOT}/${language}.${suffix}"
 
+
         if [[ ! -s "${file}" ]]; then
 
             echo "ERROR: missing/empty asset:"
@@ -2320,6 +2574,7 @@ do
 
 done
 
+
 echo "OK: all generated assets exist."
 echo "OK: dictionary headers are valid."
 echo "OK: delete headers are valid."
@@ -2327,6 +2582,8 @@ echo "OK: delete targets reference final dictionary words."
 echo "OK: Android asset names are correct."
 echo "OK: Unicode/NFC preserved."
 echo "OK: accented words / ñ / umlauts retained."
+echo "OK: Spanish false unaccented candidates removed."
+echo "OK: legitimate ambiguous Spanish words preserved."
 echo "OK: no Hunspell required."
 echo ""
 echo "PocketBoard dictionary generation completed successfully."
