@@ -17,22 +17,6 @@ set -euo pipefail
 # - Delete indexes reference ONLY final dictionary words
 # - Download failures are FATAL
 # - Empty/invalid source files are FATAL
-#
-# Android assets:
-#
-#   app/src/main/assets/dictionaries/
-#
-#   es-AR.dict
-#   es-AR.deletes
-#   es-AR.meta
-#
-#   en-en.dict
-#   en-en.deletes
-#   en-en.meta
-#
-#   de-de.dict
-#   de-de.deletes
-#   de-de.meta
 # ============================================================
 
 PROJECT_ROOT="$(
@@ -63,9 +47,6 @@ MAX_WORD_LEN="${MAX_WORD_LEN:-40}"
 
 # ============================================================
 # Delete index limits
-#
-# The dictionary itself is small.
-# Delete indexes are the main APK size contributor.
 # ============================================================
 
 DELETE_WORDS="${DELETE_WORDS:-12000}"
@@ -107,7 +88,6 @@ DE_SOURCE="${SOURCE_ROOT}/de_50k.txt"
 # ============================================================
 
 download_source() {
-
     local url="$1"
     local output="$2"
 
@@ -132,7 +112,6 @@ download_source() {
         "${url}" \
         --output "${temporary}"
     then
-
         rm -f "${temporary}"
 
         echo ""
@@ -143,7 +122,6 @@ download_source() {
     fi
 
     if [[ ! -s "${temporary}" ]]; then
-
         rm -f "${temporary}"
 
         echo ""
@@ -153,10 +131,6 @@ download_source() {
         exit 1
     fi
 
-    # A valid FrequencyWords source must contain thousands
-    # of lines. This prevents an HTML/error response or a
-    # truncated file from silently becoming a tiny dictionary.
-
     local line_count
 
     line_count="$(
@@ -164,7 +138,6 @@ download_source() {
     )"
 
     if (( line_count < 1000 )); then
-
         echo ""
         echo "ERROR: downloaded source is suspiciously small:"
         echo "  ${output}"
@@ -184,9 +157,7 @@ download_source() {
     echo "  Lines: ${line_count}"
 }
 
-
 normalize_source() {
-
     local input="$1"
     local output="$2"
 
@@ -209,7 +180,6 @@ MAX_LEN = int(sys.argv[4])
 
 
 def normalize_word(word):
-
     word = word.strip()
 
     if not word:
@@ -227,7 +197,6 @@ def normalize_word(word):
         return ""
 
     for ch in word:
-
         category = unicodedata.category(ch)
 
         if ch in ("'", "’", "-"):
@@ -256,15 +225,12 @@ with open(
 ) as f:
 
     for line in f:
-
         parts = line.strip().split()
 
         if not parts:
             continue
 
-        word = normalize_word(
-            parts[0]
-        )
+        word = normalize_word(parts[0])
 
         if not word:
             continue
@@ -277,7 +243,6 @@ with open(
 
 
 if len(result) < 1000:
-
     raise RuntimeError(
         f"Normalized source unexpectedly small: "
         f"{len(result)} words"
@@ -292,7 +257,6 @@ with open(
 ) as f:
 
     for word in result:
-
         f.write(
             word + "\n"
         )
@@ -379,7 +343,6 @@ max_words = int(sys.argv[5])
 min_len = int(sys.argv[6])
 max_len = int(sys.argv[7])
 
-
 output_root.mkdir(
     parents=True,
     exist_ok=True
@@ -395,23 +358,17 @@ CORE = {
 
         "vos",
 
+        # Canonical accented voseo forms.
+        #
+        # IMPORTANT:
+        # The unaccented variants are NOT CORE because they are
+        # explicitly removed later by accent cleanup.
         "tenés",
-        "tenes",
-
         "podés",
-        "podes",
-
         "querés",
-        "queres",
-
         "sabés",
-        "sabes",
-
         "venís",
-        "venis",
-
         "decís",
-        "decis",
 
         "hacés",
         "haces",
@@ -426,13 +383,9 @@ CORE = {
         "comes",
 
         "vivís",
-        "vivis",
-
         "salís",
-        "salis",
 
         "vení",
-        "veni",
 
         "decime",
         "haceme",
@@ -463,7 +416,6 @@ CORE = {
 
         "acá",
         "allá",
-
         "después",
         "así",
 
@@ -484,6 +436,7 @@ CORE = {
 
         "the",
         "have",
+
         "this",
         "that",
 
@@ -542,22 +495,9 @@ CORE = {
 # ============================================================
 # Explicit Spanish correction candidates
 #
-# IMPORTANT:
-#
-# Do NOT automatically remove every unaccented form that has
-# an accented equivalent.
-#
-# Examples of legitimate words that MUST remain:
-#
-#   haces
-#   comes
-#   hablas
-#   miras
-#
-# These are real Spanish words, not merely missing accents.
-#
-# The following list contains only forms we explicitly want
-# the keyboard to treat as accent corrections.
+# These are forms that must NOT remain as independent
+# dictionary candidates when their accented canonical form
+# exists.
 # ============================================================
 
 SPANISH_ACCENT_CORRECTIONS = {
@@ -579,6 +519,7 @@ SPANISH_ACCENT_CORRECTIONS = {
 
     "pasaria": "pasaría",
 
+    # Voseo without written accent.
     "tenes": "tenés",
     "podes": "podés",
     "queres": "querés",
@@ -586,19 +527,17 @@ SPANISH_ACCENT_CORRECTIONS = {
     "venis": "venís",
     "decis": "decís",
 
+    # Imperative voseo.
     "veni": "vení",
 
-    # IMPORTANT:
-    # "haces", "miras", "hablas", "comes",
-    # "vivis" and "salis" are intentionally handled
-    # individually below.
-    #
-    # "vivis" and "salis" are voseo forms without accent,
-    # therefore they ARE correction candidates.
+    # Present voseo forms.
+    "vivis": "vivís",
+    "salis": "salís",
 }
 
-# Explicitly legitimate forms that must remain in the
-# dictionary even if an accented counterpart exists.
+# ============================================================
+# Legitimate unaccented Spanish words
+# ============================================================
 
 SPANISH_LEGITIMATE_UNACCENTED = {
 
@@ -613,7 +552,6 @@ SPANISH_LEGITIMATE_UNACCENTED = {
 # ============================================================
 
 def nfc(word):
-
     return unicodedata.normalize(
         "NFC",
         word.strip()
@@ -676,7 +614,6 @@ def load_source(path):
             result.append(word)
 
     if len(result) < 1000:
-
         raise RuntimeError(
             f"Source unexpectedly small: "
             f"{path}: {len(result)} words"
@@ -730,7 +667,6 @@ for language, source_path in sources.items():
         word = nfc(word)
 
         if not valid_word(word):
-
             raise RuntimeError(
                 f"Invalid core word: {word}"
             )
@@ -769,8 +705,6 @@ for language, source_path in sources.items():
 
     # --------------------------------------------------------
     # Spanish explicit accent cleanup.
-    #
-    # NEVER infer this from Unicode equivalence alone.
     # --------------------------------------------------------
 
     accent_targets = {}
@@ -788,26 +722,18 @@ for language, source_path in sources.items():
                 accented_word
             )
 
-            # Target must be present in final vocabulary.
+            # Target must exist in final vocabulary.
             if accented_word not in selected_set:
-
                 continue
 
-            # Legitimate standalone Spanish forms are never
-            # removed merely because an accented counterpart
-            # exists.
-
+            # Legitimate words such as "haces" and "comes"
+            # are never removed.
             if plain_word in \
                     SPANISH_LEGITIMATE_UNACCENTED:
 
                 continue
 
             if plain_word not in selected_set:
-
-                # It may not exist in FrequencyWords.
-                # There is nothing to remove, but the
-                # correction can still be useful later only
-                # if the candidate is represented.
                 continue
 
             accent_targets[
@@ -1049,6 +975,7 @@ for language, source_path in sources.items():
         )
 
     print("")
+
     print(
         f"Dictionary words: "
         f"{len(runtime_words)}"
@@ -1063,8 +990,6 @@ PY
 
 # ============================================================
 # Generate compact delete indexes
-#
-# Only final dictionary words may be targets.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -1285,9 +1210,7 @@ for language in (
                 mapping
             )
 
-            estimated_bytes += (
-                additional
-            )
+            estimated_bytes += additional
 
         if estimated_bytes >= budget:
             break
@@ -1340,7 +1263,6 @@ for language in (
 
                 if accented_word \
                         not in dictionary_words:
-
                     continue
 
                 accent_mappings.append(
@@ -1350,8 +1272,8 @@ for language in (
                     )
                 )
 
-    # Accent correction takes precedence over generic delete
-    # mapping for the same key.
+    # Accent correction takes precedence over
+    # generic delete mapping for the same key.
 
     accent_keys = {
         plain
@@ -1366,8 +1288,7 @@ for language in (
                 deleted,
                 target
             )
-            for deleted, target
-            in mappings
+            for deleted, target in mappings
             if deleted not in accent_keys
         ]
 
@@ -1441,9 +1362,7 @@ for language in (
             mapping
         )
 
-        estimated_bytes += (
-            additional
-        )
+        estimated_bytes += additional
 
     mappings.sort(
         key=lambda pair: (
@@ -1616,6 +1535,7 @@ echo "============================================================"
     <<'PY'
 
 import sys
+
 from pathlib import Path
 
 
@@ -1629,7 +1549,6 @@ DELETE_HEADER = (
     "#POCKETBOARD-DELETES-1"
 )
 
-
 EXPECTED = {
 
     "es-AR": [
@@ -1637,22 +1556,11 @@ EXPECTED = {
         "vos",
 
         "tenés",
-        "tenes",
-
         "podés",
-        "podes",
-
         "querés",
-        "queres",
-
         "sabés",
-        "sabes",
-
         "venís",
-        "venis",
-
         "decís",
-        "decis",
 
         "hacés",
         "haces",
@@ -1667,10 +1575,7 @@ EXPECTED = {
         "comes",
 
         "vivís",
-        "vivis",
-
         "salís",
-        "salis",
 
         "vení",
 
@@ -1740,6 +1645,7 @@ EXPECTED = {
 
         "ich",
         "nicht",
+
         "morgen",
         "heute",
 
@@ -1792,6 +1698,7 @@ def read_dictionary(language):
         ]
 
     if not lines:
+
         raise RuntimeError(
             f"Empty dictionary: {path}"
         )
@@ -1832,6 +1739,7 @@ for language, expected in EXPECTED.items():
             f"OK: {language}: {word}"
         )
 
+
 print("")
 print(
     "All expected dictionary words "
@@ -1842,9 +1750,6 @@ PY
 
 # ============================================================
 # Validate Spanish false candidates
-#
-# These are specifically the forms that should NOT remain
-# as independent dictionary candidates.
 # ============================================================
 
 "${PYTHON_BIN}" \
@@ -1853,6 +1758,7 @@ PY
     <<'PY'
 
 import sys
+
 from pathlib import Path
 
 
@@ -1908,9 +1814,6 @@ FALSE_CANDIDATES = {
 }
 
 
-# These are explicitly legitimate Spanish words and MUST
-# remain in the dictionary.
-
 LEGITIMATE = {
 
     "haces",
@@ -1935,6 +1838,7 @@ if remaining:
     )
 
     for word in remaining:
+
         print(
             f"  {word}"
         )
@@ -1965,6 +1869,7 @@ if missing_legitimate:
     )
 
     for word in missing_legitimate:
+
         print(
             f"  {word}"
         )
@@ -1990,6 +1895,7 @@ PY
     <<'PY'
 
 import sys
+
 from pathlib import Path
 
 
