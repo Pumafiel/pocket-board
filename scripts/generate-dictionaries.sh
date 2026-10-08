@@ -56,9 +56,9 @@
 # hunspell-tools -- Debian/Ubuntu: `apt-get install hunspell`).
 #
 # Optional environment overrides:
-#   TOTAL_BUDGET_BYTES   hard cap for all generated assets   (10000000)
-#   COVERAGE_TARGET      share of everyday usage to cover     (0.99)
-#   MAX_WORDS            hard cap of words per language       (60000)
+#   TOTAL_BUDGET_BYTES   hard cap for all generated assets   (12500000)
+#   COVERAGE_TARGET      share of everyday usage to cover     (0.995)
+#   MAX_WORDS            hard cap of words per language       (70000)
 #   DE_FREQUENCY_SOURCE  frequencywords | leipzig             (frequencywords)
 #   FORCE_DOWNLOAD       1 = ignore the download cache        (0)
 
@@ -89,7 +89,7 @@ DE_DIR="${WORK_DIR}/de-de"
 # SIZE BUDGET
 # ============================================================
 
-TOTAL_BUDGET_BYTES="${TOTAL_BUDGET_BYTES:-10000000}"
+TOTAL_BUDGET_BYTES="${TOTAL_BUDGET_BYTES:-12500000}"
 
 # Head-room kept free inside the total budget (percent of the index share).
 INDEX_MARGIN_PERCENT=2
@@ -101,8 +101,8 @@ MIN_TOTAL_INDEX_BYTES=1000000
 # VOCABULARY SELECTION
 # ============================================================
 
-COVERAGE_TARGET="${COVERAGE_TARGET:-0.99}"
-MAX_WORDS="${MAX_WORDS:-60000}"
+COVERAGE_TARGET="${COVERAGE_TARGET:-0.995}"
+MAX_WORDS="${MAX_WORDS:-70000}"
 MIN_WORDS=5000
 
 # Whitelisted words that have no corpus frequency are treated as if they
@@ -475,6 +475,12 @@ import sys
 
 MAX_WORD_LENGTH = 32
 
+# Hunspell-checking the whole raw frequency file (easily 1-1.6 million
+# lines) is unnecessary and slow: real vocabularies top out in the tens
+# of thousands of words. Capped at the (already frequency-sorted)
+# candidate-building step above, so this only ever trims corpus noise.
+MAX_CANDIDATE_POOL = 300000
+
 
 def word_shape_ok(word):
     """Same character rules as DictionaryManager.isValidWord()."""
@@ -567,7 +573,19 @@ def cmd_vocab(args):
             return False
         return True
 
-    candidates = sorted(w for w in frequency if word_shape_ok(w) and usable(w))
+    # A raw frequency list runs into the millions of lines (most of it
+    # one-off corpus noise: typos, foreign text, name spelling
+    # variants...). Checking every single one against hunspell is both
+    # slow and pointless -- nothing past the most-used few hundred
+    # thousand words will ever survive the coverage cutoff below.
+    # Candidates are picked by FREQUENCY first (most used word first),
+    # THEN capped, so the cap only ever cuts the already-irrelevant
+    # tail, never a word actually in contention for the vocabulary.
+    by_frequency = sorted(frequency.items(), key=lambda item: -item[1])
+    candidates = [
+        w for w, _ in by_frequency
+        if word_shape_ok(w) and usable(w)
+    ][:MAX_CANDIDATE_POOL]
 
     valid = hunspell_valid(candidates, dic_base)
     rescued = set()
@@ -780,10 +798,17 @@ build_vocabulary() {
         exit 1
     fi
 
-    # The runtime expects a sorted, unique word list.
+    # The runtime expects a sorted, unique word list. Each line also
+    # carries the word's 1-based frequency rank (1 = most used) as a
+    # second, tab-separated field: vocabulary.tsv is already sorted
+    # most-frequent-first, so its line number IS that rank. The rank
+    # lets DictionaryManager break correction ties by real usage
+    # instead of alphabetical order -- the loader already tolerated an
+    # (until now unused) "word<TAB>extra" second column.
     {
         echo "#POCKETBOARD-DICT-1"
-        cut -f1 "${directory}/vocabulary.tsv" | LC_ALL=C sort -u
+        awk -F'\t' '{ print $1 "\t" NR }' "${directory}/vocabulary.tsv" |
+            LC_ALL=C sort -t "$(printf '\t')" -k1,1 -u
     } > "${output}"
 
     echo "Words: $(tail -n +2 "${output}" | wc -l)"
@@ -925,7 +950,8 @@ check_word() {
     local language="$1"
     local word="$2"
 
-    if grep -Fqx -- "${word}" <(tail -n +2 "${OUTPUT_DIR}/${language}.dict"); then
+    if grep -Fq -- "$(printf '%s\t' "${word}")" \
+        <(tail -n +2 "${OUTPUT_DIR}/${language}.dict"); then
         echo "OK: ${language}: ${word}"
     else
         echo "WARNING: word not selected: ${language}: ${word}"
