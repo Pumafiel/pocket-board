@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -26,6 +27,8 @@ import java.util.Set;
  * 4. Preserved prefix.
  * 5. Preserved suffix.
  * 6. Completion quality.
+ * 7. Real-world frequency, but ONLY as a last-resort tie-breaker
+ *    once everything above is equal (see CandidateComparator).
  *
  * There is deliberately no global preference for short or long
  * words.
@@ -33,6 +36,13 @@ import java.util.Set;
 public final class CorrectionEngine {
 
     private static final int DEFAULT_MAX_RESULTS = 3;
+
+    /*
+     * Mirrors DictionaryManager's Dictionary.UNKNOWN_RANK: "no real
+     * frequency data for this candidate", never treated as more
+     * frequent than a candidate that does have a rank.
+     */
+    private static final int UNKNOWN_FREQUENCY_RANK = Integer.MAX_VALUE;
 
     /*
      * ============================================================
@@ -74,8 +84,8 @@ public final class CorrectionEngine {
      * The added characters therefore do not accumulate normal
      * edit costs.
      *
-     * There is no frequency information in CorrectionEngine, so
-     * completion length is used only as a late tie-breaker.
+     * Completion length is used as a tie-breaker before frequency
+     * (see CandidateComparator step 8).
      */
     private static final int COMPLETION_BASE_COST = 0;
     private static final int MAX_COMPLETION_ADDITION = 32;
@@ -100,6 +110,33 @@ public final class CorrectionEngine {
             String languageTag,
             int maxResults) {
 
+        return rankCandidates(
+                input,
+                candidates,
+                languageTag,
+                maxResults,
+                Collections.<String, Integer>emptyMap()
+        );
+    }
+
+    /**
+     * Same as {@link #rankCandidates(String, List, String, int)}, but
+     * also accepts each candidate's real-world frequency rank (1 =
+     * most used; see Dictionary.UNKNOWN_RANK in DictionaryManager).
+     *
+     * This is used ONLY as the very last tie-breaker, after every
+     * edit-cost and language/keyboard-evidence signal below is equal
+     * -- it does not change the accuracy hierarchy documented above
+     * the class, it just replaces arbitrary alphabetical order with
+     * "prefer the word people actually use more" for genuine ties.
+     */
+    public List<String> rankCandidates(
+            String input,
+            List<String> candidates,
+            String languageTag,
+            int maxResults,
+            Map<String, Integer> frequencyRanks) {
+
         if (input == null ||
                 input.trim().isEmpty() ||
                 candidates == null ||
@@ -108,6 +145,11 @@ public final class CorrectionEngine {
 
             return new ArrayList<>();
         }
+
+        Map<String, Integer> ranks =
+                frequencyRanks != null
+                        ? frequencyRanks
+                        : Collections.<String, Integer>emptyMap();
 
         String normalizedInput =
                 normalize(input);
@@ -176,10 +218,18 @@ public final class CorrectionEngine {
                 continue;
             }
 
+            Integer frequencyRank =
+                    ranks.get(
+                            normalizedCandidate
+                    );
+
             scored.add(
                     new ScoredCandidate(
                             normalizedCandidate,
-                            score
+                            score,
+                            frequencyRank != null
+                                    ? frequencyRank
+                                    : UNKNOWN_FREQUENCY_RANK
                     )
             );
         }
@@ -1343,16 +1393,21 @@ public final class CorrectionEngine {
 
         private final String word;
         private final ScoreBreakdown breakdown;
+        private final int frequencyRank;
 
         private ScoredCandidate(
                 String word,
-                ScoreBreakdown breakdown) {
+                ScoreBreakdown breakdown,
+                int frequencyRank) {
 
             this.word =
                     word;
 
             this.breakdown =
                     breakdown;
+
+            this.frequencyRank =
+                    frequencyRank;
         }
     }
 
@@ -1371,7 +1426,10 @@ public final class CorrectionEngine {
      * 6. Strong prefix.
      * 7. Completion addition length, only for otherwise equal
      *    completions.
-     * 8. Deterministic lexical order.
+     * 8. Completion vs correction.
+     * 9. Real-world frequency rank (last resort; words without rank
+     *    data never win this step).
+     * 10. Deterministic lexical order.
      *
      * There is NO universal preference for short or long words.
      */
@@ -1530,7 +1588,27 @@ public final class CorrectionEngine {
 
             /*
              * ----------------------------------------------------
-             * 10. Deterministic final ordering
+             * 10. Real-world usage (frequency rank)
+             * ----------------------------------------------------
+             *
+             * Reached only when every quality signal above is tied.
+             * Lower rank = more frequently used = preferred. A
+             * candidate with no rank data (UNKNOWN_FREQUENCY_RANK)
+             * never wins this step.
+             */
+            result =
+                    Integer.compare(
+                            first.frequencyRank,
+                            second.frequencyRank
+                    );
+
+            if (result != 0) {
+                return result;
+            }
+
+            /*
+             * ----------------------------------------------------
+             * 11. Deterministic final ordering
              * ----------------------------------------------------
              */
             return first.word.compareTo(
