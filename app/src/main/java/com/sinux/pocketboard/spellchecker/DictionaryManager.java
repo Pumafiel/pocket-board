@@ -164,7 +164,8 @@ public class DictionaryManager {
                             Math.max(
                                     resultLimit - 1,
                                     0
-                            )
+                            ),
+                            dictionary
                     );
 
             List<String> results =
@@ -268,7 +269,8 @@ public class DictionaryManager {
                                 candidates
                         ),
                         language,
-                        resultLimit
+                        resultLimit,
+                        dictionary
                 );
 
         return applyCapitalization(
@@ -318,7 +320,8 @@ public class DictionaryManager {
             String input,
             List<String> candidates,
             String language,
-            int maxResults) {
+            int maxResults,
+            Dictionary dictionary) {
 
         if (candidates == null ||
                 candidates.isEmpty() ||
@@ -331,8 +334,50 @@ public class DictionaryManager {
                 input,
                 candidates,
                 language,
-                maxResults
+                maxResults,
+                buildFrequencyRanks(
+                        candidates,
+                        dictionary
+                )
         );
+    }
+
+    /**
+     * Frequency rank of each candidate, for CorrectionEngine to use as
+     * a last-resort tie-breaker (see its CandidateComparator). Only
+     * the candidates actually being ranked are looked up -- never the
+     * whole dictionary -- so this stays cheap regardless of how big
+     * the dictionary has grown.
+     */
+    private Map<String, Integer> buildFrequencyRanks(
+            List<String> candidates,
+            Dictionary dictionary) {
+
+        Map<String, Integer> ranks =
+                new HashMap<>();
+
+        if (dictionary == null ||
+                dictionary.isEmpty()) {
+
+            return ranks;
+        }
+
+        for (String candidate :
+                candidates) {
+
+            if (candidate == null) {
+                continue;
+            }
+
+            ranks.put(
+                    candidate,
+                    dictionary.getRank(
+                            candidate
+                    )
+            );
+        }
+
+        return ranks;
     }
 
     /*
@@ -1176,8 +1221,15 @@ public class DictionaryManager {
                                 language
                         );
 
-        List<String> words =
-                new ArrayList<>();
+        /*
+         * A sorted map both de-duplicates and orders words for the
+         * runtime binary search in one pass, and keeps each word's
+         * frequency rank (the optional second, tab-separated field --
+         * see generate-dictionaries.sh) aligned with it. A word
+         * repeated in the asset keeps its FIRST (most frequent) rank.
+         */
+        java.util.TreeMap<String, Integer> entries =
+                new java.util.TreeMap<>();
 
         try (
                 InputStream inputStream =
@@ -1248,6 +1300,8 @@ public class DictionaryManager {
                         line.indexOf('\t');
 
                 String word;
+                int rank =
+                        Dictionary.UNKNOWN_RANK;
 
                 if (separator >= 0) {
 
@@ -1255,6 +1309,13 @@ public class DictionaryManager {
                             line.substring(
                                     0,
                                     separator
+                            );
+
+                    rank =
+                            parseRank(
+                                    line.substring(
+                                            separator + 1
+                                    )
                             );
 
                 } else {
@@ -1275,9 +1336,19 @@ public class DictionaryManager {
                     continue;
                 }
 
-                words.add(
-                        word
-                );
+                Integer existingRank =
+                        entries.get(
+                                word
+                        );
+
+                if (existingRank == null ||
+                        rank < existingRank) {
+
+                    entries.put(
+                            word,
+                            rank
+                    );
+                }
             }
 
         } catch (IOException exception) {
@@ -1295,7 +1366,7 @@ public class DictionaryManager {
             return emptyDictionary();
         }
 
-        if (words.isEmpty()) {
+        if (entries.isEmpty()) {
 
             Log.e(
                     TAG,
@@ -1310,51 +1381,30 @@ public class DictionaryManager {
             return emptyDictionary();
         }
 
-        /*
-         * The generated dictionary is already sorted and unique.
-         * We still defensively sort here because the runtime
-         * prefix lookup depends on ordering.
-         */
         String[] wordArray =
-                words.toArray(
-                        new String[0]
-                );
+                new String[entries.size()];
 
-        java.util.Arrays.sort(
-                wordArray
-        );
+        int[] rankArray =
+                new int[entries.size()];
 
-        List<String> unique =
-                new ArrayList<>(
-                        wordArray.length
-                );
+        int position = 0;
 
-        String previous =
-                null;
+        for (Map.Entry<String, Integer> entry :
+                entries.entrySet()) {
 
-        for (String word :
-                wordArray) {
+            wordArray[position] =
+                    entry.getKey();
 
-            if (word.equals(
-                    previous
-            )) {
+            rankArray[position] =
+                    entry.getValue();
 
-                continue;
-            }
-
-            unique.add(
-                    word
-            );
-
-            previous =
-                    word;
+            position++;
         }
 
         Dictionary dictionary =
                 new Dictionary(
-                        unique.toArray(
-                                new String[0]
-                        )
+                        wordArray,
+                        rankArray
                 );
 
         Log.i(
@@ -1371,10 +1421,43 @@ public class DictionaryManager {
         return dictionary;
     }
 
+    /**
+     * Parses the frequency-rank field written by
+     * generate-dictionaries.sh. Any missing or malformed value is
+     * treated as "no rank known" rather than failing the whole word,
+     * since the rank is only ever used as a last-resort tie-breaker.
+     */
+    private int parseRank(
+            String value) {
+
+        if (value == null ||
+                value.isEmpty()) {
+
+            return Dictionary.UNKNOWN_RANK;
+        }
+
+        try {
+
+            int rank =
+                    Integer.parseInt(
+                            value.trim()
+                    );
+
+            return rank > 0
+                    ? rank
+                    : Dictionary.UNKNOWN_RANK;
+
+        } catch (NumberFormatException exception) {
+
+            return Dictionary.UNKNOWN_RANK;
+        }
+    }
+
     private Dictionary emptyDictionary() {
 
         return new Dictionary(
-                new String[0]
+                new String[0],
+                new int[0]
         );
     }
 
@@ -1626,13 +1709,28 @@ public class DictionaryManager {
 
     private static final class Dictionary {
 
+        /*
+         * Frequency rank assigned by the build script: 1 is the most
+         * used word in the language, larger numbers are rarer.
+         * UNKNOWN_RANK means the word carried no rank (legacy asset
+         * format, or a line the parser could not read) and must never
+         * be treated as more frequent than a word that has one.
+         */
+        static final int UNKNOWN_RANK =
+                Integer.MAX_VALUE;
+
         private final String[] words;
+        private final int[] ranks;
 
         Dictionary(
-                String[] words) {
+                String[] words,
+                int[] ranks) {
 
             this.words =
                     words;
+
+            this.ranks =
+                    ranks;
         }
 
         int size() {
@@ -1654,10 +1752,41 @@ public class DictionaryManager {
         boolean contains(
                 String word) {
 
+            return indexOf(
+                    word
+            ) >= 0;
+        }
+
+        /**
+         * Frequency rank of {@code word}, or {@link #UNKNOWN_RANK}
+         * when the word is not in this dictionary or was loaded
+         * without one.
+         */
+        int getRank(
+                String word) {
+
+            int index =
+                    indexOf(
+                            word
+                    );
+
+            if (index < 0 ||
+                    ranks == null ||
+                    index >= ranks.length) {
+
+                return UNKNOWN_RANK;
+            }
+
+            return ranks[index];
+        }
+
+        private int indexOf(
+                String word) {
+
             if (word == null ||
                     words.length == 0) {
 
-                return false;
+                return -1;
             }
 
             int low = 0;
@@ -1689,11 +1818,11 @@ public class DictionaryManager {
 
                 } else {
 
-                    return true;
+                    return middle;
                 }
             }
 
-            return false;
+            return -1;
         }
     }
 
