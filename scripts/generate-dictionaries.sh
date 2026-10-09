@@ -1,1645 +1,1083 @@
-package com.sinux.pocketboard.spellchecker;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-
-/**
- * Native PocketBoard correction and suggestion ranking engine.
- *
- * DictionaryManager supplies the candidates.
- *
- * The engine does not decide which words exist in a language.
- * It ranks the candidates supplied by DictionaryManager.
- *
- * Lower score = better candidate.
- *
- * Ranking is based on:
- *
- * 1. Actual transformation cost.
- * 2. Language-specific evidence used by that transformation.
- * 3. Keyboard evidence used by that transformation.
- * 4. Preserved prefix.
- * 5. Preserved suffix.
- * 6. Completion quality.
- * 7. Real-world frequency, but ONLY as a last-resort tie-breaker
- *    once everything above is equal (see CandidateComparator).
- *
- * There is deliberately no global preference for short or long
- * words.
- */
-public final class CorrectionEngine {
-
-    private static final int DEFAULT_MAX_RESULTS = 3;
-
-    /*
-     * Mirrors DictionaryManager's Dictionary.UNKNOWN_RANK: "no real
-     * frequency data for this candidate", never treated as more
-     * frequent than a candidate that does have a rank.
-     */
-    private static final int UNKNOWN_FREQUENCY_RANK = Integer.MAX_VALUE;
-
-    /*
-     * ============================================================
-     * BASE EDIT COSTS
-     * ============================================================
-     */
-
-    private static final int INSERTION_COST = 3;
-    private static final int DELETION_COST = 3;
-    private static final int NORMAL_SUBSTITUTION_COST = 4;
-
-    /*
-     * Common typing mistakes.
-     */
-    private static final int TRANSPOSE_COST = 1;
-    private static final int REPEATED_CHARACTER_COST = 1;
-
-    /*
-     * Maximum correction cost.
-     */
-    private static final int MAX_CORRECTION_COST = 12;
-
-    /*
-     * Conservative handling for very short input.
-     */
-    private static final int SHORT_INPUT_LENGTH = 4;
-
-    /*
-     * ============================================================
-     * COMPLETION
-     * ============================================================
-     *
-     * A prefix completion is not a spelling error.
-     *
-     * Example:
-     *
-     *     auto -> automóvil
-     *
-     * The added characters therefore do not accumulate normal
-     * edit costs.
-     *
-     * Completion length is used as a tie-breaker before frequency
-     * (see CandidateComparator step 8).
-     */
-    private static final int COMPLETION_BASE_COST = 0;
-    private static final int MAX_COMPLETION_ADDITION = 32;
-
-    /*
-     * A prefix of four or more characters is considered strong.
-     */
-    private static final int STRONG_PREFIX_LENGTH = 4;
-
-    public CorrectionEngine() {
-    }
-
-    /*
-     * ============================================================
-     * PUBLIC API
-     * ============================================================
-     */
-
-    public List<String> rankCandidates(
-            String input,
-            List<String> candidates,
-            String languageTag,
-            int maxResults) {
-
-        return rankCandidates(
-                input,
-                candidates,
-                languageTag,
-                maxResults,
-                Collections.<String, Integer>emptyMap()
-        );
-    }
-
-    /**
-     * Same as {@link #rankCandidates(String, List, String, int)}, but
-     * also accepts each candidate's real-world frequency rank (1 =
-     * most used; see Dictionary.UNKNOWN_RANK in DictionaryManager).
-     *
-     * This is used ONLY as the very last tie-breaker, after every
-     * edit-cost and language/keyboard-evidence signal below is equal
-     * -- it does not change the accuracy hierarchy documented above
-     * the class, it just replaces arbitrary alphabetical order with
-     * "prefer the word people actually use more" for genuine ties.
-     */
-    public List<String> rankCandidates(
-            String input,
-            List<String> candidates,
-            String languageTag,
-            int maxResults,
-            Map<String, Integer> frequencyRanks) {
-
-        if (input == null ||
-                input.trim().isEmpty() ||
-                candidates == null ||
-                candidates.isEmpty() ||
-                maxResults <= 0) {
-
-            return new ArrayList<>();
-        }
-
-        Map<String, Integer> ranks =
-                frequencyRanks != null
-                        ? frequencyRanks
-                        : Collections.<String, Integer>emptyMap();
-
-        String normalizedInput =
-                normalize(input);
-
-        if (normalizedInput.isEmpty()) {
-            return new ArrayList<>();
-        }
-
-        String language =
-                LanguageRules.normalizeLanguage(
-                        languageTag
-                );
-
-        int resultLimit =
-                Math.min(
-                        maxResults,
-                        DEFAULT_MAX_RESULTS
-                );
-
-        List<ScoredCandidate> scored =
-                new ArrayList<>();
-
-        Set<String> seen =
-                new HashSet<>();
-
-        for (String candidate : candidates) {
-
-            if (candidate == null ||
-                    candidate.trim().isEmpty()) {
-
-                continue;
-            }
-
-            String normalizedCandidate =
-                    normalize(candidate);
-
-            if (normalizedCandidate.isEmpty()) {
-                continue;
-            }
-
-            if (!seen.add(
-                    normalizedCandidate
-            )) {
-                continue;
-            }
-
-            /*
-             * Exact matches are intentionally not returned by this
-             * method. DictionaryManager handles them separately and
-             * places the exact word at position zero.
-             */
-            if (normalizedInput.equals(
-                    normalizedCandidate
-            )) {
-                continue;
-            }
-
-            ScoreBreakdown score =
-                    createScore(
-                            normalizedInput,
-                            normalizedCandidate,
-                            language
-                    );
-
-            if (!score.valid) {
-                continue;
-            }
-
-            Integer frequencyRank =
-                    ranks.get(
-                            normalizedCandidate
-                    );
-
-            scored.add(
-                    new ScoredCandidate(
-                            normalizedCandidate,
-                            score,
-                            frequencyRank != null
-                                    ? frequencyRank
-                                    : UNKNOWN_FREQUENCY_RANK
-                    )
-            );
-        }
-
-        Collections.sort(
-                scored,
-                new CandidateComparator()
-        );
-
-        List<String> results =
-                new ArrayList<>(
-                        Math.min(
-                                resultLimit,
-                                scored.size()
-                        )
-                );
-
-        for (ScoredCandidate candidate :
-                scored) {
-
-            if (results.size() >=
-                    resultLimit) {
-
-                break;
-            }
-
-            results.add(
-                    candidate.word
-            );
-        }
-
-        return results;
-    }
-
-    /**
-     * Compatibility API.
-     *
-     * Lower score means a better candidate.
-     */
-    public int scoreCandidate(
-            String input,
-            String candidate,
-            String languageTag) {
-
-        ScoreBreakdown score =
-                createScore(
-                        input,
-                        candidate,
-                        languageTag
-                );
-
-        if (score == null ||
-                !score.valid) {
-
-            return Integer.MAX_VALUE;
-        }
-
-        return score.totalScore;
-    }
-
-    /*
-     * ============================================================
-     * SCORE CREATION
-     * ============================================================
-     */
-
-    private ScoreBreakdown createScore(
-            String input,
-            String candidate,
-            String languageTag) {
-
-        if (input == null ||
-                candidate == null) {
-
-            return ScoreBreakdown.invalid();
-        }
-
-        String first =
-                normalize(input);
-
-        String second =
-                normalize(candidate);
-
-        if (first.isEmpty() ||
-                second.isEmpty()) {
-
-            return ScoreBreakdown.invalid();
-        }
-
-        if (first.equals(second)) {
-            return ScoreBreakdown.invalid();
-        }
-
-        String language =
-                LanguageRules.normalizeLanguage(
-                        languageTag
-                );
-
-        int prefixLength =
-                commonPrefixLength(
-                        first,
-                        second
-                );
-
-        int suffixLength =
-                commonSuffixLength(
-                        first,
-                        second
-                );
-
-        /*
-         * --------------------------------------------------------
-         * COMPLETION
-         * --------------------------------------------------------
-         */
-
-        if (isPrefixCompletion(
-                first,
-                second
-        )) {
-
-            return createCompletionScore(
-                    first,
-                    second,
-                    prefixLength,
-                    suffixLength
-            );
-        }
-
-        /*
-         * --------------------------------------------------------
-         * CORRECTION
-         * --------------------------------------------------------
-         */
-
-        return createCorrectionScore(
-                first,
-                second,
-                prefixLength,
-                suffixLength,
-                language
-        );
-    }
-
-    /*
-     * ============================================================
-     * COMPLETION SCORE
-     * ============================================================
-     */
-
-    private ScoreBreakdown createCompletionScore(
-            String input,
-            String candidate,
-            int prefixLength,
-            int suffixLength) {
-
-        int added =
-                candidate.length() -
-                        input.length();
-
-        if (added <= 0 ||
-                added >
-                        MAX_COMPLETION_ADDITION) {
-
-            return ScoreBreakdown.invalid();
-        }
-
-        /*
-         * All valid prefix completions begin with an exact prefix.
-         *
-         * We therefore do not punish the added letters as spelling
-         * errors.
-         */
-        return new ScoreBreakdown(
-                COMPLETION_BASE_COST,
-                0,
-                prefixLength,
-                suffixLength,
-                0,
-                0,
-                prefixLength >=
-                        STRONG_PREFIX_LENGTH,
-                true,
-                true,
-                added
-        );
-    }
-
-    /*
-     * ============================================================
-     * CORRECTION SCORE
-     * ============================================================
-     */
-
-    private ScoreBreakdown createCorrectionScore(
-            String input,
-            String candidate,
-            int prefixLength,
-            int suffixLength,
-            String languageTag) {
-
-        EditResult edit =
-                weightedDamerauLevenshtein(
-                        input,
-                        candidate,
-                        languageTag
-                );
-
-        if (!edit.valid ||
-                edit.cost >
-                        MAX_CORRECTION_COST) {
-
-            return ScoreBreakdown.invalid();
-        }
-
-        /*
-         * Short input is inherently ambiguous.
-         *
-         * Do not perform aggressive guesses.
-         */
-        if (input.length() <= 2 &&
-                edit.cost > 2) {
-
-            return ScoreBreakdown.invalid();
-        }
-
-        if (input.length() <=
-                SHORT_INPUT_LENGTH &&
-                edit.cost > 6) {
-
-            return ScoreBreakdown.invalid();
-        }
-
-        return new ScoreBreakdown(
-                edit.cost,
-                edit.cost,
-                prefixLength,
-                suffixLength,
-                edit.keyboardEvidence,
-                edit.languageEvidence,
-                prefixLength >=
-                        STRONG_PREFIX_LENGTH,
-                false,
-                true,
-                0
-        );
-    }
-
-    /*
-     * ============================================================
-     * WEIGHTED DAMERAU-LEVENSHTEIN
-     * ============================================================
-     *
-     * This version does more than return a number.
-     *
-     * It also preserves which operations were actually selected
-     * by the optimal path.
-     *
-     * That is important because secondary evidence must describe
-     * the transformation that actually produced the score.
-     */
-    private EditResult weightedDamerauLevenshtein(
-            String first,
-            String second,
-            String languageTag) {
-
-        if (first.equals(second)) {
-            return EditResult.exact();
-        }
-
-        int n =
-                first.length();
-
-        int m =
-                second.length();
-
-        if (n == 0) {
-
-            return EditResult.simple(
-                    m * INSERTION_COST
-            );
-        }
-
-        if (m == 0) {
-
-            return EditResult.simple(
-                    n * DELETION_COST
-            );
-        }
-
-        if (Math.abs(n - m) >
-                MAX_CORRECTION_COST) {
-
-            return EditResult.invalid();
-        }
-
-        PathCell[][] dp =
-                new PathCell[n + 1][m + 1];
-
-        dp[0][0] =
-                PathCell.start();
-
-        /*
-         * Deletions from the typed word.
-         */
-        for (int i = 1;
-             i <= n;
-             i++) {
-
-            int cost =
-                    getDeletionCost(
-                            first,
-                            i - 1
-                    );
-
-            PathCell previous =
-                    dp[i - 1][0];
-
-            dp[i][0] =
-                    previous.extend(
-                            cost,
-                            Operation.DELETION,
-                            0,
-                            0
-                    );
-        }
-
-        /*
-         * Insertions into the candidate.
-         */
-        for (int j = 1;
-             j <= m;
-             j++) {
-
-            PathCell previous =
-                    dp[0][j - 1];
-
-            dp[0][j] =
-                    previous.extend(
-                            INSERTION_COST,
-                            Operation.INSERTION,
-                            0,
-                            0
-                    );
-        }
-
-        for (int i = 1;
-             i <= n;
-             i++) {
-
-            char typed =
-                    first.charAt(
-                            i - 1
-                    );
-
-            for (int j = 1;
-                 j <= m;
-                 j++) {
-
-                char target =
-                        second.charAt(
-                                j - 1
-                        );
-
-                PathCell best =
-                        null;
-
-                /*
-                 * ------------------------------------------------
-                 * 1. Substitution / exact character
-                 * ------------------------------------------------
-                 */
-
-                int substitutionCost =
-                        getSubstitutionCost(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-                int substitutionLanguage =
-                        getLanguageEvidence(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-                int substitutionKeyboard =
-                        getKeyboardEvidence(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-                best =
-                        chooseBetter(
-                                best,
-                                dp[i - 1][j - 1].extend(
-                                        substitutionCost,
-                                        substitutionCost == 0
-                                                ? Operation.EXACT
-                                                : Operation.SUBSTITUTION,
-                                        substitutionLanguage,
-                                        substitutionKeyboard
-                                )
-                        );
-
-                /*
-                 * ------------------------------------------------
-                 * 2. Insertion
-                 * ------------------------------------------------
-                 */
-
-                best =
-                        chooseBetter(
-                                best,
-                                dp[i][j - 1].extend(
-                                        INSERTION_COST,
-                                        Operation.INSERTION,
-                                        0,
-                                        0
-                                )
-                        );
-
-                /*
-                 * ------------------------------------------------
-                 * 3. Deletion
-                 * ------------------------------------------------
-                 */
-
-                int deletionCost =
-                        getDeletionCost(
-                                first,
-                                i - 1
-                        );
-
-                Operation deletionOperation =
-                        deletionCost ==
-                                REPEATED_CHARACTER_COST
-                                ? Operation.REPETITION
-                                : Operation.DELETION;
-
-                best =
-                        chooseBetter(
-                                best,
-                                dp[i - 1][j].extend(
-                                        deletionCost,
-                                        deletionOperation,
-                                        0,
-                                        0
-                                )
-                        );
-
-                /*
-                 * ------------------------------------------------
-                 * 4. Repeated character
-                 * ------------------------------------------------
-                 *
-                 * helllo -> hello
-                 */
-                if (i >= 2 &&
-                        j >= 1 &&
-                        first.charAt(i - 2) ==
-                                typed &&
-                        typed ==
-                                target) {
-
-                    best =
-                            chooseBetter(
-                                    best,
-                                    dp[i - 2][j - 1].extend(
-                                            REPEATED_CHARACTER_COST,
-                                            Operation.REPETITION,
-                                            0,
-                                            0
-                                    )
-                            );
-                }
-
-                /*
-                 * ------------------------------------------------
-                 * 5. Adjacent transposition
-                 * ------------------------------------------------
-                 *
-                 * teh -> the
-                 * adn -> and
-                 */
-                if (i >= 2 &&
-                        j >= 2 &&
-                        first.charAt(i - 2) ==
-                                target &&
-                        typed ==
-                                second.charAt(
-                                        j - 2
-                                )) {
-
-                    char firstTransposed =
-                            first.charAt(
-                                    i - 2
-                            );
-
-                    char secondTransposed =
-                            typed;
-
-                    int transpositionCost =
-                            getTranspositionCost(
-                                    firstTransposed,
-                                    secondTransposed,
-                                    languageTag
-                            );
-
-                    int transpositionLanguage =
-                            getLanguageEvidence(
-                                    firstTransposed,
-                                    secondTransposed,
-                                    languageTag
-                            );
-
-                    int transpositionKeyboard =
-                            getKeyboardEvidence(
-                                    firstTransposed,
-                                    secondTransposed,
-                                    languageTag
-                            );
-
-                    best =
-                            chooseBetter(
-                                    best,
-                                    dp[i - 2][j - 2].extend(
-                                            transpositionCost,
-                                            Operation.TRANSPOSITION,
-                                            transpositionLanguage,
-                                            transpositionKeyboard
-                                    )
-                            );
-                }
-
-                dp[i][j] =
-                        best;
-            }
-        }
-
-        PathCell result =
-                dp[n][m];
-
-        if (result == null) {
-            return EditResult.invalid();
-        }
-
-        return new EditResult(
-                result.cost,
-                result.languageEvidence,
-                result.keyboardEvidence,
-                true
-        );
-    }
-
-    /*
-     * ============================================================
-     * PATH SELECTION
-     * ============================================================
-     *
-     * When two edit paths have the same total cost, preserve the
-     * path with stronger linguistic evidence.
-     *
-     * This means:
-     *
-     *     n -> ñ
-     *
-     * can beat:
-     *
-     *     n -> b
-     *
-     * when both happen to have the same numeric cost.
-     *
-     * Keyboard evidence is considered after language evidence.
-     */
-    private PathCell chooseBetter(
-            PathCell current,
-            PathCell candidate) {
-
-        if (candidate == null) {
-            return current;
-        }
-
-        if (current == null) {
-            return candidate;
-        }
-
-        int comparison =
-                comparePathQuality(
-                        candidate,
-                        current
-                );
-
-        return comparison < 0
-                ? candidate
-                : current;
-    }
-
-    private int comparePathQuality(
-            PathCell first,
-            PathCell second) {
-
-        int result =
-                Integer.compare(
-                        first.cost,
-                        second.cost
-                );
-
-        if (result != 0) {
-            return result;
-        }
-
-        /*
-         * More language evidence is better when actual cost is equal.
-         */
-        result =
-                Integer.compare(
-                        second.languageEvidence,
-                        first.languageEvidence
-                );
-
-        if (result != 0) {
-            return result;
-        }
-
-        /*
-         * More keyboard evidence is better when language evidence
-         * is also equal.
-         */
-        result =
-                Integer.compare(
-                        second.keyboardEvidence,
-                        first.keyboardEvidence
-                );
-
-        if (result != 0) {
-            return result;
-        }
-
-        /*
-         * Prefer fewer operations when the numerical result is
-         * identical.
-         */
-        return Integer.compare(
-                first.operationCount,
-                second.operationCount
-        );
-    }
-
-    /*
-     * ============================================================
-     * CHARACTER COSTS
-     * ============================================================
-     */
-
-    private int getSubstitutionCost(
-            char typed,
-            char target,
-            String languageTag) {
-
-        if (typed == target) {
-            return 0;
-        }
-
-        /*
-         * Language rules have priority.
-         *
-         * Examples:
-         *
-         * n -> ñ
-         * a -> á
-         * u -> ü
-         */
-        int languageCost =
-                LanguageRules
-                        .getCharacterSubstitutionCost(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-        if (languageCost <
-                KeyboardErrorModel.getUnknownCost()) {
-
-            return languageCost;
-        }
-
-        /*
-         * Then physical keyboard relationship.
-         */
-        int keyboardCost =
-                KeyboardErrorModel
-                        .getSubstitutionCost(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-        if (keyboardCost <
-                KeyboardErrorModel.getUnknownCost()) {
-
-            return keyboardCost;
-        }
-
-        /*
-         * Completely unrelated substitution.
-         */
-        return NORMAL_SUBSTITUTION_COST;
-    }
-
-    private int getLanguageEvidence(
-            char typed,
-            char target,
-            String languageTag) {
-
-        if (typed == target) {
-            return 0;
-        }
-
-        int cost =
-                LanguageRules
-                        .getCharacterSubstitutionCost(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-        return cost <
-                KeyboardErrorModel.getUnknownCost()
-                ? 1
-                : 0;
-    }
-
-    private int getKeyboardEvidence(
-            char typed,
-            char target,
-            String languageTag) {
-
-        if (typed == target) {
-            return 0;
-        }
-
-        /*
-         * A language-specific relation should not also count as
-         * keyboard evidence.
-         */
-        int languageCost =
-                LanguageRules
-                        .getCharacterSubstitutionCost(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-        if (languageCost <
-                KeyboardErrorModel.getUnknownCost()) {
-
-            return 0;
-        }
-
-        int keyboardCost =
-                KeyboardErrorModel
-                        .getSubstitutionCost(
-                                typed,
-                                target,
-                                languageTag
-                        );
-
-        return keyboardCost <
-                KeyboardErrorModel.getUnknownCost()
-                ? 1
-                : 0;
-    }
-
-    private int getDeletionCost(
-            String input,
-            int position) {
-
-        /*
-         * If the character being removed belongs to a repeated
-         * pair, this is a very common typing mistake.
-         */
-        if (position > 0 &&
-                input.charAt(position - 1) ==
-                        input.charAt(position)) {
-
-            return REPEATED_CHARACTER_COST;
-        }
-
-        return DELETION_COST;
-    }
-
-    private int getTranspositionCost(
-            char first,
-            char second,
-            String languageTag) {
-
-        int keyboardCost =
-                KeyboardErrorModel
-                        .getTranspositionCost(
-                                first,
-                                second,
-                                languageTag
-                        );
-
-        if (keyboardCost <
-                KeyboardErrorModel.getUnknownCost()) {
-
-            return keyboardCost;
-        }
-
-        return TRANSPOSE_COST;
-    }
-
-    /*
-     * ============================================================
-     * COMPLETION
-     * ============================================================
-     */
-
-    private boolean isPrefixCompletion(
-            String input,
-            String candidate) {
-
-        if (input.length() >=
-                candidate.length()) {
-
-            return false;
-        }
-
-        return candidate.startsWith(
-                input
-        );
-    }
-
-    /*
-     * ============================================================
-     * PREFIX / SUFFIX
-     * ============================================================
-     */
-
-    private int commonPrefixLength(
-            String first,
-            String second) {
-
-        int limit =
-                Math.min(
-                        first.length(),
-                        second.length()
-                );
-
-        int common = 0;
-
-        while (
-                common < limit &&
-                first.charAt(common) ==
-                        second.charAt(common)
-        ) {
-
-            common++;
-        }
-
-        return common;
-    }
-
-    private int commonSuffixLength(
-            String first,
-            String second) {
-
-        int firstIndex =
-                first.length() - 1;
-
-        int secondIndex =
-                second.length() - 1;
-
-        int common = 0;
-
-        while (
-                firstIndex >= 0 &&
-                secondIndex >= 0 &&
-                first.charAt(firstIndex) ==
-                        second.charAt(secondIndex)
-        ) {
-
-            common++;
-
-            firstIndex--;
-            secondIndex--;
-        }
-
-        return common;
-    }
-
-    /*
-     * ============================================================
-     * NORMALIZATION
-     * ============================================================
-     */
-
-    private String normalize(
-            String value) {
-
-        if (value == null) {
-            return "";
-        }
-
-        return value
-                .trim()
-                .toLowerCase(
-                        Locale.ROOT
-                );
-    }
-
-    /*
-     * ============================================================
-     * SCORE BREAKDOWN
-     * ============================================================
-     */
-
-    private static final class ScoreBreakdown {
-
-        private final int totalScore;
-        private final int editDistance;
-
-        private final int prefixLength;
-        private final int suffixLength;
-
-        private final int keyboardEvidence;
-        private final int languageEvidence;
-
-        private final boolean strongPrefix;
-        private final boolean completion;
-
-        private final boolean valid;
-
-        /*
-         * Number of characters added by a completion.
-         *
-         * Used only as a late completion tie-breaker.
-         */
-        private final int completionAddition;
-
-        private ScoreBreakdown(
-                int totalScore,
-                int editDistance,
-                int prefixLength,
-                int suffixLength,
-                int keyboardEvidence,
-                int languageEvidence,
-                boolean strongPrefix,
-                boolean completion,
-                boolean valid,
-                int completionAddition) {
-
-            this.totalScore =
-                    totalScore;
-
-            this.editDistance =
-                    editDistance;
-
-            this.prefixLength =
-                    prefixLength;
-
-            this.suffixLength =
-                    suffixLength;
-
-            this.keyboardEvidence =
-                    keyboardEvidence;
-
-            this.languageEvidence =
-                    languageEvidence;
-
-            this.strongPrefix =
-                    strongPrefix;
-
-            this.completion =
-                    completion;
-
-            this.valid =
-                    valid;
-
-            this.completionAddition =
-                    completionAddition;
-        }
-
-        private static ScoreBreakdown invalid() {
-
-            return new ScoreBreakdown(
-                    Integer.MAX_VALUE,
-                    Integer.MAX_VALUE,
-                    0,
-                    0,
-                    0,
-                    0,
-                    false,
-                    false,
-                    false,
-                    Integer.MAX_VALUE
-            );
-        }
-    }
-
-    /*
-     * ============================================================
-     * EDIT PATH
-     * ============================================================
-     */
-
-    private enum Operation {
-        EXACT,
-        SUBSTITUTION,
-        INSERTION,
-        DELETION,
-        REPETITION,
-        TRANSPOSITION
-    }
-
-    private static final class PathCell {
-
-        private final int cost;
-
-        private final int languageEvidence;
-        private final int keyboardEvidence;
-
-        private final int operationCount;
-
-        private final Operation operation;
-
-        private PathCell(
-                int cost,
-                int languageEvidence,
-                int keyboardEvidence,
-                int operationCount,
-                Operation operation) {
-
-            this.cost =
-                    cost;
-
-            this.languageEvidence =
-                    languageEvidence;
-
-            this.keyboardEvidence =
-                    keyboardEvidence;
-
-            this.operationCount =
-                    operationCount;
-
-            this.operation =
-                    operation;
-        }
-
-        private static PathCell start() {
-
-            return new PathCell(
-                    0,
-                    0,
-                    0,
-                    0,
-                    Operation.EXACT
-            );
-        }
-
-        private PathCell extend(
-                int addedCost,
-                Operation operation,
-                int languageEvidence,
-                int keyboardEvidence) {
-
-            return new PathCell(
-                    safeAdd(
-                            this.cost,
-                            addedCost
-                    ),
-                    safeAdd(
-                            this.languageEvidence,
-                            languageEvidence
-                    ),
-                    safeAdd(
-                            this.keyboardEvidence,
-                            keyboardEvidence
-                    ),
-                    safeAdd(
-                            this.operationCount,
-                            operation ==
-                                    Operation.EXACT
-                                    ? 0
-                                    : 1
-                    ),
-                    operation
-            );
-        }
-    }
-
-    private static final class EditResult {
-
-        private final int cost;
-        private final int languageEvidence;
-        private final int keyboardEvidence;
-        private final boolean valid;
-
-        private EditResult(
-                int cost,
-                int languageEvidence,
-                int keyboardEvidence,
-                boolean valid) {
-
-            this.cost =
-                    cost;
-
-            this.languageEvidence =
-                    languageEvidence;
-
-            this.keyboardEvidence =
-                    keyboardEvidence;
-
-            this.valid =
-                    valid;
-        }
-
-        private static EditResult exact() {
-
-            return new EditResult(
-                    0,
-                    0,
-                    0,
-                    true
-            );
-        }
-
-        private static EditResult simple(
-                int cost) {
-
-            return new EditResult(
-                    cost,
-                    0,
-                    0,
-                    true
-            );
-        }
-
-        private static EditResult invalid() {
-
-            return new EditResult(
-                    Integer.MAX_VALUE,
-                    0,
-                    0,
-                    false
-            );
-        }
-    }
-
-    /*
-     * ============================================================
-     * SCORED CANDIDATE
-     * ============================================================
-     */
-
-    private static final class ScoredCandidate {
-
-        private final String word;
-        private final ScoreBreakdown breakdown;
-        private final int frequencyRank;
-
-        private ScoredCandidate(
-                String word,
-                ScoreBreakdown breakdown,
-                int frequencyRank) {
-
-            this.word =
-                    word;
-
-            this.breakdown =
-                    breakdown;
-
-            this.frequencyRank =
-                    frequencyRank;
-        }
-    }
-
-    /*
-     * ============================================================
-     * FINAL RANKING
-     * ============================================================
-     *
-     * Accuracy hierarchy:
-     *
-     * 1. Actual transformation cost.
-     * 2. Language evidence used by that transformation.
-     * 3. Keyboard evidence used by that transformation.
-     * 4. Preserved prefix.
-     * 5. Preserved suffix.
-     * 6. Strong prefix.
-     * 7. Completion addition length, only for otherwise equal
-     *    completions.
-     * 8. Completion vs correction.
-     * 9. Real-world frequency rank (last resort; words without rank
-     *    data never win this step).
-     * 10. Deterministic lexical order.
-     *
-     * There is NO universal preference for short or long words.
-     */
-    private static final class CandidateComparator
-            implements Comparator<ScoredCandidate> {
-
-        @Override
-        public int compare(
-                ScoredCandidate first,
-                ScoredCandidate second) {
-
-            /*
-             * ----------------------------------------------------
-             * 1. Actual score
-             * ----------------------------------------------------
-             */
-            int result =
-                    Integer.compare(
-                            first.breakdown.totalScore,
-                            second.breakdown.totalScore
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 2. Actual edit distance
-             * ----------------------------------------------------
-             *
-             * Kept separate for clarity and for future scoring
-             * extensions.
-             */
-            result =
-                    Integer.compare(
-                            first.breakdown.editDistance,
-                            second.breakdown.editDistance
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 3. Language evidence
-             * ----------------------------------------------------
-             */
-            result =
-                    Integer.compare(
-                            second.breakdown.languageEvidence,
-                            first.breakdown.languageEvidence
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 4. Keyboard evidence
-             * ----------------------------------------------------
-             */
-            result =
-                    Integer.compare(
-                            second.breakdown.keyboardEvidence,
-                            first.breakdown.keyboardEvidence
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 5. Preserved prefix
-             * ----------------------------------------------------
-             */
-            result =
-                    Integer.compare(
-                            second.breakdown.prefixLength,
-                            first.breakdown.prefixLength
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 6. Preserved suffix
-             * ----------------------------------------------------
-             */
-            result =
-                    Integer.compare(
-                            second.breakdown.suffixLength,
-                            first.breakdown.suffixLength
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 7. Strong prefix
-             * ----------------------------------------------------
-             */
-            if (first.breakdown.strongPrefix !=
-                    second.breakdown.strongPrefix) {
-
-                return first.breakdown.strongPrefix
-                        ? -1
-                        : 1;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 8. Completion-specific tie-breaker
-             * ----------------------------------------------------
-             *
-             * Only applies when everything above is identical.
-             *
-             * This is NOT a global preference for short words.
-             */
-            if (first.breakdown.completion &&
-                    second.breakdown.completion) {
-
-                result =
-                        Integer.compare(
-                                first.breakdown.completionAddition,
-                                second.breakdown.completionAddition
-                        );
-
-                if (result != 0) {
-                    return result;
-                }
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 9. Completion vs correction
-             * ----------------------------------------------------
-             *
-             * Only reached after all meaningful quality signals
-             * are equal.
-             */
-            if (first.breakdown.completion !=
-                    second.breakdown.completion) {
-
-                return first.breakdown.completion
-                        ? -1
-                        : 1;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 10. Real-world usage (frequency rank)
-             * ----------------------------------------------------
-             *
-             * Reached only when every quality signal above is tied.
-             * Lower rank = more frequently used = preferred. A
-             * candidate with no rank data (UNKNOWN_FREQUENCY_RANK)
-             * never wins this step.
-             */
-            result =
-                    Integer.compare(
-                            first.frequencyRank,
-                            second.frequencyRank
-                    );
-
-            if (result != 0) {
-                return result;
-            }
-
-            /*
-             * ----------------------------------------------------
-             * 11. Deterministic final ordering
-             * ----------------------------------------------------
-             */
-            return first.word.compareTo(
-                    second.word
-            );
-        }
-    }
-
-    /*
-     * ============================================================
-     * SAFE INTEGER ADDITION
-     * ============================================================
-     */
-
-    private static int safeAdd(
-            int first,
-            int second) {
-
-        if (first == Integer.MAX_VALUE ||
-                second == Integer.MAX_VALUE) {
-
-            return Integer.MAX_VALUE;
-        }
-
-        if (second > 0 &&
-                first >
-                        Integer.MAX_VALUE - second) {
-
-            return Integer.MAX_VALUE;
-        }
-
-        return first + second;
-    }
+#!/usr/bin/env bash
+#
+# PocketBoard dictionary generator
+# ================================
+#
+# Produces, for es-AR, en-en and de-de:
+#
+#     <lang>.dict      vocabulary (one word per line)
+#     <lang>.deletes   symmetric-delete correction index
+#     <lang>.meta      Hunspell REP/KEY/TRY metadata
+#
+# How a word is accepted
+# -----------------------
+#   A candidate word (from a real-world frequency list, i.e. words people
+#   actually type/say) is accepted when the real `hunspell` spellchecker
+#   says it is correctly spelled for that language's Hunspell dictionary
+#   (REAL hunspell, not `unmunch`: unmunch only expands simple PFX/SFX
+#   affixes and silently drops anything built with Hunspell's compound
+#   mechanism (COMPOUNDBEGIN/MIDDLE/END) and some cross-affix rules.
+#   German leans on compounding for a large share of its everyday
+#   vocabulary, so unmunch alone used to miss a very large, very common
+#   slice of German words -- see DE_TITLECASE_RESCUE below).
+#
+#   German nouns are capitalized, and Hunspell's compound rules are
+#   case-sensitive, but the frequency corpus is all-lowercase. So for
+#   German a word that fails lowercase is re-tried capitalized
+#   (Title-case); if THAT passes, the (lowercase) word is accepted. This
+#   alone rescues a large fraction of common German compounds
+#   (Hausarzt, Krankenhaus, Geburtstag, ...) that would otherwise be
+#   invisible to the correction engine. This rescue is intentionally
+#   NOT applied to Spanish/English: there it mostly just lets in
+#   proper names (Mike, Sam, John, ...) that the subtitle-based
+#   frequency corpus is full of, which is noise for a general dictionary.
+#
+# How "most used daily" is decided
+# ---------------------------------
+#   Accepted words are ranked by real-world frequency and taken from the
+#   top until they cover COVERAGE_TARGET of the USAGE of all accepted
+#   words (not raw word count), or MAX_WORDS is hit. So vocabulary size
+#   is a RESULT of how much everyday usage is covered, never a fixed
+#   number chosen up front.
+#   A small curated whitelist (voseo, English contractions, basic
+#   German function words/greetings) is always included on top of that.
+#
+# How the 10 MB limit is enforced
+# --------------------------------
+#   The delete index is what grows into millions of lines, so it gets
+#   whatever is left of TOTAL_BUDGET_BYTES after the vocabularies and
+#   metadata, split between languages by vocabulary size. Inside its
+#   budget an index is filled strictly by frequency (most used words
+#   first, with the most frequent words also getting 2-typo correction,
+#   not just 1-typo), so the budget only ever cuts the rare tail. The
+#   build fails loudly if the total would exceed TOTAL_BUDGET_BYTES.
+#
+# Requirements: curl, python3, hunspell (the spellchecker CLI, not just
+# hunspell-tools -- Debian/Ubuntu: `apt-get install hunspell`).
+#
+# Optional environment overrides:
+#   TOTAL_BUDGET_BYTES   hard cap for all generated assets   (12500000)
+#   COVERAGE_TARGET      share of everyday usage to cover     (0.995)
+#   MAX_WORDS            hard cap of words per language       (70000)
+#   DE_FREQUENCY_SOURCE  frequencywords | leipzig             (frequencywords)
+#   FORCE_DOWNLOAD       1 = ignore the download cache        (0)
+
+set -euo pipefail
+
+export LC_ALL=C
+export LANG=C
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
+ROOT_DIR="$(
+    cd "$(dirname "${BASH_SOURCE[0]}")/.." &&
+    pwd
+)"
+
+WORK_DIR="${ROOT_DIR}/build/pocketboard-dictionaries"
+OUTPUT_DIR="${ROOT_DIR}/app/src/main/assets/dictionaries"
+
+WOOORM_BASE="https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries"
+FREQUENCY_BASE="https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018"
+LEIPZIG_BASE="${LEIPZIG_BASE:-https://downloads.wortschatz-leipzig.de/corpora}"
+
+ES_DIR="${WORK_DIR}/es-AR"
+EN_DIR="${WORK_DIR}/en-en"
+DE_DIR="${WORK_DIR}/de-de"
+
+# ============================================================
+# SIZE BUDGET
+# ============================================================
+
+TOTAL_BUDGET_BYTES="${TOTAL_BUDGET_BYTES:-12500000}"
+
+# Head-room kept free inside the total budget (percent of the index share).
+INDEX_MARGIN_PERCENT=2
+
+# Below this the correction index would be useless: fail loudly instead.
+MIN_TOTAL_INDEX_BYTES=1000000
+
+# ============================================================
+# VOCABULARY SELECTION
+# ============================================================
+
+COVERAGE_TARGET="${COVERAGE_TARGET:-0.995}"
+MAX_WORDS="${MAX_WORDS:-70000}"
+MIN_WORDS=5000
+
+# Whitelisted words that have no corpus frequency are treated as if they
+# ranked at this position (keeps them inside the correction index).
+WHITELIST_RANK_FLOOR=2000
+
+DE_FREQUENCY_SOURCE="${DE_FREQUENCY_SOURCE:-frequencywords}"
+FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
+
+# ============================================================
+# DELETE INDEX POLICY
+# ============================================================
+
+# Share of each language's index budget reserved for distance-2 (2-typo)
+# deletes of its most frequent words; the rest only gets distance-1.
+# How many words that buys is NOT fixed -- it keeps going, most frequent
+# word first, until this share of the budget is used up.
+DISTANCE2_BUDGET_SHARE=0.20
+
+# These three must match DictionaryManager.java.
+MAX_DELETE_DISTANCE=2
+MAX_DELETE_WORD_LENGTH=32
+MAX_CANDIDATES_PER_DELETE=3
+
+# ============================================================
+# REQUIRED COMMANDS
+# ============================================================
+
+require_command() {
+    local command_name="$1"
+    local hint="${2:-}"
+
+    if ! command -v "${command_name}" >/dev/null 2>&1; then
+        echo "ERROR: command not found: ${command_name}"
+        if [[ -n "${hint}" ]]; then
+            echo "       ${hint}"
+        fi
+        exit 1
+    fi
 }
+
+require_command curl
+require_command python3
+require_command grep
+require_command wc
+require_command tail
+require_command head
+require_command cut
+
+require_command hunspell \
+    "Debian/Ubuntu: sudo apt-get install hunspell"
+
+if [[ "${DE_FREQUENCY_SOURCE}" == "leipzig" ]]; then
+    require_command tar
+    require_command find
+fi
+
+case "${DE_FREQUENCY_SOURCE}" in
+    frequencywords|leipzig) ;;
+    *)
+        echo "ERROR: DE_FREQUENCY_SOURCE must be 'frequencywords' or 'leipzig'"
+        exit 1
+        ;;
+esac
+
+mkdir -p "${ES_DIR}" "${EN_DIR}" "${DE_DIR}" "${OUTPUT_DIR}"
+
+# ============================================================
+# DOWNLOAD (cached in build/, so local rebuilds stay offline)
+# ============================================================
+
+download() {
+    local url="$1"
+    local destination="$2"
+
+    if [[ -s "${destination}" && "${FORCE_DOWNLOAD}" != "1" ]]; then
+        echo "Cached: ${destination#"${ROOT_DIR}"/}"
+        return 0
+    fi
+
+    echo "Downloading: ${url}"
+
+    # Download to a temporary name so an interrupted transfer is never
+    # mistaken for a complete cached file.
+    curl \
+        --fail \
+        --location \
+        --silent \
+        --show-error \
+        --retry 4 \
+        --retry-delay 2 \
+        --connect-timeout 30 \
+        --max-time 600 \
+        -A "PocketBoard-Build" \
+        -o "${destination}.part" \
+        "${url}"
+
+    if [[ ! -s "${destination}.part" ]]; then
+        echo "ERROR: empty download: ${url}"
+        rm -f "${destination}.part"
+        exit 1
+    fi
+
+    mv -f "${destination}.part" "${destination}"
+}
+
+banner() {
+    echo ""
+    echo "============================================================"
+    echo " $1"
+    echo "============================================================"
+}
+
+# ============================================================
+# SOURCES
+# ============================================================
+
+banner "Downloading Hunspell dictionaries and frequency lists"
+
+download "${WOOORM_BASE}/es-AR/index.dic" "${ES_DIR}/index.dic"
+download "${WOOORM_BASE}/es-AR/index.aff" "${ES_DIR}/index.aff"
+download "${WOOORM_BASE}/en/index.dic"    "${EN_DIR}/index.dic"
+download "${WOOORM_BASE}/en/index.aff"    "${EN_DIR}/index.aff"
+download "${WOOORM_BASE}/de/index.dic"    "${DE_DIR}/index.dic"
+download "${WOOORM_BASE}/de/index.aff"    "${DE_DIR}/index.aff"
+
+# Spoken/everyday frequency (OpenSubtitles based).
+download "${FREQUENCY_BASE}/es/es_full.txt" "${ES_DIR}/frequency.txt"
+download "${FREQUENCY_BASE}/en/en_full.txt" "${EN_DIR}/frequency.txt"
+
+if [[ "${DE_FREQUENCY_SOURCE}" == "leipzig" ]]; then
+    # Written/news German (Leipzig Corpora Collection).
+    # Lines look like:  <rank><TAB><word><TAB><count>
+    LEIPZIG_ARCHIVE="${DE_DIR}/deu_news_2025_1M.tar.gz"
+    LEIPZIG_DIR="${DE_DIR}/leipzig"
+
+    download "${LEIPZIG_BASE}/deu_news_2025_1M.tar.gz" "${LEIPZIG_ARCHIVE}"
+
+    rm -rf "${LEIPZIG_DIR}"
+    mkdir -p "${LEIPZIG_DIR}"
+    tar -xzf "${LEIPZIG_ARCHIVE}" -C "${LEIPZIG_DIR}"
+
+    DE_FREQUENCY_FILE="$(
+        find "${LEIPZIG_DIR}" -type f -name '*-words.txt' | head -n 1
+    )"
+
+    if [[ -z "${DE_FREQUENCY_FILE}" ]]; then
+        echo "ERROR: Leipzig word-frequency file not found."
+        find "${LEIPZIG_DIR}" -maxdepth 4 -type f -print
+        exit 1
+    fi
+else
+    download "${FREQUENCY_BASE}/de/de_full.txt" "${DE_DIR}/frequency.txt"
+    DE_FREQUENCY_FILE="${DE_DIR}/frequency.txt"
+fi
+
+# ============================================================
+# WHITELISTS
+# ============================================================
+#
+# Always shipped, even when Hunspell or the corpus does not know them.
+# Accents and umlauts are deliberately preserved.
+#
+# English lists ONLY forms with the apostrophe. Apostrophe-less forms
+# ("dont", "im", "isnt") are intentionally absent: if they were valid
+# words the checker would stop correcting them to "don't", "i'm", ...
+#
+# ============================================================
+
+cat > "${ES_DIR}/whitelist.txt" <<'EOF'
+vos
+tenés
+podés
+querés
+hacés
+sabés
+venís
+decís
+estás
+sos
+dás
+vas
+ves
+oís
+reís
+acá
+allá
+ahí
+aquí
+cómo
+cuándo
+cuánto
+cuánta
+cuántos
+cuántas
+qué
+quién
+quiénes
+dónde
+adónde
+también
+más
+sí
+tú
+él
+día
+días
+mañana
+año
+años
+EOF
+
+cat > "${EN_DIR}/whitelist.txt" <<'EOF'
+i
+i'm
+i've
+i'll
+i'd
+you're
+you've
+you'll
+you'd
+he's
+he'll
+he'd
+she's
+she'll
+she'd
+it's
+it'll
+it'd
+we're
+we've
+we'll
+we'd
+they're
+they've
+they'll
+they'd
+that's
+that'll
+there's
+here's
+what's
+who's
+where's
+how's
+let's
+o'clock
+aren't
+can't
+couldn't
+didn't
+doesn't
+don't
+hadn't
+hasn't
+haven't
+isn't
+mustn't
+shouldn't
+wasn't
+weren't
+won't
+wouldn't
+EOF
+
+cat > "${DE_DIR}/whitelist.txt" <<'EOF'
+ich
+du
+er
+sie
+wir
+ihr
+mir
+mich
+dir
+dich
+uns
+euch
+nicht
+kein
+keine
+keinen
+keinem
+keiner
+einen
+einem
+einer
+über
+für
+mit
+von
+zum
+zur
+dass
+wie
+was
+wer
+wann
+wo
+warum
+heute
+morgen
+gestern
+entschuldigung
+wahrscheinlich
+möglicherweise
+natürlich
+wirklich
+schon
+noch
+sehr
+bitte
+danke
+hallo
+tschüss
+EOF
+
+# ============================================================
+# STOPLISTS
+# ============================================================
+#
+# The English frequency list splits contractions at the apostrophe, so
+# "don't" is counted as "don" + "t". Those fragments would rank among
+# the most frequent "words" without being words. The real contractions
+# come from the whitelist above.
+#
+# ============================================================
+
+cat > "${EN_DIR}/stoplist.txt" <<'EOF'
+s
+t
+ll
+re
+ve
+d
+m
+don
+didn
+doesn
+isn
+wasn
+aren
+weren
+couldn
+wouldn
+shouldn
+hasn
+haven
+hadn
+mustn
+needn
+ain
+EOF
+
+: > "${ES_DIR}/stoplist.txt"
+: > "${DE_DIR}/stoplist.txt"
+
+# ============================================================
+# PYTHON HELPER
+# ============================================================
+
+BUILDER="${WORK_DIR}/pocketboard_dictionary_builder.py"
+
+cat > "${BUILDER}" <<'PY'
+import json
+import subprocess
+import sys
+
+MAX_WORD_LENGTH = 32
+
+# Hunspell-checking the whole raw frequency file (easily 1-1.6 million
+# lines) is unnecessary and slow: real vocabularies top out in the tens
+# of thousands of words. Capped at the (already frequency-sorted)
+# candidate-building step above, so this only ever trims corpus noise.
+MAX_CANDIDATE_POOL = 300000
+
+
+def word_shape_ok(word):
+    """Same character rules as DictionaryManager.isValidWord()."""
+    if not 1 <= len(word) <= MAX_WORD_LENGTH:
+        return False
+    if word[0] in "'-" or word[-1] in "'-":
+        return False
+    previous = ""
+    for ch in word:
+        if ch in "'-":
+            if previous in ("'", "-"):
+                return False
+        elif not ch.isalpha():
+            return False
+        previous = ch
+    return True
+
+
+def is_stutter_artifact(word):
+    """Rejects "no-no", "ich-ich-ich", "que-que"-style reduplication.
+
+    Subtitle-derived frequency corpora transcribe stammered/repeated
+    speech this way ("no-no-no se", "ich-ich-ich weiss nicht"), and
+    hunspell checks a hyphenated word SEGMENT BY SEGMENT -- so
+    "no-no" passes as "correctly spelled" purely because "no" does,
+    even though "no-no" itself is not a real word. This is the one
+    shape hunspell's hyphen handling cannot catch on its own, so it
+    is rejected explicitly, before hunspell ever sees the candidate.
+
+    A genuine hyphenated word (e-mail, online-shop) has DIFFERENT
+    segments and is unaffected.
+    """
+    if "-" not in word:
+        return False
+    parts = word.split("-")
+    return any(parts[i] == parts[i - 1] for i in range(1, len(parts)))
+
+
+def load_frequency(path):
+    """word -> total count, case-insensitive.
+
+    Accepts both "word count" (FrequencyWords) and
+    "rank word count" (Leipzig) lines.
+    """
+    counts = {}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            parts = raw.split()
+            if len(parts) < 2 or not parts[-1].isdigit():
+                continue
+            word = next((p for p in parts[:-1] if not p.isdigit()), None)
+            if word is None:
+                continue
+            word = word.lower()
+            counts[word] = counts.get(word, 0) + int(parts[-1])
+    return counts
+
+
+def load_word_list(path):
+    words, seen = [], set()
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            w = raw.strip().lower()
+            if w and not w.startswith("#") and w not in seen:
+                seen.add(w)
+                words.append(w)
+    return words
+
+
+def hunspell_valid(words, dic_base):
+    """Which of `words` does the REAL hunspell spellchecker accept.
+
+    Unlike `unmunch`, this runs the actual checker, so compound words
+    (COMPOUNDBEGIN/MIDDLE/END, important for German) and cross-affix
+    rules are honoured correctly instead of silently dropped.
+    """
+    if not words:
+        return set()
+    result = subprocess.run(
+        ["hunspell", "-d", dic_base, "-i", "utf-8", "-l"],
+        input="\n".join(words),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    misspelled = set(result.stdout.split())
+    return set(words) - misspelled
+
+
+def cmd_vocab(args):
+    (language, frequency_path, dic_base, whitelist_path, stoplist_path,
+     single_letters, titlecase_rescue, coverage, max_words, min_words,
+     floor_rank, vocab_path, report_path) = args
+
+    titlecase_rescue = titlecase_rescue == "1"
+    coverage = float(coverage)
+    max_words = int(max_words)
+    min_words = int(min_words)
+    floor_rank = int(floor_rank)
+    singles = set(single_letters) - {","}
+
+    stop = set(load_word_list(stoplist_path))
+    whitelist = [w for w in load_word_list(whitelist_path) if word_shape_ok(w)]
+    frequency = load_frequency(frequency_path)
+
+    def usable(w):
+        if w in stop:
+            return False
+        if len(w) == 1 and w not in singles:
+            return False
+        if is_stutter_artifact(w):
+            return False
+        return True
+
+    # A raw frequency list runs into the millions of lines (most of it
+    # one-off corpus noise: typos, foreign text, name spelling
+    # variants...). Checking every single one against hunspell is both
+    # slow and pointless -- nothing past the most-used few hundred
+    # thousand words will ever survive the coverage cutoff below.
+    # Candidates are picked by FREQUENCY first (most used word first),
+    # THEN capped, so the cap only ever cuts the already-irrelevant
+    # tail, never a word actually in contention for the vocabulary.
+    by_frequency = sorted(frequency.items(), key=lambda item: -item[1])
+    candidates = [
+        w for w, _ in by_frequency
+        if word_shape_ok(w) and usable(w)
+    ][:MAX_CANDIDATE_POOL]
+
+    valid = hunspell_valid(candidates, dic_base)
+    rescued = set()
+    if titlecase_rescue:
+        # German nouns are capitalized and Hunspell's compound rules are
+        # case-sensitive; the lowercase frequency corpus hides a large
+        # share of valid compounds (Hausarzt, Krankenhaus...) unless we
+        # also try them capitalized.
+        failed = [w for w in candidates if w not in valid]
+        titled = [w[:1].upper() + w[1:] for w in failed]
+        titled_ok = hunspell_valid(titled, dic_base)
+        rescued = {w for w, t in zip(failed, titled) if t in titled_ok}
+    valid |= rescued
+
+    ranked = sorted(
+        ((w, frequency[w]) for w in valid),
+        key=lambda item: (-item[1], item[0]),
+    )
+    total_mass = sum(c for _, c in ranked)
+
+    selected, accumulated = [], 0
+    for word, count in ranked:
+        if len(selected) >= max_words:
+            break
+        if len(selected) >= min_words and accumulated >= coverage * total_mass:
+            break
+        selected.append((word, count))
+        accumulated += count
+
+    cutoff_count = selected[-1][1] if selected else 0
+    floor_count = (
+        selected[min(floor_rank, len(selected) - 1)][1] if selected else 1
+    )
+
+    present = {w for w, _ in selected}
+    forced = []
+    for w in whitelist:
+        if w in present:
+            continue
+        selected.append((w, frequency.get(w) or floor_count))
+        present.add(w)
+        forced.append(w)
+
+    selected.sort(key=lambda item: (-item[1], item[0]))
+
+    with open(vocab_path, "w", encoding="utf-8") as out:
+        for word, count in selected:
+            out.write("%s\t%d\n" % (word, count))
+
+    report = {
+        "language": language,
+        "candidates": len(candidates),
+        "valid_by_hunspell": len(valid) - len(rescued),
+        "rescued_titlecase": len(rescued),
+        "words": len(selected),
+        "usage_coverage": round(accumulated / total_mass, 4) if total_mass else 0,
+        "min_corpus_count": cutoff_count,
+        "added_from_whitelist": len(forced),
+    }
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False)
+    print(json.dumps(report, ensure_ascii=False))
+
+
+def deletes_of(word, distance):
+    current, result = {word}, set()
+    for _ in range(distance):
+        following = set()
+        for item in current:
+            for i in range(len(item)):
+                candidate = item[:i] + item[i + 1:]
+                if candidate:
+                    result.add(candidate)
+                    following.add(candidate)
+        current = following
+    return result
+
+
+def cmd_index(args):
+    (language, vocab_path, index_path, budget, distance2_share,
+     max_candidates, max_distance, max_word_length, report_path) = args
+
+    budget = int(budget)
+    distance2_share = float(distance2_share)
+    max_candidates = int(max_candidates)
+    max_distance = int(max_distance)
+    max_word_length = int(max_word_length)
+
+    words = []
+    with open(vocab_path, encoding="utf-8") as f:
+        for raw in f:
+            word, count = raw.rstrip("\n").split("\t")
+            words.append((word, int(count)))       # frequency order
+
+    header = (
+        "#POCKETBOARD-DELETES-1\n"
+        "#MAX_DISTANCE=%d\n"
+        "#MAX_WORD_LENGTH=%d\n"
+        "#MAX_CANDIDATES=%d\n"
+        % (max_distance, max_word_length, max_candidates)
+    )
+    state = {"used": len(header.encode("utf-8"))}
+    buckets = {}
+
+    def try_add(word, distance, limit):
+        """All-or-nothing: a word is either fully indexed or not at all."""
+        word_bytes = len(word.encode("utf-8")) + 2
+        added, cost = [], 0
+        for d in deletes_of(word, distance):
+            bucket = buckets.get(d)
+            if bucket is not None and (
+                    len(bucket) >= max_candidates or word in bucket):
+                continue
+            added.append(d)
+            cost += len(d.encode("utf-8")) + word_bytes
+        if state["used"] + cost > limit:
+            return False
+        for d in added:
+            buckets.setdefault(d, []).append(word)
+        state["used"] += cost
+        return True
+
+    eligible = [(w, c) for w, c in words if len(w) <= max_word_length]
+
+    # Tier 1: distance-2 deletes for the most frequent words, bounded only
+    # by a share of this language's budget -- NOT by a fixed word count,
+    # so it automatically uses whatever room the budget actually gives it.
+    tier1, tier1_limit = set(), int(budget * distance2_share)
+    if max_distance >= 2:
+        for word, _ in eligible:
+            if not try_add(word, 2, tier1_limit):
+                break
+            tier1.add(word)
+
+    # Tier 2: distance-1 deletes in strict frequency order until the
+    # language budget is used up. Only the rare tail is left out.
+    tier2 = 0
+    for word, _ in eligible:
+        if word in tier1:
+            continue
+        if not try_add(word, 1, budget):
+            break
+        tier2 += 1
+
+    with open(index_path, "w", encoding="utf-8") as out:
+        out.write(header)
+        for d in sorted(buckets):
+            # Keep each bucket's candidates in FREQUENCY order (most
+            # frequent word for that delete-key first) -- do not
+            # re-sort alphabetically, that would throw the ranking away.
+            for w in buckets[d]:
+                out.write("%s\t%s\n" % (d, w))
+
+    indexed = len(tier1) + tier2
+    mass = sum(c for _, c in words) or 1
+    covered = sum(c for _, c in eligible[:indexed])
+
+    report = {
+        "language": language,
+        "vocabulary": len(words),
+        "indexed_words": indexed,
+        "distance2_words": len(tier1),
+        "usage_covered_by_index": round(covered / mass, 4),
+        "mappings": sum(len(v) for v in buckets.values()),
+        "bytes": state["used"],
+        "budget": budget,
+    }
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f)
+    print(json.dumps(report))
+
+
+COMMANDS = {"vocab": cmd_vocab, "index": cmd_index}
+
+if __name__ == "__main__":
+    COMMANDS[sys.argv[1]](sys.argv[2:])
+PY
+
+# ============================================================
+# BUILD VOCABULARIES
+# ============================================================
+
+build_vocabulary() {
+    local language="$1"
+    local directory="$2"
+    local frequency="$3"
+    local single_letters="$4"
+    local titlecase_rescue="$5"
+    local output="$6"
+
+    banner "Selecting everyday vocabulary: ${language}"
+
+    python3 "${BUILDER}" vocab \
+        "${language}" \
+        "${frequency}" \
+        "${directory}/index" \
+        "${directory}/whitelist.txt" \
+        "${directory}/stoplist.txt" \
+        "${single_letters}" \
+        "${titlecase_rescue}" \
+        "${COVERAGE_TARGET}" \
+        "${MAX_WORDS}" \
+        "${MIN_WORDS}" \
+        "${WHITELIST_RANK_FLOOR}" \
+        "${directory}/vocabulary.tsv" \
+        "${directory}/vocabulary.json"
+
+    if [[ ! -s "${directory}/vocabulary.tsv" ]]; then
+        echo "ERROR: empty vocabulary for ${language}"
+        exit 1
+    fi
+
+    # The runtime expects a sorted, unique word list. Each line also
+    # carries the word's 1-based frequency rank (1 = most used) as a
+    # second, tab-separated field: vocabulary.tsv is already sorted
+    # most-frequent-first, so its line number IS that rank. The rank
+    # lets DictionaryManager break correction ties by real usage
+    # instead of alphabetical order -- the loader already tolerated an
+    # (until now unused) "word<TAB>extra" second column.
+    {
+        echo "#POCKETBOARD-DICT-1"
+        awk -F'\t' '{ print $1 "\t" NR }' "${directory}/vocabulary.tsv" |
+            LC_ALL=C sort -t "$(printf '\t')" -k1,1 -u
+    } > "${output}"
+
+    echo "Words: $(tail -n +2 "${output}" | wc -l)"
+    echo "Bytes: $(wc -c < "${output}")"
+}
+
+build_vocabulary "es-AR" "${ES_DIR}" "${ES_DIR}/frequency.txt" \
+    "a,e,o,u,y" "0" "${OUTPUT_DIR}/es-AR.dict"
+
+build_vocabulary "en-en" "${EN_DIR}" "${EN_DIR}/frequency.txt" \
+    "a,i" "0" "${OUTPUT_DIR}/en-en.dict"
+
+build_vocabulary "de-de" "${DE_DIR}" "${DE_FREQUENCY_FILE}" \
+    "" "1" "${OUTPUT_DIR}/de-de.dict"
+
+# ============================================================
+# METADATA
+# ============================================================
+
+generate_metadata() {
+    local language="$1"
+    local aff="$2"
+    local output="$3"
+
+    {
+        echo "#POCKETBOARD-META-1"
+        echo "# REP"
+        grep -E '^REP([[:space:]]|$)' "${aff}" || true
+        echo "# KEY"
+        grep -E '^KEY([[:space:]]|$)' "${aff}" || true
+        echo "# TRY"
+        grep -E '^TRY([[:space:]]|$)' "${aff}" || true
+        echo "# PHONE"
+        grep -E '^PHONE([[:space:]]|$)' "${aff}" || true
+        echo "# ph"
+        grep -E '^ph:' "${aff}" || true
+        echo "# NOSUGGEST"
+        grep -E '^NOSUGGEST([[:space:]]|$)' "${aff}" || true
+        echo "# SUBSTANDARD"
+        grep -E '^SUBSTANDARD([[:space:]]|$)' "${aff}" || true
+    } > "${output}"
+
+    if [[ ! -s "${output}" ]]; then
+        echo "ERROR: metadata generation failed: ${language}"
+        exit 1
+    fi
+}
+
+generate_metadata "es-AR" "${ES_DIR}/index.aff" "${OUTPUT_DIR}/es-AR.meta"
+generate_metadata "en-en" "${EN_DIR}/index.aff" "${OUTPUT_DIR}/en-en.meta"
+generate_metadata "de-de" "${DE_DIR}/index.aff" "${OUTPUT_DIR}/de-de.meta"
+
+# ============================================================
+# SPLIT THE SIZE BUDGET
+# ============================================================
+#
+# index budget = total budget - vocabularies - metadata - margin,
+# divided between languages in proportion to their vocabulary size.
+#
+# ============================================================
+
+file_size() {
+    wc -c < "$1" | tr -d '[:space:]'
+}
+
+word_count() {
+    tail -n +2 "$1" | wc -l | tr -d '[:space:]'
+}
+
+LANGUAGES=("es-AR" "en-en" "de-de")
+
+FIXED_BYTES=0
+TOTAL_WORDS=0
+
+for language in "${LANGUAGES[@]}"; do
+    FIXED_BYTES=$((
+        FIXED_BYTES +
+        $(file_size "${OUTPUT_DIR}/${language}.dict") +
+        $(file_size "${OUTPUT_DIR}/${language}.meta")
+    ))
+    TOTAL_WORDS=$((
+        TOTAL_WORDS + $(word_count "${OUTPUT_DIR}/${language}.dict")
+    ))
+done
+
+TOTAL_INDEX_BYTES=$((
+    (TOTAL_BUDGET_BYTES - FIXED_BYTES) *
+    (100 - INDEX_MARGIN_PERCENT) / 100
+))
+
+banner "Size budget"
+echo "Total budget:      ${TOTAL_BUDGET_BYTES} bytes"
+echo "Vocab + metadata:  ${FIXED_BYTES} bytes"
+echo "Correction index:  ${TOTAL_INDEX_BYTES} bytes available"
+
+if (( TOTAL_INDEX_BYTES < MIN_TOTAL_INDEX_BYTES )); then
+    echo ""
+    echo "ERROR: not enough budget left for the correction indexes."
+    echo "       Lower COVERAGE_TARGET / MAX_WORDS or raise TOTAL_BUDGET_BYTES."
+    exit 1
+fi
+
+# ============================================================
+# BUILD CORRECTION INDEXES
+# ============================================================
+
+build_index() {
+    local language="$1"
+    local directory="$2"
+
+    local words
+    words="$(word_count "${OUTPUT_DIR}/${language}.dict")"
+
+    local budget=$(( TOTAL_INDEX_BYTES * words / TOTAL_WORDS ))
+
+    banner "Correction index: ${language} (budget ${budget} bytes)"
+
+    python3 "${BUILDER}" index \
+        "${language}" \
+        "${directory}/vocabulary.tsv" \
+        "${OUTPUT_DIR}/${language}.deletes" \
+        "${budget}" \
+        "${DISTANCE2_BUDGET_SHARE}" \
+        "${MAX_CANDIDATES_PER_DELETE}" \
+        "${MAX_DELETE_DISTANCE}" \
+        "${MAX_DELETE_WORD_LENGTH}" \
+        "${directory}/index.json"
+}
+
+build_index "es-AR" "${ES_DIR}"
+build_index "en-en" "${EN_DIR}"
+build_index "de-de" "${DE_DIR}"
+
+# ============================================================
+# WORD DIAGNOSTICS (warnings only)
+# ============================================================
+
+check_word() {
+    local language="$1"
+    local word="$2"
+
+    if grep -Fq -- "$(printf '%s\t' "${word}")" \
+        <(tail -n +2 "${OUTPUT_DIR}/${language}.dict"); then
+        echo "OK: ${language}: ${word}"
+    else
+        echo "WARNING: word not selected: ${language}: ${word}"
+    fi
+}
+
+banner "Word diagnostics"
+
+for word in mañana vos tenés podés hacés acá hago hacer veré \
+    aplicación disponible bolsillo; do
+    check_word "es-AR" "${word}"
+done
+
+for word in the have hello world "don't" "i'm" "it's" "can't"; do
+    check_word "en-en" "${word}"
+done
+
+for word in ich nicht morgen hallo welt entschuldigung wahrscheinlich \
+    möglicherweise krankenhaus hausarzt geburtstag; do
+    check_word "de-de" "${word}"
+done
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+validate_generated_asset() {
+    local file="$1"
+    local expected_header="$2"
+
+    if [[ ! -s "${file}" ]]; then
+        echo "ERROR: generated asset is empty: ${file}"
+        exit 1
+    fi
+
+    local header
+    header="$(head -n 1 "${file}" | tr -d '\r')"
+
+    if [[ "${header}" != "${expected_header}" ]]; then
+        echo "ERROR: invalid generated asset header: ${file}"
+        echo "Expected: ${expected_header}"
+        echo "Found:    ${header}"
+        exit 1
+    fi
+}
+
+banner "Validating generated assets"
+
+for language in "${LANGUAGES[@]}"; do
+    validate_generated_asset "${OUTPUT_DIR}/${language}.dict"    "#POCKETBOARD-DICT-1"
+    validate_generated_asset "${OUTPUT_DIR}/${language}.meta"    "#POCKETBOARD-META-1"
+    validate_generated_asset "${OUTPUT_DIR}/${language}.deletes" "#POCKETBOARD-DELETES-1"
+    echo "OK: ${language}"
+done
+
+# ============================================================
+# FINAL SIZE REPORT
+# ============================================================
+
+banner "PocketBoard dictionary build summary"
+
+TOTAL_GENERATED_BYTES=0
+
+for language in "${LANGUAGES[@]}"; do
+    dictionary="${OUTPUT_DIR}/${language}.dict"
+    deletes="${OUTPUT_DIR}/${language}.deletes"
+    metadata="${OUTPUT_DIR}/${language}.meta"
+
+    dictionary_size="$(file_size "${dictionary}")"
+    delete_size="$(file_size "${deletes}")"
+    metadata_size="$(file_size "${metadata}")"
+    language_total=$(( dictionary_size + delete_size + metadata_size ))
+
+    TOTAL_GENERATED_BYTES=$(( TOTAL_GENERATED_BYTES + language_total ))
+
+    echo ""
+    echo "${language}"
+    echo "  Words:           $(word_count "${dictionary}")"
+    echo "  Dictionary:      ${dictionary_size} bytes"
+    echo "  Delete index:    ${delete_size} bytes ($(tail -n +5 "${deletes}" | wc -l | tr -d '[:space:]') mappings)"
+    echo "  Metadata:        ${metadata_size} bytes"
+    echo "  Total:           ${language_total} bytes"
+done
+
+echo ""
+echo "All languages:     ${TOTAL_GENERATED_BYTES} bytes"
+echo "Budget:            ${TOTAL_BUDGET_BYTES} bytes"
+
+if command -v gzip >/dev/null 2>&1; then
+    COMPRESSED_BYTES="$(
+        cat "${OUTPUT_DIR}"/*.dict "${OUTPUT_DIR}"/*.deletes "${OUTPUT_DIR}"/*.meta |
+        gzip -9 -c |
+        wc -c |
+        tr -d '[:space:]'
+    )"
+    echo "Compressed (~APK): ${COMPRESSED_BYTES} bytes"
+fi
+
+if (( TOTAL_GENERATED_BYTES > TOTAL_BUDGET_BYTES )); then
+    echo ""
+    echo "ERROR: generated assets exceed the total budget."
+    exit 1
+fi
+
+echo "Status: OK"
+echo ""
+echo "PocketBoard dictionaries generated successfully"
