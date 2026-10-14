@@ -206,7 +206,20 @@ public class CharacterUtils {
             return CapitalizationType.NONE;
         }
 
-        if (str.codePoints().allMatch(Character::isUpperCase)) {
+        /*
+         * A letter must be uppercase to count; anything without case
+         * (digits, apostrophe, hyphen...) doesn't break an all-caps
+         * word. Without the isLetter() allowance, "DON'T" or "COVID19"
+         * would be misread as FIRST_UPPER instead of ALL_UPPER, since
+         * isUpperCase() is false for the apostrophe/digits even
+         * though the word is clearly meant as all-caps.
+         */
+        boolean allUpper =
+                str.codePoints().allMatch(cp ->
+                        Character.isUpperCase(cp) ||
+                                !Character.isLetter(cp));
+
+        if (allUpper) {
             return CapitalizationType.ALL_UPPER;
         } else {
             return CapitalizationType.FIRST_UPPER;
