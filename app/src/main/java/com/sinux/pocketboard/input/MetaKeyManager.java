@@ -48,7 +48,12 @@ public class MetaKeyManager {
 
         callStateListener = new CallStateListener();
         TelephonyManager tm = getTelephonyManager();
-        if (tm != null) {
+        // Phone control defaults to OFF (isPhoneControlEnabled()), so
+        // only register here if the user already turned it on in a
+        // previous session; this also matches the preference-change
+        // listener below, which only registers while the setting is
+        // actually enabled.
+        if (tm != null && preferencesHolder.isPhoneControlEnabled()) {
             callStateListener.register(pocketBoardIME, tm);
         }
 
