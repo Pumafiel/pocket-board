@@ -107,34 +107,32 @@ jobs:
             validatePocketBoardDictionaries
 
       # -------------------------------------------------------
-      # Generate temporary release keystore
+      # Restore the permanent release keystore
       # -------------------------------------------------------
-      - name: Generate release keystore
+      # Every previous run of this workflow generated a BRAND NEW,
+      # random keystore here, so every release was signed with a
+      # different certificate and Android refused to install any
+      # of them as an update over the last one. This decodes the
+      # one, permanent keystore stored in the repo's secrets
+      # instead, so every build is signed identically.
+      - name: Restore release keystore
         shell: bash
         run: |
           set -euo pipefail
 
           KEYSTORE="$RUNNER_TEMP/pocketboard-release.keystore"
 
-          keytool \
-            -genkeypair \
-            -v \
-            -keystore "$KEYSTORE" \
-            -storetype PKCS12 \
-            -alias pocketboard \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass pocketboard \
-            -keypass pocketboard \
-            -dname "CN=PocketBoard, OU=PocketBoard, O=PocketBoard, L=Buenos Aires, ST=Buenos Aires, C=AR"
+          echo "${{ secrets.POCKETBOARD_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE"
 
-          test -f "$KEYSTORE"
+          test -s "$KEYSTORE"
 
           echo "POCKETBOARD_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
-          echo "POCKETBOARD_KEYSTORE_PASSWORD=pocketboard" >> "$GITHUB_ENV"
+          echo "POCKETBOARD_KEYSTORE_PASSWORD=${{ secrets.POCKETBOARD_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
           echo "POCKETBOARD_KEY_ALIAS=pocketboard" >> "$GITHUB_ENV"
-          echo "POCKETBOARD_KEY_PASSWORD=pocketboard" >> "$GITHUB_ENV"
+          # PKCS12 keystores use one password for both the store and
+          # the key inside it (keytool enforces this), so this is
+          # deliberately the same secret as above.
+          echo "POCKETBOARD_KEY_PASSWORD=${{ secrets.POCKETBOARD_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
 
       # -------------------------------------------------------
       # Build ONLY Release
