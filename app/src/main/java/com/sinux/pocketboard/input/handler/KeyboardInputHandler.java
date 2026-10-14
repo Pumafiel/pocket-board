@@ -1022,9 +1022,24 @@ public class KeyboardInputHandler {
             boolean sameKey =
                     lastKeyCode == keyCode;
 
-            boolean shortPress =
-                    eventTime - lastKeyDownTime
-                            <= keyLongPressDuration;
+            /*
+             * Whether this press is still "fast enough" to continue
+             * a multipress sequence is decided ENTIRELY by
+             * multipressController.process() above, against its own
+             * MULTIPRESS_TIMEOUT (750ms). There used to be a second,
+             * independent check here against keyLongPressDuration
+             * (400ms, meant for long-press/ALT detection -- a
+             * completely different gesture). Being shorter than
+             * MULTIPRESS_TIMEOUT, it could silently reject a press
+             * multipressController had already accepted: the
+             * character shown would fall back to the base value
+             * while multipressController's internal index kept
+             * advancing, desynchronizing the two. The deeper into
+             * the <Add> cycle (the more consecutive fast presses
+             * required), the more likely this was to misfire --
+             * e.g. reaching a key's 2nd <Add> entry (3rd press) was
+             * far less reliable than reaching its 1st.
+             */
 
             /*
              * An explicit ALT modifier always selects the ALT
@@ -1061,7 +1076,6 @@ public class KeyboardInputHandler {
              */
             if (continuesMultipress
                     && sameKey
-                    && shortPress
                     && keyMapping
                     .hasAdditionalValues(false)) {
 
