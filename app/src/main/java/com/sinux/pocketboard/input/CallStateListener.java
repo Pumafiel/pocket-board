@@ -29,15 +29,25 @@ public final class CallStateListener {
         if (registered)
             return;
 
+        // READ_PHONE_STATE is a dangerous permission requested lazily
+        // from PreferencesFragment when the user turns phone control
+        // on, so it is very often NOT granted yet the first time the
+        // IME starts. telephonyManager.listen(..., LISTEN_CALL_STATE)
+        // throws SecurityException without it on these API levels
+        // (not just silently no-op), which used to crash the whole
+        // keyboard on first use -- this guard is why the >= S branch
+        // already checked first.
+        if (pocketBoardIME.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (pocketBoardIME.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                telephonyManager.registerTelephonyCallback(pocketBoardIME.getMainExecutor(), (Sdk35CallStateListener) listenerDelegate);
-                registered = true;
-            }
+            telephonyManager.registerTelephonyCallback(pocketBoardIME.getMainExecutor(), (Sdk35CallStateListener) listenerDelegate);
         } else {
             telephonyManager.listen((LegacyCallStateListener) listenerDelegate, PhoneStateListener.LISTEN_CALL_STATE);
-            registered = true;
         }
+
+        registered = true;
     }
 
     public void unregister(TelephonyManager telephonyManager) {
@@ -67,7 +77,7 @@ public final class CallStateListener {
     }
 
     /**
-     * Legacy API < 35 level implementation
+     * Legacy API < S (31) level implementation
      */
     private static final class LegacyCallStateListener extends PhoneStateListener implements CallListener {
 
@@ -85,7 +95,7 @@ public final class CallStateListener {
     }
 
     /**
-     * Current API >= 35 level implementation
+     * API >= S (31) level implementation
      */
     @RequiresApi(api = Build.VERSION_CODES.S)
     private static final class Sdk35CallStateListener extends TelephonyCallback implements TelephonyCallback.CallStateListener, CallListener {
