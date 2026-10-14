@@ -13,7 +13,14 @@ import com.sinux.pocketboard.utils.ToastMessageUtils;
 
 public class KeyboardMappingManager {
 
-    private static final int KEYBOARD_MAPPING_CACHE_DEPTH = 2;
+    /*
+     * One slot per language PocketBoard ships (es-AR, en-US, de-DE),
+     * plus the numeric mapping that switchToNumericKeyboardMapping()
+     * also stores here. At 2 (the previous value), cycling through
+     * all 3 languages evicted and re-parsed the XML on every single
+     * switch instead of ever reusing a cached mapping.
+     */
+    private static final int KEYBOARD_MAPPING_CACHE_DEPTH = 4;
 
     private static final String INPUT_METHOD_KEYBOARD_MAPPING =
             "KeyboardMapping";
@@ -26,6 +33,18 @@ public class KeyboardMappingManager {
 
     private static final String TITAN_DEVICE_NAME =
             "Titan_Slim";
+
+    /*
+     * InputMethodManager.getCurrentInputMethodSubtype() can return
+     * null -- no subtype has been explicitly selected yet, which
+     * happens right after the IME is first enabled, and is common on
+     * custom ROMs/GSIs. Without a fallback, the constructor would
+     * NPE on inputMethodSubtype.getExtraValueOf(...) below and crash
+     * PocketBoardIME.onCreate(), taking the whole keyboard down.
+     * This matches the first <subtype> in method.xml.
+     */
+    private static final String DEFAULT_KEYBOARD_MAPPING_FILE =
+            "en_us";
 
     private final Context context;
     private final LruCache<String, KeyboardMapping> keyboardMappings;
@@ -59,6 +78,15 @@ public class KeyboardMappingManager {
 
     public void switchToKeyboardMapping(
             InputMethodSubtype inputMethodSubtype) {
+
+        if (inputMethodSubtype == null) {
+
+            setCurrentKeyboardMapping(
+                    DEFAULT_KEYBOARD_MAPPING_FILE
+            );
+
+            return;
+        }
 
         setCurrentKeyboardMapping(
                 inputMethodSubtype
