@@ -2,6 +2,8 @@ package com.sinux.pocketboard.input.handler;
 
 import android.view.KeyEvent;
 
+import java.util.function.LongSupplier;
+
 /**
  * Detects consecutive short presses of the same physical key.
  *
@@ -27,7 +29,15 @@ import android.view.KeyEvent;
  */
 public final class MultipressController {
 
-    private static final long MULTIPRESS_TIMEOUT = 750L;
+    /*
+     * Fallback used only if no supplier is given. The real value
+     * normally comes from PreferencesHolder.getMultipressTimeout()
+     * (the "Multipress speed" setting), read fresh on every press so
+     * changing it takes effect immediately, no IME restart needed.
+     */
+    private static final long DEFAULT_MULTIPRESS_TIMEOUT = 750L;
+
+    private final LongSupplier timeoutMsSupplier;
 
     private int lastKeyCode =
             KeyEvent.KEYCODE_UNKNOWN;
@@ -35,6 +45,19 @@ public final class MultipressController {
     private long lastKeyDownTime = 0L;
 
     private int pressCount = 0;
+
+    public MultipressController() {
+        this(() -> DEFAULT_MULTIPRESS_TIMEOUT);
+    }
+
+    public MultipressController(
+            LongSupplier timeoutMsSupplier) {
+
+        this.timeoutMsSupplier =
+                timeoutMsSupplier != null
+                        ? timeoutMsSupplier
+                        : () -> DEFAULT_MULTIPRESS_TIMEOUT;
+    }
 
     public void reset() {
 
@@ -84,7 +107,7 @@ public final class MultipressController {
 
         boolean withinTimeout =
                 eventTime - lastKeyDownTime
-                        <= MULTIPRESS_TIMEOUT;
+                        <= timeoutMsSupplier.getAsLong();
 
         /*
          * Continue the existing sequence.
