@@ -72,6 +72,16 @@
             android:defaultValue="false"
             android:title="@string/ime_manual_recent_emoji_management" />
 
+        <SeekBarPreference
+            android:key="@string/ime_multipress_timeout_prefs_key"
+            android:title="@string/ime_multipress_timeout"
+            android:summary="@string/ime_multipress_timeout_summary"
+            android:defaultValue="@integer/multipress_timeout_default_value"
+            app:min="@integer/multipress_timeout_min_value"
+            android:max="@integer/multipress_timeout_max_value"
+            app:seekBarIncrement="25"
+            app:showSeekBarValue="true" />
+
     </PreferenceCategory>
 
     <PreferenceCategory
