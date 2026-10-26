@@ -61,6 +61,8 @@
     <string name="ime_virtual_touchpad">Virtual touchpad</string>
     <string name="ime_virtual_touchpad_summary">Swipe to move cursor</string>
     <string name="ime_virtual_touchpad_speed">Touchpad sensitivity</string>
+    <string name="ime_multipress_timeout">Multipress speed</string>
+    <string name="ime_multipress_timeout_summary">Max time (ms) between taps of the same key to cycle to its accented/alternate characters. Lower it if fast typing keeps landing on accents by accident.</string>
 
     <string name="ime_extra_cat">Extra</string>
     <string name="ime_extra_phone_control">Phone control</string>
@@ -153,6 +155,7 @@
     <string name="ime_show_voice_prefs_key" translatable="false">ime_prefs_show_voice</string>
     <string name="ime_virtual_touchpad_prefs_key" translatable="false">ime_prefs_virtual_touchpad</string>
     <string name="ime_virtual_touchpad_speed_prefs_key" translatable="false">ime_prefs_virtual_touchpad_speed</string>
+    <string name="ime_multipress_timeout_prefs_key" translatable="false">ime_prefs_multipress_timeout</string>
     <string name="ime_virtual_touchpad_animation_shown_prefs_key" translatable="false">ime_prefs_virtual_touchpad_animation_shown</string>
 
     <string name="ime_extra_phone_control_prefs_key" translatable="false">ime_prefs_extra_phone_control</string>
