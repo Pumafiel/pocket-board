@@ -10,6 +10,15 @@
     <integer name="virtual_touchpad_speed_min_value">1</integer>
     <integer name="virtual_touchpad_speed_max_value">10</integer>
     <integer name="virtual_touchpad_speed_default_value">5</integer>
+
+    <!-- Max gap, in ms, between presses of the SAME physical key for it
+         to still count as the next step of a multipress cycle (value,
+         Add[0], Add[1]...). Lower = less likely to land on an accented
+         character by accident when typing fast; also less time to
+         deliberately tap again for one. -->
+    <integer name="multipress_timeout_min_value">150</integer>
+    <integer name="multipress_timeout_max_value">1200</integer>
+    <integer name="multipress_timeout_default_value">750</integer>
     <integer name="virtual_touchpad_suggestions_resume_delay_ms">1000</integer>
 
     <integer-array name="recent_emoji_shortcut_key_codes">
