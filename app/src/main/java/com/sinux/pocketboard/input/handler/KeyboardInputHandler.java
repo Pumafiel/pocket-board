@@ -116,7 +116,9 @@ public class KeyboardInputHandler {
                 );
 
         this.multipressController =
-                new MultipressController();
+                new MultipressController(
+                        preferencesHolder::getMultipressTimeout
+                );
     }
 
     public void onStartInput(
