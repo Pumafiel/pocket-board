@@ -33,6 +33,7 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     private final String voiceInputShortcutKey;
     private final String virtualTouchpadKey;
     private final String virtualTouchpadSpeedKey;
+    private final String multipressTimeoutKey;
     private final String virtualTouchpadAnimationShownKey;
     private final String layoutChangeShortcutKey;
     private final String inlineSuggestionsKey;
@@ -65,6 +66,7 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
         voiceInputShortcutKey = context.getString(R.string.ime_voice_input_shortcut_prefs_key);
         virtualTouchpadKey = context.getString(R.string.ime_virtual_touchpad_prefs_key);
         virtualTouchpadSpeedKey = context.getString(R.string.ime_virtual_touchpad_speed_prefs_key);
+        multipressTimeoutKey = context.getString(R.string.ime_multipress_timeout_prefs_key);
         virtualTouchpadAnimationShownKey = context.getString(R.string.ime_virtual_touchpad_animation_shown_prefs_key);
         layoutChangeShortcutKey = context.getString(R.string.ime_layout_change_shortcut_prefs_key);
         inlineSuggestionsKey = context.getString(R.string.ime_show_inline_suggestions_prefs_key);
@@ -139,6 +141,10 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
 
     public int getVirtualTouchpadSpeed() {
         return (int) prefValues.computeIfAbsent(virtualTouchpadSpeedKey, key -> getValue(key, Integer.class, 5));
+    }
+
+    public long getMultipressTimeout() {
+        return (int) prefValues.computeIfAbsent(multipressTimeoutKey, key -> getValue(key, Integer.class, 750));
     }
 
     public boolean isLayoutChangeShortcutEnabled() {
