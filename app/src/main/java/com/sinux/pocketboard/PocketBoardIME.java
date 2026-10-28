@@ -751,7 +751,20 @@ public class PocketBoardIME extends InputMethodService {
         symPadJustUsed = true;
     }
 
-    private void updateMetaState() {
+    /**
+     * Re-reads getCursorCapsMode() and enables/disables Shift to
+     * match. Called automatically on selection changes (below), but
+     * ALSO called directly, synchronously, by KeyboardInputHandler
+     * right after it commits punctuation or a space -- see the calls
+     * from handlePunctuationCharacter() and handleSpace() there.
+     * Waiting only for onUpdateSelection (an async callback from the
+     * editor) to re-trigger this is what let auto-capitalization fall
+     * behind when typing fast: querying the InputConnection ourselves
+     * right after our own edit does not have that lag, since it is a
+     * direct, synchronous call rather than a notification the editor
+     * has to round-trip back to us.
+     */
+    public void updateMetaState() {
 
         /*
          * Auto-capitalize.
