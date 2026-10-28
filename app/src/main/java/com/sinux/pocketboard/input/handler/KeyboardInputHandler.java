@@ -805,22 +805,43 @@ public class KeyboardInputHandler {
             return;
         }
 
-        textComposer.append(
+        CharSequence word =
                 str.subSequence(
                         regionStart,
                         regionEnd
-                )
+                );
+
+        textComposer.append(
+                word
         );
 
-        int composingLength =
-                textComposer.length();
-
+        /*
+         * setComposingRegion(start, end) needs ABSOLUTE positions,
+         * which here meant trusting lastCursorPosition -- our own
+         * tracked copy of where the cursor is, kept in sync mainly by
+         * the async onUpdateSelection callback. That callback can
+         * lag behind fast typing, so lastCursorPosition could be
+         * stale by the time this ran, marking the wrong span as
+         * composing; replacing it later (e.g. with an autocorrect
+         * suggestion) would then eat into whatever text that stale
+         * span actually covered, which could reach back past the
+         * intended word into text already confirmed.
+         *
+         * deleteSurroundingText()/setComposingText() below are
+         * CURSOR-RELATIVE instead -- always relative to wherever the
+         * cursor genuinely is right now -- so this no longer depends
+         * on lastCursorPosition being accurate at all.
+         */
         inputConnection.finishComposingText();
 
-        inputConnection.setComposingRegion(
-                lastCursorPosition
-                        - composingLength,
-                lastCursorPosition
+        inputConnection.deleteSurroundingText(
+                word.length(),
+                0
+        );
+
+        inputConnection.setComposingText(
+                textComposer,
+                1
         );
     }
 
@@ -921,6 +942,13 @@ public class KeyboardInputHandler {
                     1
             );
         }
+
+        // Same reasoning as in handlePunctuationCharacter(): a space
+        // is often the other half of a sentence boundary ("word. "),
+        // so re-check capitalization right now instead of waiting on
+        // onUpdateSelection.
+        pocketBoardIME
+                .updateMetaState();
     }
 
     /**
@@ -1461,6 +1489,13 @@ public class KeyboardInputHandler {
         }
 
         inputConnection.endBatchEdit();
+
+        // Re-check auto-capitalization right now rather than waiting
+        // for onUpdateSelection: that callback can lag behind fast
+        // typing, so the very next letter (e.g. right after ". ")
+        // could get composed before Shift was actually turned on.
+        pocketBoardIME
+                .updateMetaState();
     }
 
     private void commitComposingText(
