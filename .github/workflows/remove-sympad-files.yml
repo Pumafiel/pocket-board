@@ -1,0 +1,60 @@
+name: Remove SymPad files (one-off)
+
+# Corre UNA vez a mano (Actions -> este workflow -> Run workflow) para borrar
+# los archivos de SymPad que ya no se usan, y despues se puede borrar este
+# mismo archivo. Necesita Settings -> Actions -> General -> Workflow
+# permissions = "Read and write permissions".
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete unused SymPad files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r f; do
+            [ -n "$f" ] && git rm -f --ignore-unmatch "$f"
+          done <<'LIST'
+          app/src/main/java/com/sinux/pocketboard/input/handler/SymPadInputHandler.java
+          app/src/main/java/com/sinux/pocketboard/input/mapping/SymPadMappingParser.java
+          app/src/main/java/com/sinux/pocketboard/input/mapping/SymPadKeyAction.java
+          app/src/main/java/com/sinux/pocketboard/input/mapping/SymPadMappingManager.java
+          app/src/main/java/com/sinux/pocketboard/input/mapping/SymPadKeyMappingValue.java
+          app/src/main/java/com/sinux/pocketboard/input/mapping/SymPadMapping.java
+          app/src/main/java/com/sinux/pocketboard/input/mapping/SymPadKeyMapping.java
+          app/src/main/java/com/sinux/pocketboard/preferences/SympadEditorActivity.java
+          app/src/main/java/com/sinux/pocketboard/preferences/SympadEditorKeysListSpinnerAdapter.java
+          app/src/main/java/com/sinux/pocketboard/preferences/SympadEditorPage.java
+          app/src/main/java/com/sinux/pocketboard/preferences/SympadEditorItemAdapter.java
+          app/src/main/java/com/sinux/pocketboard/preferences/SympadEditorAppSpinnerAdapter.java
+          app/src/main/java/com/sinux/pocketboard/preferences/SympadPreferencesFragment.java
+          app/src/main/res/xml/sympad_preferences.xml
+          app/src/main/res/layout/sympad_editor_page.xml
+          app/src/main/res/layout/sympad_editor_key_item_view.xml
+          app/src/main/res/layout/sympad_editor_layout.xml
+          app/src/main/res/layout/sympad_editor_list_item_view.xml
+          app/src/main/res/layout/sympad_editor_dialog_layout.xml
+          app/src/main/res/layout/sympad_editor_dropdown_item_view.xml
+          app/src/main/res/drawable/sympad_action_button_selector.xml
+          app/src/main/res/drawable/sympad_action_background.xml
+          app/src/main/res/color/sympad_action_text_selector.xml
+          LIST
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git diff --cached --quiet && { echo "Nothing to delete (already clean)."; exit 0; }
+          git commit -m "Remove SymPad and virtual touchpad leftovers"
+          git push
