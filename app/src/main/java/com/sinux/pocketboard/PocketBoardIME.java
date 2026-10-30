@@ -2,7 +2,6 @@ package com.sinux.pocketboard;
 
 import android.annotation.SuppressLint;
 import android.inputmethodservice.InputMethodService;
-import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -17,7 +16,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
 
 import com.sinux.pocketboard.input.SuggestionsManager;
-import com.sinux.pocketboard.input.handler.SymPadInputHandler;
+import com.sinux.pocketboard.input.SymbolLayer;
 import com.sinux.pocketboard.input.handler.KeyboardInputHandler;
 import com.sinux.pocketboard.input.MetaKeyManager;
 import com.sinux.pocketboard.preferences.PreferencesHolder;
@@ -34,13 +33,17 @@ public class PocketBoardIME extends InputMethodService {
     private PreferencesHolder preferencesHolder;
     private MetaKeyManager metaKeyManager;
     private KeyboardInputHandler keyboardInputHandler;
-    private SymPadInputHandler symPadInputHandler;
 
     private InputView inputView;
     private SuggestionsManager suggestionsManager;
 
     private boolean autoCapitalization;
-    private boolean symPadJustUsed;
+    private boolean symJustUsed;
+
+    // Keys whose DOWN was typed as a symbol, so their UP can be
+    // swallowed to match.
+    private final java.util.Set<Integer> symbolKeysDown =
+            new java.util.HashSet<>();
 
     private List<String> directInputEditors;
 
@@ -61,9 +64,6 @@ public class PocketBoardIME extends InputMethodService {
 
         keyboardInputHandler =
                 new KeyboardInputHandler(this);
-
-        symPadInputHandler =
-                new SymPadInputHandler(this);
 
         suggestionsManager =
                 new SuggestionsManager(
@@ -355,22 +355,35 @@ public class PocketBoardIME extends InputMethodService {
         }
 
         /*
-         * SymPad / D-pad handling.
+         * SYM held or locked: letter keys type their symbol (see
+         * SymbolLayer). Anything SymbolLayer doesn't map -- Backspace,
+         * Space, Enter, arrows... -- falls through and behaves as
+         * usual.
          */
         if (metaKeyManager.isSymFixed()) {
 
-            keyboardInputHandler
-                    .resetComposing(
-                            inputConnection
+            String symbol =
+                    SymbolLayer.getSymbol(
+                            keyCode
                     );
 
-            if (symPadInputHandler.handleKeyDown(
-                    keyCode,
-                    event,
-                    inputConnection
-            )) {
+            if (symbol != null) {
 
-                symPadJustUsed = true;
+                keyboardInputHandler
+                        .resetComposing(
+                                inputConnection
+                        );
+
+                inputConnection.commitText(
+                        symbol,
+                        1
+                );
+
+                symJustUsed = true;
+
+                symbolKeysDown.add(
+                        keyCode
+                );
 
                 return true;
             }
@@ -480,7 +493,7 @@ public class PocketBoardIME extends InputMethodService {
                     keyCode ==
                             KeyEvent.KEYCODE_PICTSYMBOLS) {
 
-                if (!symPadJustUsed &&
+                if (!symJustUsed &&
                         !metaKeyManager.isSymFixed()) {
 
                     if (isInputViewShown()) {
@@ -490,7 +503,7 @@ public class PocketBoardIME extends InputMethodService {
 
                 } else {
 
-                    symPadJustUsed = false;
+                    symJustUsed = false;
                 }
             }
 
@@ -512,21 +525,16 @@ public class PocketBoardIME extends InputMethodService {
         }
 
         /*
-         * SymPad / D-pad handling.
+         * A symbol key's DOWN was consumed above, so swallow its UP
+         * too -- even if SYM itself was released first, otherwise
+         * the plain letter's UP would reach the normal input
+         * handler with no matching DOWN.
          */
-        if (metaKeyManager.isSymFixed() ||
-                symPadInputHandler.hasPressedKey(
-                        keyCode
-                )) {
+        if (symbolKeysDown.remove(
+                keyCode
+        )) {
 
-            if (symPadInputHandler.handleKeyUp(
-                    keyCode,
-                    event,
-                    inputConnection
-            )) {
-
-                return true;
-            }
+            return true;
         }
 
         switch (keyCode) {
@@ -586,147 +594,6 @@ public class PocketBoardIME extends InputMethodService {
         suggestionsManager.update();
     }
 
-    public void moveCursor(
-            int offset,
-            int metaState) {
-
-        InputConnection ic =
-                getCurrentInputConnection();
-
-        if (ic == null ||
-                offset == 0) {
-
-            return;
-        }
-
-        long eventTime =
-                SystemClock.uptimeMillis();
-
-        int repeatCount =
-                Math.abs(offset);
-
-        int keyCode =
-                offset > 0
-                        ? KeyEvent.KEYCODE_DPAD_RIGHT
-                        : KeyEvent.KEYCODE_DPAD_LEFT;
-
-        boolean isAltPressed =
-                (metaState &
-                        KeyEvent.META_ALT_ON) != 0;
-
-        boolean isShiftPressed =
-                (metaState &
-                        KeyEvent.META_SHIFT_ON) != 0;
-
-        boolean hasSelectedText =
-                !TextUtils.isEmpty(
-                        ic.getSelectedText(0)
-                );
-
-        if (keyCode ==
-                KeyEvent.KEYCODE_DPAD_RIGHT &&
-                !hasSelectedText &&
-                TextUtils.isEmpty(
-                        ic.getTextAfterCursor(
-                                1,
-                                0
-                        )
-                )) {
-
-            return;
-
-        } else if (
-                keyCode ==
-                        KeyEvent.KEYCODE_DPAD_LEFT &&
-                        !hasSelectedText &&
-                        TextUtils.isEmpty(
-                                ic.getTextBeforeCursor(
-                                        1,
-                                        0
-                                )
-                        )) {
-
-            return;
-        }
-
-        if (isAltPressed) {
-
-            ic.sendKeyEvent(
-                    InputUtils.createKeyEvent(
-                            eventTime,
-                            KeyEvent.KEYCODE_ALT_LEFT,
-                            KeyEvent.ACTION_DOWN,
-                            0,
-                            metaState
-                    )
-            );
-        }
-
-        if (isShiftPressed) {
-
-            ic.sendKeyEvent(
-                    InputUtils.createKeyEvent(
-                            eventTime,
-                            KeyEvent.KEYCODE_SHIFT_LEFT,
-                            KeyEvent.ACTION_DOWN,
-                            0,
-                            metaState
-                    )
-            );
-        }
-
-        for (int i = 0;
-             i < repeatCount;
-             i++) {
-
-            ic.sendKeyEvent(
-                    InputUtils.createKeyEvent(
-                            eventTime,
-                            keyCode,
-                            KeyEvent.ACTION_DOWN,
-                            i,
-                            metaState
-                    )
-            );
-        }
-
-        ic.sendKeyEvent(
-                InputUtils.createKeyEvent(
-                        eventTime,
-                        keyCode,
-                        KeyEvent.ACTION_UP,
-                        0,
-                        metaState
-                )
-        );
-
-        if (isAltPressed) {
-
-            ic.sendKeyEvent(
-                    InputUtils.createKeyEvent(
-                            eventTime,
-                            KeyEvent.KEYCODE_ALT_LEFT,
-                            KeyEvent.ACTION_UP,
-                            0,
-                            0
-                    )
-            );
-        }
-
-        if (isShiftPressed) {
-
-            ic.sendKeyEvent(
-                    InputUtils.createKeyEvent(
-                            eventTime,
-                            KeyEvent.KEYCODE_SHIFT_LEFT,
-                            KeyEvent.ACTION_UP,
-                            0,
-                            0
-                    )
-            );
-        }
-    }
-
     /*
      * Android can provide editor completions.
      *
@@ -748,7 +615,7 @@ public class PocketBoardIME extends InputMethodService {
 
         super.hideStatusIcon();
 
-        symPadJustUsed = true;
+        symJustUsed = true;
     }
 
     /**

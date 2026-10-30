@@ -5,11 +5,8 @@
     <integer name="suggestions_count">3</integer>
     <integer name="emoji_view_column_count">7</integer>
     <integer name="recent_emoji_max_count">21</integer>
-    <integer name="sympad_fix_event_repeat_count">3</integer>
+    <integer name="sym_fix_event_repeat_count">3</integer>
     <integer name="layout_change_shortcut_event_repeat_count">3</integer>
-    <integer name="virtual_touchpad_speed_min_value">1</integer>
-    <integer name="virtual_touchpad_speed_max_value">10</integer>
-    <integer name="virtual_touchpad_speed_default_value">5</integer>
 
     <!-- Max gap, in ms, between presses of the SAME physical key for it
          to still count as the next step of a multipress cycle (value,
@@ -19,7 +16,6 @@
     <integer name="multipress_timeout_min_value">150</integer>
     <integer name="multipress_timeout_max_value">1200</integer>
     <integer name="multipress_timeout_default_value">750</integer>
-    <integer name="virtual_touchpad_suggestions_resume_delay_ms">1000</integer>
 
     <integer-array name="recent_emoji_shortcut_key_codes">
         <item>45</item><!-- Q -->

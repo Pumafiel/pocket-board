@@ -23,7 +23,7 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     private final Context deviceProtectedStorageContext;
     private final SharedPreferences sharedPreferences;
 
-    private final String lockSymPadKey;
+    private final String lockSymKey;
 
     private final String autoCorrectionKey;
     private final String dictShortcutsKey;
@@ -31,10 +31,7 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     private final String doubleSpacePeriodKey;
     private final String layoutChangeIndicationKey;
     private final String voiceInputShortcutKey;
-    private final String virtualTouchpadKey;
-    private final String virtualTouchpadSpeedKey;
     private final String multipressTimeoutKey;
-    private final String virtualTouchpadAnimationShownKey;
     private final String layoutChangeShortcutKey;
     private final String inlineSuggestionsKey;
     private final String manualRecentEmojiKey;
@@ -52,11 +49,10 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
     public PreferencesHolder(Context context) {
         deviceProtectedStorageContext = context.createDeviceProtectedStorageContext();
         PreferenceManager.setDefaultValues(deviceProtectedStorageContext, R.xml.preferences, false);
-        PreferenceManager.setDefaultValues(deviceProtectedStorageContext, R.xml.sympad_preferences, false);
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(deviceProtectedStorageContext);
         sharedPreferences.registerOnSharedPreferenceChangeListener(this);
 
-        lockSymPadKey = context.getString(R.string.ime_lock_sympad_prefs_key);
+        lockSymKey = context.getString(R.string.ime_lock_sym_prefs_key);
 
         autoCorrectionKey = context.getString(R.string.ime_auto_correction_prefs_key);
         dictShortcutsKey = context.getString(R.string.ime_dict_shortcuts_prefs_key);
@@ -64,10 +60,7 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
         doubleSpacePeriodKey = context.getString(R.string.ime_double_space_period_prefs_key);
         layoutChangeIndicationKey = context.getString(R.string.ime_show_layout_toast_prefs_key);
         voiceInputShortcutKey = context.getString(R.string.ime_voice_input_shortcut_prefs_key);
-        virtualTouchpadKey = context.getString(R.string.ime_virtual_touchpad_prefs_key);
-        virtualTouchpadSpeedKey = context.getString(R.string.ime_virtual_touchpad_speed_prefs_key);
         multipressTimeoutKey = context.getString(R.string.ime_multipress_timeout_prefs_key);
-        virtualTouchpadAnimationShownKey = context.getString(R.string.ime_virtual_touchpad_animation_shown_prefs_key);
         layoutChangeShortcutKey = context.getString(R.string.ime_layout_change_shortcut_prefs_key);
         inlineSuggestionsKey = context.getString(R.string.ime_show_inline_suggestions_prefs_key);
         manualRecentEmojiKey = context.getString(R.string.ime_manual_recent_emoji_management_prefs_key);
@@ -97,8 +90,8 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
         }
     }
 
-    public boolean isLockSymPadEnabled() {
-        return (boolean) prefValues.computeIfAbsent(lockSymPadKey, key -> getValue(key, Boolean.class, true));
+    public boolean isLockSymEnabled() {
+        return (boolean) prefValues.computeIfAbsent(lockSymKey, key -> getValue(key, Boolean.class, true));
     }
 
     public boolean isAutoCorrectionEnabled() {
@@ -123,24 +116,6 @@ public class PreferencesHolder implements SharedPreferences.OnSharedPreferenceCh
 
     public boolean isVoiceInputShortcutEnabled() {
         return (boolean) prefValues.computeIfAbsent(voiceInputShortcutKey, key -> getValue(key, Boolean.class, true));
-    }
-
-    public boolean isVirtualTouchpadEnabled() {
-        return (boolean) prefValues.computeIfAbsent(virtualTouchpadKey, key -> getValue(key, Boolean.class, true));
-    }
-
-    public boolean isVirtualTouchpadAnimationShown() {
-        return (boolean) prefValues.computeIfAbsent(virtualTouchpadAnimationShownKey, key -> getValue(key, Boolean.class, false));
-    }
-
-    public void saveVirtualTouchpadAnimationShownValue(boolean value) {
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-        editor.putBoolean(virtualTouchpadAnimationShownKey, value);
-        editor.apply();
-    }
-
-    public int getVirtualTouchpadSpeed() {
-        return (int) prefValues.computeIfAbsent(virtualTouchpadSpeedKey, key -> getValue(key, Integer.class, 5));
     }
 
     public long getMultipressTimeout() {

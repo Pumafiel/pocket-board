@@ -39,7 +39,7 @@ public class InputView extends RelativeLayout implements MetaKeyStateChangeListe
 
     private static final String META_BUTTON_ALT_TAG = "alt";
     private static final String META_BUTTON_NUMERIC_TAG = "123";
-    private static final String META_BUTTON_SYMPAD_TAG = "<S>";
+    private static final String META_BUTTON_SYM_TAG = "<S>";
     private static final String INPUT_METHOD_DISPLAY_TAG = "DisplayTag";
 
     private final PocketBoardIME pocketBoardIME;
@@ -263,7 +263,7 @@ public class InputView extends RelativeLayout implements MetaKeyStateChangeListe
         String displayTag = currentInputMethodTag;
 
         if (metaKeyManager.isSymFixed()) {
-            displayTag = META_BUTTON_SYMPAD_TAG;
+            displayTag = META_BUTTON_SYM_TAG;
             metaLayoutButton.setText(displayTag);
             return;
         }

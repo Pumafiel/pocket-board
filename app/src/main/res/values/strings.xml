@@ -10,29 +10,8 @@
     <string name="ime_subtypes">Input types</string>
     <string name="ime_subtypes_select">Select input types</string>
 
-    <string name="ime_sympad_prefs">SymPad Settings</string>
-    <string name="ime_lock_sympad">Allow SymPad lock</string>
-    <string name="ime_lock_sympad_summary">Long press SYM to lock keyboard in SymPad mode</string>
-    <string name="ime_sympad_json_import">Import from json</string>
-    <string name="ime_sympad_json_export">Export to json</string>
-    <string name="ime_sympad_defaults">Restore defaults</string>
-    <string name="ime_sympad_defaults_message">Are you sure you want to restore default settings?</string>
-    <string name="ime_sympad_mapping_editor">SymPad Layout Editor</string>
-    <string name="ime_sympad_short_press">Short Press</string>
-    <string name="ime_sympad_long_press">Long Press</string>
-    <string name="ime_sympad_app_not_found">App not found</string>
-    <string name="ime_sympad_short_press_of">Short press of</string>
-    <string name="ime_sympad_long_press_of">Long press of</string>
-    <string name="ime_sympad_action_off">✕ OFF</string>
-    <string name="ime_sympad_action_off_title">Disabled</string>
-    <string name="ime_sympad_action_keys">⌨ KEYS</string>
-    <string name="ime_sympad_action_text">𝐓 TEXT</string>
-    <string name="ime_sympad_action_app">★ APP</string>
-    <string name="ime_sympad_key_hint">Select Key...</string>
-    <string name="ime_sympad_add_key">Add</string>
-    <string name="ime_sympad_text_hint">Type your text</string>
-    <string name="ime_sympad_app_hint">Select App...</string>
-    <string name="ime_sympad_app_permission_required_msg">Display over other apps permission is required for proper functionality. Tap here to open Settings, find PocketBoard in the app list, and grant the \"Allow display over other apps\" permission</string>
+    <string name="ime_lock_sym">Allow SYM lock</string>
+    <string name="ime_lock_sym_summary">Long press SYM to lock the symbols layer on</string>
 
     <string name="ime_input_cat">Input Settings</string>
     <string name="ime_auto_correction">Auto-correction</string>
@@ -58,9 +37,6 @@
     <string name="ime_show_suggestions">Suggestions</string>
     <string name="ime_show_meta_layout">Current layout</string>
     <string name="ime_show_voice">Voice input key</string>
-    <string name="ime_virtual_touchpad">Virtual touchpad</string>
-    <string name="ime_virtual_touchpad_summary">Swipe to move cursor</string>
-    <string name="ime_virtual_touchpad_speed">Touchpad sensitivity</string>
     <string name="ime_multipress_timeout">Multipress speed</string>
     <string name="ime_multipress_timeout_summary">Max time (ms) between taps of the same key to cycle to its accented/alternate characters. Lower it if fast typing keeps landing on accents by accident.</string>
 
@@ -77,10 +53,6 @@
 
     <string name="voice_ime_not_configured">Voice input not configured</string>
     <string name="keyboard_mapping_load_failed">Couldn\'t load keyboard mapping</string>
-    <string name="sympad_mapping_load_failed">Couldn\'t load SymPad mapping</string>
-    <string name="sympad_mapping_save_failed">Couldn\'t save SymPad mapping</string>
-    <string name="sympad_overlay_permission_required">Display over other apps permission required</string>
-    <string name="sympad_app_not_found">Application not found</string>
     <string name="pocketboard_disabled">PockedBoard disabled</string>
 
     <string name="hide_inline_suggestions_button_description">Hide inline suggestions</string>
@@ -132,10 +104,7 @@
     <string name="app_version" translatable="false">v1.1.6, Ⓒ SinuX 2025, GPLv3</string>
 
     <string name="ime_subtypes_prefs_key" translatable="false">ime_prefs_subtypes</string>
-    <string name="ime_lock_sympad_prefs_key" translatable="false">ime_lock_sympad</string>
-    <string name="ime_sympad_json_import_key" translatable="false">ime_sympad_json_import</string>
-    <string name="ime_sympad_json_export_key" translatable="false">ime_sympad_json_export</string>
-    <string name="ime_sympad_defaults_key" translatable="false">ime_sympad_defaults</string>
+    <string name="ime_lock_sym_prefs_key" translatable="false">ime_lock_sympad</string>
 
     <string name="ime_auto_correction_prefs_key" translatable="false">ime_prefs_auto_correction</string>
     <string name="ime_dict_shortcuts_prefs_key" translatable="false">ime_prefs_dict_shortcuts</string>
@@ -144,7 +113,6 @@
     <string name="ime_show_layout_toast_prefs_key" translatable="false">ime_prefs_show_layout_toast</string>
     <string name="ime_voice_input_shortcut_prefs_key" translatable="false">ime_voice_input_shortcut</string>
     <string name="ime_layout_change_shortcut_prefs_key" translatable="false">ime_layout_change_shortcut</string>
-    <string name="ime_sympad_prefs_key" translatable="false">ime_sympad_prefs</string>
     <string name="ime_show_inline_suggestions_prefs_key" translatable="false">ime_prefs_show_inline_suggestions</string>
     <string name="ime_manual_recent_emoji_management_prefs_key" translatable="false">ime_manual_recent_emoji_management</string>
 
@@ -153,10 +121,7 @@
     <string name="ime_show_suggestions_prefs_key" translatable="false">ime_prefs_show_suggestions</string>
     <string name="ime_show_meta_layout_prefs_key" translatable="false">ime_prefs_show_meta_layout</string>
     <string name="ime_show_voice_prefs_key" translatable="false">ime_prefs_show_voice</string>
-    <string name="ime_virtual_touchpad_prefs_key" translatable="false">ime_prefs_virtual_touchpad</string>
-    <string name="ime_virtual_touchpad_speed_prefs_key" translatable="false">ime_prefs_virtual_touchpad_speed</string>
     <string name="ime_multipress_timeout_prefs_key" translatable="false">ime_prefs_multipress_timeout</string>
-    <string name="ime_virtual_touchpad_animation_shown_prefs_key" translatable="false">ime_prefs_virtual_touchpad_animation_shown</string>
 
     <string name="ime_extra_phone_control_prefs_key" translatable="false">ime_prefs_extra_phone_control</string>
     <string name="ime_extra_version_prefs_key" translatable="false">ime_prefs_version</string>

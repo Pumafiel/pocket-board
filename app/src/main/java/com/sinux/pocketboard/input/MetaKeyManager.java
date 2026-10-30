@@ -23,7 +23,7 @@ public class MetaKeyManager {
     private final PocketBoardIME pocketBoardIME;
     private final PreferencesHolder preferencesHolder;
     private final long keyLongPressDuration;
-    private final int sympadFixEventRepeatCount;
+    private final int symFixEventRepeatCount;
     private final CallStateListener callStateListener;
     private final LinkedHashSet<Integer> shortcutKeysUsed;
 
@@ -44,7 +44,7 @@ public class MetaKeyManager {
         this.pocketBoardIME = pocketBoardIME;
         this.preferencesHolder = pocketBoardIME.getPreferencesHolder();
         keyLongPressDuration = pocketBoardIME.getPreferencesHolder().getLongKeyPressDuration();
-        sympadFixEventRepeatCount = pocketBoardIME.getResources().getInteger(R.integer.sympad_fix_event_repeat_count);
+        symFixEventRepeatCount = pocketBoardIME.getResources().getInteger(R.integer.sym_fix_event_repeat_count);
 
         callStateListener = new CallStateListener();
         TelephonyManager tm = getTelephonyManager();
@@ -113,7 +113,7 @@ public class MetaKeyManager {
 
         if (event.getRepeatCount() == 0 && sym == MetaKeyState.FIXED) {
             sym = MetaKeyState.ENABLED;
-        } else if (event.getRepeatCount() == sympadFixEventRepeatCount && preferencesHolder.isLockSymPadEnabled()) {
+        } else if (event.getRepeatCount() == symFixEventRepeatCount && preferencesHolder.isLockSymEnabled()) {
             sym = MetaKeyState.FIXED;
             pocketBoardIME.showStatusIcon(R.drawable.ic_sym_pad_icon);
         }
