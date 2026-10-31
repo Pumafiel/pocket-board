@@ -876,7 +876,23 @@ public class KeyboardInputHandler {
             }
         }
 
+        /*
+         * This is meant to catch a genuine SECOND tap of the space
+         * bar shortly after the first one -- not just "any key
+         * within keyLongPressDuration", which eventTime -
+         * lastKeyDownTime alone can't tell apart. Without also
+         * requiring the previous key to have BEEN space and this to
+         * be a fresh tap (not an OS key-repeat from holding space
+         * down), a normal fast typist would satisfy the timing check
+         * on nearly every single space press (gap since the last
+         * LETTER, not since a previous space), and simply holding
+         * space a little long would fire it repeatedly via repeat
+         * events -- both turning an ordinary space into an
+         * unintended ". " or extra spaces.
+         */
         if (doubleSpacePeriod
+                && eventRepeatCount == 0
+                && lastKeyCode == KeyEvent.KEYCODE_SPACE
                 && eventTime - lastKeyDownTime
                 <= keyLongPressDuration) {
 
@@ -1492,8 +1508,8 @@ public class KeyboardInputHandler {
 
         // Re-check auto-capitalization right now rather than waiting
         // for onUpdateSelection: that callback can lag behind fast
-        // typing, so the very next letter (e.g. right after ". ")
-        // could get composed before Shift was actually turned on.
+        // typing, so the very next letter could get composed before
+        // Shift was actually turned on.
         pocketBoardIME
                 .updateMetaState();
     }
