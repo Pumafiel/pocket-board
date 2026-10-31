@@ -618,6 +618,42 @@ public class PocketBoardIME extends InputMethodService {
         symJustUsed = true;
     }
 
+    /*
+     * "...", "?!", "!!" and the like, followed by whitespace.
+     *
+     * getCursorCapsMode() deliberately never reports a sentence start
+     * after consecutive periods, so abbreviations such as "e.g. " or
+     * "U.S.A. " don't trigger a capital. That is also why "... " never
+     * capitalized: Android reads it as an abbreviation, not as the end
+     * of a sentence. A RUN of two or more terminators is not an
+     * abbreviation, so it is handled here instead. A single "." is
+     * still left to Android on purpose, so "e.g. " keeps behaving.
+     * Whitespace is required, like Android's own rule, so "...hola"
+     * is not capitalized.
+     */
+    private static final java.util.regex.Pattern REPEATED_SENTENCE_END =
+            java.util.regex.Pattern.compile(
+                    "[.!?]{2,}[\"')\\]]*\\s+$"
+            );
+
+    private boolean followsRepeatedSentenceEnd(
+            InputConnection inputConnection) {
+
+        CharSequence before =
+                inputConnection
+                        .getTextBeforeCursor(
+                                12,
+                                0
+                        );
+
+        return before != null &&
+                REPEATED_SENTENCE_END
+                        .matcher(
+                                before
+                        )
+                        .find();
+    }
+
     /**
      * Re-reads getCursorCapsMode() and enables/disables Shift to
      * match. Called automatically on selection changes (below), but
@@ -655,12 +691,19 @@ public class PocketBoardIME extends InputMethodService {
 
                 if (inputConnection != null) {
 
-                    if (
+                    boolean needsCapital =
                             inputConnection
                                     .getCursorCapsMode(
                                             TextUtils
                                                     .CAP_MODE_SENTENCES
                                     ) > 0
+                                    ||
+                                    followsRepeatedSentenceEnd(
+                                            inputConnection
+                                    );
+
+                    if (
+                            needsCapital
                                     &&
                                     InputUtils
                                             .isSuggestionAllowedEditor(
