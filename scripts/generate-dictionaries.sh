@@ -120,12 +120,12 @@ FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
 # deletes of its most frequent words; the rest only gets distance-1.
 # How many words that buys is NOT fixed -- it keeps going, most frequent
 # word first, until this share of the budget is used up.
-DISTANCE2_BUDGET_SHARE=0.20
+DISTANCE2_BUDGET_SHARE="${DISTANCE2_BUDGET_SHARE:-0.20}"
 
 # These three must match DictionaryManager.java.
 MAX_DELETE_DISTANCE=2
 MAX_DELETE_WORD_LENGTH=32
-MAX_CANDIDATES_PER_DELETE=3
+MAX_CANDIDATES_PER_DELETE="${MAX_CANDIDATES_PER_DELETE:-3}"
 
 # ============================================================
 # REQUIRED COMMANDS
@@ -422,6 +422,34 @@ hallo
 tschüss
 EOF
 
+# ------------------------------------------------------------
+# Extra words, kept in plain files so they can be edited without
+# touching this script: scripts/extra-words/<language>.txt, one word
+# per line, "#" starts a comment. They are added to the whitelists
+# above, so they are always shipped and always indexed for correction
+# (use them for everyday words Hunspell and the subtitle corpus miss:
+# regional slang, app and brand names, administrative terms).
+# ------------------------------------------------------------
+
+EXTRA_WORDS_DIR="${ROOT_DIR}/scripts/extra-words"
+
+append_extra_words() {
+    local whitelist="$1"
+    local extra_file="$2"
+
+    if [[ -f "${extra_file}" ]]; then
+        {
+            sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' "${extra_file}" |
+                grep -v '^$' || true
+        } >> "${whitelist}"
+        echo "Extra words: ${extra_file#"${ROOT_DIR}"/}"
+    fi
+}
+
+append_extra_words "${ES_DIR}/whitelist.txt" "${EXTRA_WORDS_DIR}/es-AR.txt"
+append_extra_words "${EN_DIR}/whitelist.txt" "${EXTRA_WORDS_DIR}/en.txt"
+append_extra_words "${DE_DIR}/whitelist.txt" "${EXTRA_WORDS_DIR}/de.txt"
+
 # ============================================================
 # STOPLISTS
 # ============================================================
@@ -647,7 +675,11 @@ def cmd_vocab(args):
     for w in whitelist:
         if w in present:
             continue
-        selected.append((w, frequency.get(w) or floor_count))
+        # A forced word keeps its real count when that is higher than
+        # the floor, but never ranks below it: otherwise a genuine but
+        # rare word (little or no subtitle usage) could fall outside
+        # the correction index budget despite being whitelisted.
+        selected.append((w, max(frequency.get(w, 0), floor_count)))
         present.add(w)
         forced.append(w)
 
