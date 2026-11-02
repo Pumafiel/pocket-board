@@ -119,23 +119,56 @@ result is missing or invalid.
    (`don` + `t`); and subtitle stutter such as `no-no`, `que-que` or `ich-ich-ich` is rejected, because `hunspell`
    checks hyphenated words piece by piece and would otherwise accept them.
 4. **Always included**: short curated lists, such as Argentine voseo (`tenés`, `podés`, `hacés`...), English
-   contractions with apostrophes, and common German function words.
+   contractions with apostrophes, and common German function words. On top of those, `scripts/extra-words/es-AR.txt`,
+   `en.txt` and `de.txt` hold everyday words that neither Hunspell nor the subtitle corpus cover: regional slang
+   (`celu`, `compu`, `finde`, `bondi`, `pibe`), app and brand names (`whatsapp`, `mercadopago`, `bluetooth`, `emoji`)
+   and administrative terms (`cuit`, `afip`, `arca`, `monotributo`, `cbu`). They are plain files, one word per line
+   with `#` comments, so adding a word is a one-line edit; whitelisted words are always shipped and always indexed for
+   correction.
 5. **Correction index**: a symmetric-delete index. The most frequent words get 2-typo coverage, the rest 1-typo.
    The whole set is limited to a total size budget (12.5 MB uncompressed by default, roughly 3 MB inside the APK).
    The budget only trims the rare tail, and the build fails if it would be exceeded.
 
-Each dictionary line is `word<TAB>rank` (1 is the most used word). The rank is used by the correction engine only as
-the last tie-breaker, after edit cost, keyboard-adjacency and prefix/suffix evidence, so a close match is never
-overridden just because another word is more common.
+Each dictionary line is `word<TAB>rank` (1 is the most used word). The correction engine ranks candidates by edit
+cost and edit distance first. Among candidates tied on both, it prefers the more used word, comparing usage in coarse
+tiers (ranks within about 2x of each other tie), and only then falls back to language, keyboard-adjacency and
+prefix/suffix evidence, with the exact rank as the final tie-break. A closer match is therefore never overridden just
+because another word is more common.
+
+## Measured accuracy
+
+Accuracy was measured with the app's real correction classes and the generated dictionaries, on synthetic typos
+(not real typing): words sampled by usage from the top 30,000, then given one realistic error, 800 per error type.
+"Top-1" is the intended word being the first suggestion, "top-3" being among the three shown.
+
+| Language | Top-1 | Top-3 |
+|---|---|---|
+| Español (AR) | 72.3% | 84.4% |
+| English | 68.4% | 79.7% |
+| Deutsch | 73.8% | 83.1% |
+
+Per error type (all three languages are close): a neighbouring key instead of the right one reaches about 84-90%
+top-1 and 92-96% top-3; an extra letter 87-90% / about 95%; swapped letters 87-94% / 90-96%. The weak spots are a
+**missing letter** (about 51-61% top-1, 73-84% top-3) and **two errors in one word** (about 33-38%, 49-54%), and for
+Spanish words typed **without their accent** (about 63%), where many accent-less forms are valid words themselves
+(`esta`/`está`) and are skipped by this test. Treat these as relative numbers for comparing changes: real typing
+differs from synthetic typos.
+
+Two things were tried against the same measurement. Raising the number of candidates kept per index entry from 3 to 6
+did not help (slightly worse, since it uses up the size budget), so it stays at 3. Using the rank as a tier right after
+edit cost (the current behaviour) gained about 1-2 points of top-1 over using it only as the last tie-breaker, with
+top-3 unchanged.
 
 Optional environment overrides for the script: `TOTAL_BUDGET_BYTES`, `COVERAGE_TARGET`, `MAX_WORDS`,
-`DE_FREQUENCY_SOURCE` (`frequencywords` or `leipzig`) and `FORCE_DOWNLOAD=1`.
+`DISTANCE2_BUDGET_SHARE`, `MAX_CANDIDATES_PER_DELETE`, `DE_FREQUENCY_SOURCE` (`frequencywords` or `leipzig`) and
+`FORCE_DOWNLOAD=1`.
 
 # What changed compared to upstream
 
 ## Added
 * Built-in dictionaries and correction engine for es-AR, en and de, generated at build time (see above)
-* Frequency ranking as the final suggestion tie-breaker
+* Frequency ranking in the suggestion order (a usage tier right after edit cost, and the final tie-break)
+* Editable extra-word lists (`scripts/extra-words/`) for slang, app names and administrative terms
 * Fixed `SYM` symbol layer and the `Allow SYM lock` setting
 * `Multipress speed` setting (slider plus number box)
 * A fixed release signing key (see [Building](#building))
@@ -197,6 +230,11 @@ To build the dictionaries locally you need `bash`, `curl`, `python3` and the `hu
 
 * A cursor jump related to the `SPACE` key was reported. Two likely causes were fixed (see Fixed), but it has not been
   confirmed as resolved on a device. If you still see it, note what you typed before and after the space.
+* Suggestion accuracy is weakest for a missing letter and for two errors in the same word (see
+  [Measured accuracy](#measured-accuracy)). The cause was not isolated, because the engine only returns three
+  suggestions, which hides how many candidates sit behind them.
+* The dictionaries only know lower-case words, so proper nouns (people, places) are not suggested unless they are
+  added to `scripts/extra-words/`.
 * The Android user dictionary is not used: the `READ_USER_DICTIONARY` permission is still declared, but no code reads
   it. The `Dictionary shortcuts` setting only applies the current top suggestion.
 * Digits duplication in Telegram login fields on Android < 15 (inherited from upstream, not re-checked)
