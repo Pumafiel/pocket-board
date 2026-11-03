@@ -1,0 +1,105 @@
+name: Cleanup repo (one-off)
+
+# Corre UNA vez a mano: Actions -> "Cleanup repo (one-off)" -> Run workflow.
+# Necesita Settings -> Actions -> General -> Workflow permissions =
+# "Read and write permissions".
+#
+# 1) Deja cada archivo en su lugar correcto (los que se subieron sueltos).
+# 2) Borra los archivos de mas.
+# 3) Borra la rama que no es la default.
+#
+# GitHub NO deja que un workflow borre archivos dentro de .github/workflows,
+# asi que esos dos (este y remove-sympad-files.yml) se borran a mano.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Put misplaced files where they belong
+        shell: bash
+        run: |
+          set -euo pipefail
+          REAL=app/src/main/java/com/sinux/pocketboard/spellchecker/CorrectionEngine.java
+          mkdir -p scripts/extra-words
+
+          # extra-word lists uploaded into scripts/ instead of scripts/extra-words/
+          for l in es-AR en de; do
+            if [ -f "scripts/$l.txt" ]; then
+              git mv -f "scripts/$l.txt" "scripts/extra-words/$l.txt"
+            fi
+          done
+
+          # newest CorrectionEngine uploaded loose; use it only if the real one is still the old version
+          if ! grep -q frequencyTier "$REAL" 2>/dev/null; then
+            for stray in CorrectionEngine.java app/CorrectionEngine.java; do
+              if [ -f "$stray" ] && grep -q frequencyTier "$stray"; then
+                cp "$stray" "$REAL"
+                git add "$REAL"
+                echo "Restored $REAL from $stray"
+                break
+              fi
+            done
+          fi
+
+      - name: Delete files that are not needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r f; do
+            [ -n "$f" ] && git rm -f --ignore-unmatch "$f"
+          done <<'LIST'
+          CorrectionEngine.java
+          app/CorrectionEngine.java
+          generate-dictionaries.sh
+          de.txt
+          en.txt
+          es-AR.txt
+          scripts/generate-dictionaries_hun.sh
+          scripts/generate-dictionaries_old.sh
+          img/sympad.png
+          LIST
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            echo "Nothing to change (already clean)."
+          else
+            git commit -m "Clean up misplaced and unused files"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Delete the non-default branch (main)
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEFAULT="${{ github.event.repository.default_branch }}"
+          echo "Default branch: $DEFAULT"
+          if [ "$DEFAULT" = "main" ]; then
+            echo "main is the default branch, refusing to delete it."
+            exit 1
+          fi
+          echo "main was at: $(git ls-remote origin refs/heads/main)"
+          echo "(to restore it later: git push origin <that sha>:refs/heads/main)"
+          git push origin --delete main || echo "Could not delete main (protected?). Delete it from the Branches page."
+
+      - name: Check the important files are in place
+        shell: bash
+        run: |
+          chk() { if grep -q "$2" "$1" 2>/dev/null; then echo "OK      $1"; else echo "MISSING $1 (expected: $2)"; fi; }
+          chk app/src/main/java/com/sinux/pocketboard/input/handler/KeyboardInputHandler.java deleteLastCharacterAndComposeWord
+          chk app/src/main/java/com/sinux/pocketboard/spellchecker/CorrectionEngine.java frequencyTier
+          chk app/src/main/java/com/sinux/pocketboard/PocketBoardIME.java followsRepeatedSentenceEnd
+          chk scripts/generate-dictionaries.sh extra-words
+          for l in es-AR en de; do [ -f scripts/extra-words/$l.txt ] && echo "OK      scripts/extra-words/$l.txt" || echo "MISSING scripts/extra-words/$l.txt"; done
