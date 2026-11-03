@@ -1,0 +1,18 @@
+# Extra everyday words for the German dictionary.
+# One word per line; "#" starts a comment. Lower case, letters only.
+whatsapp
+telegram
+instagram
+wlan
+wifi
+bluetooth
+handy
+selfie
+emoji
+emojis
+email
+online
+app
+apps
+moin
+servus

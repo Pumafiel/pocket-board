@@ -186,6 +186,7 @@ Optional environment overrides for the script: `TOTAL_BUDGET_BYTES`, `COVERAGE_T
 * **Cursor jumping back over written text**: re-entering a word for editing used a cursor position the app tracked
   itself, which lags behind fast typing. It now works relative to the real cursor (not yet confirmed on a device, see
   [Known issues](#known-issues)).
+* **Words glued together while deleting letters**: after a backspace the keyboard re-read the text to find the word to keep editing. Many editors (WebView, Chrome-based fields) answer that read with the text from before the delete, so it removed one character too many (the space) and brought the deleted letter back. It now reads the text once, before changing anything.
 * **Auto-capitalization lagging behind fast typing**: it is now re-checked right after a punctuation mark or space,
   instead of waiting for the editor's asynchronous selection callback.
 * **No capital after `...`** (see Typing behaviour).

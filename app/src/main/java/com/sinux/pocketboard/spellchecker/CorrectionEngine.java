@@ -27,8 +27,9 @@ import java.util.Set;
  * 4. Preserved prefix.
  * 5. Preserved suffix.
  * 6. Completion quality.
- * 7. Real-world frequency, but ONLY as a last-resort tie-breaker
- *    once everything above is equal (see CandidateComparator).
+ * 7. Real-world frequency: a coarse usage tier right after edit
+ *    cost and distance, and the exact rank as the final
+ *    tie-breaker (see CandidateComparator).
  *
  * There is deliberately no global preference for short or long
  * words.
@@ -1427,14 +1428,35 @@ public final class CorrectionEngine {
      * 7. Completion addition length, only for otherwise equal
      *    completions.
      * 8. Completion vs correction.
-     * 9. Real-world frequency rank (last resort; words without rank
-     *    data never win this step).
+     * 9. Exact real-world frequency rank (final tie-break; words
+     *    without rank data never win it). A coarse usage tier is
+     *    also applied earlier, right after step 2.
      * 10. Deterministic lexical order.
      *
      * There is NO universal preference for short or long words.
      */
     private static final class CandidateComparator
             implements Comparator<ScoredCandidate> {
+
+        /**
+         * Usage tier of a frequency rank: floor(log2(rank)), so tier
+         * 0 is rank 1, tier 1 is ranks 2-3, tier 2 is 4-7 and so on.
+         * A candidate without a rank sorts after every ranked one.
+         */
+        private static int frequencyTier(
+                int rank) {
+
+            if (rank == UNKNOWN_FREQUENCY_RANK ||
+                    rank < 1) {
+
+                return Integer.MAX_VALUE;
+            }
+
+            return 31 -
+                    Integer.numberOfLeadingZeros(
+                            rank
+                    );
+        }
 
         @Override
         public int compare(
@@ -1468,6 +1490,41 @@ public final class CorrectionEngine {
                     Integer.compare(
                             first.breakdown.editDistance,
                             second.breakdown.editDistance
+                    );
+
+            if (result != 0) {
+                return result;
+            }
+
+            /*
+             * ----------------------------------------------------
+             * 2b. Real-world usage tier
+             * ----------------------------------------------------
+             *
+             * Among candidates with the same score and edit
+             * distance, prefer the word people use more. Measured
+             * on synthetic keyboard typos for es-AR, en and de
+             * (Eval harness, 800 typos per error type), moving this
+             * ahead of the language/keyboard/prefix/suffix signals
+             * raised the first-suggestion hit rate by 1-2 points
+             * overall (up to +5 on extra-letter errors) and left
+             * the top-3 rate unchanged.
+             *
+             * Usage is compared in coarse tiers (floor(log2(rank)),
+             * so ranks within about 2x of each other tie) and not
+             * as exact ranks: the language, keyboard and prefix
+             * evidence below still decides between words of
+             * similar frequency. Exact rank remains the last
+             * tie-breaker further down.
+             */
+            result =
+                    Integer.compare(
+                            frequencyTier(
+                                    first.frequencyRank
+                            ),
+                            frequencyTier(
+                                    second.frequencyRank
+                            )
                     );
 
             if (result != 0) {

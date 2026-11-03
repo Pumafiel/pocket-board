@@ -703,11 +703,7 @@ public class KeyboardInputHandler {
 
                 inputConnection.beginBatchEdit();
 
-                deleteLastCharacter(
-                        inputConnection
-                );
-
-                findAndComposeLastWord(
+                deleteLastCharacterAndComposeWord(
                         inputConnection
                 );
 
@@ -720,6 +716,118 @@ public class KeyboardInputHandler {
                     inputConnection
             );
         }
+    }
+
+    /**
+     * Deletes the character before the cursor and then puts the word
+     * that now ends at the cursor back into composing state, so it can
+     * keep being edited and corrected.
+     *
+     * The text before the cursor is read ONCE, before anything is
+     * changed, and everything else is calculated from that single
+     * snapshot. The previous version deleted the character and then
+     * read the text again to find the word. Many editors (WebView and
+     * Chrome-based fields, apps with their own text engine) answer that
+     * second read with the text as it was BEFORE the delete, so the
+     * word came back one letter too long: the keyboard then removed one
+     * character too many, which was the space, and re-wrote the word
+     * with the deleted letter still in it, giving "holamundo" instead
+     * of "hola mund".
+     */
+    private void deleteLastCharacterAndComposeWord(
+            InputConnection inputConnection) {
+
+        if (rawInputMode
+                || !TextUtils.isEmpty(
+                inputConnection.getSelectedText(0)
+        )) {
+
+            // Raw key events and selections keep the plain behaviour.
+            deleteLastCharacter(
+                    inputConnection
+            );
+
+            findAndComposeLastWord(
+                    inputConnection
+            );
+
+            return;
+        }
+
+        CharSequence before =
+                inputConnection
+                        .getTextBeforeCursor(
+                                wordLookupLength,
+                                0
+                        );
+
+        if (TextUtils.isEmpty(before)) {
+            return;
+        }
+
+        int deletedLength =
+                CharacterUtils
+                        .getLastCharacterLength(
+                                before
+                        );
+
+        CharSequence remaining =
+                before.subSequence(
+                        0,
+                        before.length()
+                                - deletedLength
+                );
+
+        int wordStart =
+                remaining.length() == 0
+                        ? 0
+                        : CharacterUtils
+                        .getLastWordStartIndex(
+                                remaining,
+                                nonLetterOrDigitExclusions
+                        );
+
+        int wordLength =
+                remaining.length()
+                        - wordStart;
+
+        lastCursorPosition -=
+                deletedLength;
+
+        if (wordLength <= 0) {
+
+            // Nothing to compose, just remove the character.
+            inputConnection
+                    .deleteSurroundingText(
+                            deletedLength,
+                            0
+                    );
+
+            return;
+        }
+
+        textComposer.append(
+                remaining,
+                wordStart,
+                remaining.length()
+        );
+
+        /*
+         * One cursor-relative delete covers both the character being
+         * removed and the word that is about to be re-composed,
+         * followed by the composing text without that character.
+         */
+        inputConnection.finishComposingText();
+
+        inputConnection.deleteSurroundingText(
+                deletedLength + wordLength,
+                0
+        );
+
+        inputConnection.setComposingText(
+                textComposer,
+                1
+        );
     }
 
     private void deleteLastCharacter(
