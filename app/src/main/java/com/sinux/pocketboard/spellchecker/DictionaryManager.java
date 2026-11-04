@@ -37,8 +37,15 @@ public class DictionaryManager {
     private static final int MAX_CORRECTION_CANDIDATES =
             600;
 
+    /*
+     * Upper bound for any caller. The suggestions bar asks for 3
+     * (R.integer.suggestions_count, one per slot) and the system
+     * spellchecker popup for 5 (SuggestionSpan.SUGGESTIONS_MAX_SIZE),
+     * so each gets what it asks for; the bound only protects against
+     * a client requesting an unreasonable amount.
+     */
     private static final int MAX_RESULTS =
-            3;
+            10;
 
     private static final int MAX_WORD_LENGTH =
             64;

@@ -36,7 +36,12 @@ import java.util.Set;
  */
 public final class CorrectionEngine {
 
-    private static final int DEFAULT_MAX_RESULTS = 3;
+    /*
+     * Upper bound for any caller; each caller asks for what it needs
+     * (3 for the suggestions bar, 5 for the system spellchecker popup).
+     * See DictionaryManager.MAX_RESULTS.
+     */
+    private static final int DEFAULT_MAX_RESULTS = 10;
 
     /*
      * Mirrors DictionaryManager's Dictionary.UNKNOWN_RANK: "no real
@@ -125,11 +130,10 @@ public final class CorrectionEngine {
      * also accepts each candidate's real-world frequency rank (1 =
      * most used; see Dictionary.UNKNOWN_RANK in DictionaryManager).
      *
-     * This is used ONLY as the very last tie-breaker, after every
-     * edit-cost and language/keyboard-evidence signal below is equal
-     * -- it does not change the accuracy hierarchy documented above
-     * the class, it just replaces arbitrary alphabetical order with
-     * "prefer the word people actually use more" for genuine ties.
+     * It is used twice: as a coarse usage tier right after edit cost
+     * and edit distance (step 2b in the comparator), and as the exact
+     * rank for the final tie-break. Edit cost and distance still come
+     * first, so a closer match is never beaten just by being rarer.
      */
     public List<String> rankCandidates(
             String input,

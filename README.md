@@ -98,7 +98,9 @@ Each layout has a generic mapping and a Titan Slim mapping (`*_titan.xml`, used 
 # Dictionaries and auto-correction
 
 Auto-correction and suggestions run entirely inside the app. No Android SpellCheckerSession and no external
-spellchecker app are involved. The app also exposes its own spellchecker service for other apps.
+spellchecker app are involved. The suggestions bar shows 3 words (one per slot). The app also exposes its own
+spellchecker service: when you tap a word underlined in red, the popup lists up to 5 corrections, which is the most
+Android's standard text popup displays.
 
 The dictionaries are **not stored in the repository**. `scripts/generate-dictionaries.sh` builds them on every build:
 Gradle runs it before the build starts, the GitHub Actions workflow runs it explicitly, and the build fails if the
@@ -141,11 +143,11 @@ Accuracy was measured with the app's real correction classes and the generated d
 (not real typing): words sampled by usage from the top 30,000, then given one realistic error, 800 per error type.
 "Top-1" is the intended word being the first suggestion, "top-3" being among the three shown.
 
-| Language | Top-1 | Top-3 |
-|---|---|---|
-| Español (AR) | 72.3% | 84.4% |
-| English | 68.4% | 79.7% |
-| Deutsch | 73.8% | 83.1% |
+| Language | Top-1 | Top-3 (bar) | Top-5 (red-underline popup) |
+|---|---|---|---|
+| Español (AR) | 72.3% | 84.4% | 87.2% |
+| English | 68.4% | 79.7% | 82.4% |
+| Deutsch | 73.8% | 83.1% | 85.1% |
 
 Per error type (all three languages are close): a neighbouring key instead of the right one reaches about 84-90%
 top-1 and 92-96% top-3; an extra letter 87-90% / about 95%; swapped letters 87-94% / 90-96%. The weak spots are a
@@ -167,6 +169,7 @@ Optional environment overrides for the script: `TOTAL_BUDGET_BYTES`, `COVERAGE_T
 
 ## Added
 * Built-in dictionaries and correction engine for es-AR, en and de, generated at build time (see above)
+* Up to 5 corrections in the red-underline popup (the bar keeps 3)
 * Frequency ranking in the suggestion order (a usage tier right after edit cost, and the final tie-break)
 * Editable extra-word lists (`scripts/extra-words/`) for slang, app names and administrative terms
 * Fixed `SYM` symbol layer and the `Allow SYM lock` setting
@@ -232,8 +235,9 @@ To build the dictionaries locally you need `bash`, `curl`, `python3` and the `hu
 * A cursor jump related to the `SPACE` key was reported. Two likely causes were fixed (see Fixed), but it has not been
   confirmed as resolved on a device. If you still see it, note what you typed before and after the space.
 * Suggestion accuracy is weakest for a missing letter and for two errors in the same word (see
-  [Measured accuracy](#measured-accuracy)). The cause was not isolated, because the engine only returns three
-  suggestions, which hides how many candidates sit behind them.
+  [Measured accuracy](#measured-accuracy)). Part of it is ordering: looking at the first 10 results instead of 3 finds
+  the intended word much more often (a missing letter in English goes from 73% to 84%, in Spanish from 84% to 90%).
+  The rest is not ordering: even in the first 10, 10-16% of missing-letter cases never include the intended word.
 * The dictionaries only know lower-case words, so proper nouns (people, places) are not suggested unless they are
   added to `scripts/extra-words/`.
 * The Android user dictionary is not used: the `READ_USER_DICTIONARY` permission is still declared, but no code reads
