@@ -15,18 +15,19 @@ that the Titan Slim firmware already covers. Everything that differs from upstre
 |---|---|
 | Built-in dictionaries and correction engine for Spanish (AR), English and German, generated at build time | The external spellchecker requirement (no OpenBoard SpellChecker needed) |
 | Auto-correction and word suggestions, with real-usage frequency used to rank suggestions | Russian layouts (the layout files are still in `res/xml`, but no input type uses them) |
-| Auto-capitalization, including after `...`, `?!` and similar | SymPad (D-Pad, Home/End, Esc, media-key emulation and the SymPad editor) |
+| Learns names and slang you type, and `Backspace` right after a correction undoes it | SymPad (D-Pad, Home/End, Esc, media-key emulation and the SymPad editor) |
 | Fixed `SYM` symbol layer (digits and extra punctuation) | Virtual touchpad (swipe on the suggestions bar) |
 | Adjustable **Multipress speed** setting (slider plus number box) | `Fn` as `Ctrl` (the Titan Slim SystemUI already handles it) |
 | Emoji and special symbol palettes | Overlay (`SYSTEM_ALERT_WINDOW`) permission and installed-apps query |
 | Inline autofill (Android 11+) | A randomly generated signing key on every build |
-| Voice input (Google Voice Input) | Use of the Android user dictionary (see [Known issues](#known-issues)) |
+| Voice input (Google Voice Input) | Use of the Android user dictionary, the one behind the popup's "Add to dictionary" (see [Known issues](#known-issues)) |
 | Incoming call accept/decline with `SHIFT` / `ALT` (off by default) | |
 | Stable release signing key via GitHub Actions secrets | |
 
 # Key features
 
 * Auto-correction and word suggestions from built-in dictionaries (see [Dictionaries](#dictionaries-and-auto-correction))
+* Learned words: names and slang you use stop being corrected
 * Auto-capitalization
 * Double-space inserts a period (can be turned off)
 * Accented and alternate characters by repeated key presses, with an adjustable timing window
@@ -75,6 +76,15 @@ _Tip:_ to lock the `SYM` layer, hold `SYM` down for about 2-3 seconds. When the 
 is displayed. To go back to normal mode just press `SYM` again.
 
 ## Typing behaviour
+
+* **Undo a correction**: when the spacebar corrects a word, pressing `Backspace` right away puts back what you typed,
+  still editable, and removes the space. The keyboard then remembers that word as yours (see below) and will not
+  correct it again. It only acts if the text before the cursor is exactly the corrected word plus the space, so it
+  never touches anything else, and any other key you press first cancels it.
+* **Learned words** (Settings, `Learn new words`): a word the dictionary does not know becomes known when you undo a
+  correction of it, or after you keep it as typed three times (a typo is rarely typed identically three times; a name
+  or a slang word usually is). Learned words are no longer corrected or underlined, are offered as completions and as
+  corrections for near misses, and count for every language. See [Learned words](#learned-words) for storage and limits.
 
 * **Multipress speed** (Settings, Input Settings): the maximum time, in milliseconds, between presses of the same key
   for it to count as the next step of its alternate-character cycle (for example `u`, `ú`, `ü`). Range 150-1200 ms,
@@ -165,10 +175,31 @@ Optional environment overrides for the script: `TOTAL_BUDGET_BYTES`, `COVERAGE_T
 `DISTANCE2_BUDGET_SHARE`, `MAX_CANDIDATES_PER_DELETE`, `DE_FREQUENCY_SOURCE` (`frequencywords` or `leipzig`) and
 `FORCE_DOWNLOAD=1`.
 
+## Learned words
+
+This is not Android's "Add to dictionary". That button saves to the system user dictionary, which this keyboard does
+not read (see [Known issues](#known-issues)). The keyboard keeps its own list instead:
+
+* **Where**: `learned-words.tsv` in the app's private storage (device-protected, the same place as the settings), one
+  line per word: `word`, how many times it was kept, and when it was last used. The app declares no internet
+  permission, so nothing is sent anywhere. It survives updates signed with the same key and is deleted when the app is
+  uninstalled. `Settings` > `Clear learned words` empties it (and shows how many words it holds).
+* **What is learned**: only words of letters (an apostrophe or hyphen inside is fine), 2 to 40 characters. Numbers,
+  codes, words with digits and keyboard mashing such as `holaaaa` are never learned. Words are stored in lower case.
+* **Where it does not learn**: password, e-mail and URL fields, numeric fields, and anywhere suggestions are off. With
+  `Learn new words` off nothing new is learned, but words already learned keep working until you clear them.
+* **Limits**: at most 3,000 entries. When full, words that were never learned go first (oldest first), then learned
+  words nobody has used for the longest time. Words seen once or twice and then abandoned expire after 90 days.
+* **Which words it can learn by repetition**: only those that are kept as typed. A name close to a dictionary word
+  (`nahuel` becomes `aquel`, `facundo` becomes `cuando`) is corrected every time, so the way to teach it is to undo the
+  correction with `Backspace` once. A word far from every dictionary word is not corrected at all and is learned after
+  three uses.
+
 # What changed compared to upstream
 
 ## Added
 * Built-in dictionaries and correction engine for es-AR, en and de, generated at build time (see above)
+* Learned words and `Backspace` undo of a correction (see [Learned words](#learned-words))
 * Up to 5 corrections in the red-underline popup (the bar keeps 3)
 * Frequency ranking in the suggestion order (a usage tier right after edit cost, and the final tie-break)
 * Editable extra-word lists (`scripts/extra-words/`) for slang, app names and administrative terms
@@ -239,9 +270,15 @@ To build the dictionaries locally you need `bash`, `curl`, `python3` and the `hu
   the intended word much more often (a missing letter in English goes from 73% to 84%, in Spanish from 84% to 90%).
   The rest is not ordering: even in the first 10, 10-16% of missing-letter cases never include the intended word.
 * The dictionaries only know lower-case words, so proper nouns (people, places) are not suggested unless they are
-  added to `scripts/extra-words/`.
+  added to `scripts/extra-words/` or learned. Learned words are stored in lower case, so a learned name is suggested
+  with a capital only if you type its first letter as a capital.
 * The Android user dictionary is not used: the `READ_USER_DICTIONARY` permission is still declared, but no code reads
-  it. The `Dictionary shortcuts` setting only applies the current top suggestion.
+  it. The "Add to dictionary" button in the red-underline popup saves there, so it has no effect on this keyboard; use
+  the learned words instead. The `Dictionary shortcuts` setting only applies the current top suggestion.
+* `Auto-correction` and `Dictionary shortcuts` do the same thing on the spacebar (both apply the best suggestion, and
+  the shortcut one runs first), so turning off only `Auto-correction` while `Dictionary shortcuts` is on does not stop
+  corrections. Both are on by default.
+* Undoing a correction works for corrections made by the spacebar, not for words picked from the suggestions bar.
 * Digits duplication in Telegram login fields on Android < 15 (inherited from upstream, not re-checked)
 
   _Workaround:_ use the additional symbols palette (press `SYM` and go to the `$` tab) to enter phone and confirmation number

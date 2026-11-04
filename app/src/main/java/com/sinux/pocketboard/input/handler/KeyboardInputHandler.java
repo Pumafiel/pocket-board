@@ -10,9 +10,11 @@ import android.view.inputmethod.InputMethodSubtype;
 
 import com.sinux.pocketboard.PocketBoardIME;
 import com.sinux.pocketboard.R;
+import com.sinux.pocketboard.input.SuggestionsManager;
 import com.sinux.pocketboard.input.mapping.KeyMapping;
 import com.sinux.pocketboard.input.mapping.KeyboardMappingManager;
 import com.sinux.pocketboard.preferences.PreferencesHolder;
+import com.sinux.pocketboard.spellchecker.LearnedWords;
 import com.sinux.pocketboard.utils.CharacterUtils;
 import com.sinux.pocketboard.utils.InputUtils;
 
@@ -39,6 +41,36 @@ public class KeyboardInputHandler {
     private boolean doubleSpacePeriod;
     private boolean dictShortcuts;
     private boolean autocorrection;
+    private boolean learnWords;
+
+    private final LearnedWords learnedWords;
+
+    /*
+     * The last correction applied by the spacebar, kept only so that
+     * a Backspace pressed right after it can undo it (see
+     * undoAutoCorrection). Cleared by any other key.
+     */
+    private AutoCorrection lastAutoCorrection;
+
+    /*
+     * Set after an undo: the next time this exact word is committed
+     * it must not be corrected again.
+     */
+    private String skipAutocorrectWord;
+
+    private static final class AutoCorrection {
+
+        final String original;
+        final String corrected;
+
+        AutoCorrection(
+                String original,
+                String corrected) {
+
+            this.original = original;
+            this.corrected = corrected;
+        }
+    }
 
     private CharSequence currentSelectedText;
 
@@ -119,6 +151,11 @@ public class KeyboardInputHandler {
                 new MultipressController(
                         preferencesHolder::getMultipressTimeout
                 );
+
+        this.learnedWords =
+                LearnedWords.get(
+                        pocketBoardIME
+                );
     }
 
     public void onStartInput(
@@ -176,6 +213,14 @@ public class KeyboardInputHandler {
                         && preferencesHolder
                         .isAutoCorrectionEnabled();
 
+        learnWords =
+                composingEnabled
+                        && preferencesHolder
+                        .isLearnWordsEnabled();
+
+        lastAutoCorrection = null;
+        skipAutocorrectWord = null;
+
         textComposer.setLength(0);
         currentSelectedText = "";
 
@@ -195,6 +240,11 @@ public class KeyboardInputHandler {
     }
 
     public void onFinishInput() {
+
+        learnedWords.flush();
+
+        lastAutoCorrection = null;
+        skipAutocorrectWord = null;
 
         textComposer.setLength(0);
         currentSelectedText = "";
@@ -448,6 +498,17 @@ public class KeyboardInputHandler {
         long eventTime =
                 event.getEventTime();
 
+        // Only a Backspace pressed right after the correction may
+        // undo it; modifiers (Shift, Alt...) don't count as "another
+        // key".
+        if (keyCode != KeyEvent.KEYCODE_DEL
+                && !KeyEvent.isModifierKey(
+                keyCode
+        )) {
+
+            lastAutoCorrection = null;
+        }
+
         /*
          * =========================================================
          * BACKSPACE
@@ -700,6 +761,13 @@ public class KeyboardInputHandler {
                 );
 
             } else {
+
+                if (undoAutoCorrection(
+                        inputConnection
+                )) {
+
+                    return;
+                }
 
                 inputConnection.beginBatchEdit();
 
@@ -1009,7 +1077,8 @@ public class KeyboardInputHandler {
                 if (!handleDictAndAutocorrection()) {
 
                     commitComposingText(
-                            inputConnection
+                            inputConnection,
+                            true
                     );
                 }
             }
@@ -1056,7 +1125,8 @@ public class KeyboardInputHandler {
                 if (!handleDictAndAutocorrection()) {
 
                     commitComposingText(
-                            inputConnection
+                            inputConnection,
+                            true
                     );
                 }
             }
@@ -1541,7 +1611,8 @@ public class KeyboardInputHandler {
         )) {
 
             commitComposingText(
-                    inputConnection
+                    inputConnection,
+                    true
             );
         }
     }
@@ -1560,7 +1631,8 @@ public class KeyboardInputHandler {
         if (composingEnabled) {
 
             commitComposingText(
-                    inputConnection
+                    inputConnection,
+                    true
             );
         }
 
@@ -1625,8 +1697,32 @@ public class KeyboardInputHandler {
     private void commitComposingText(
             InputConnection inputConnection) {
 
+        commitComposingText(
+                inputConnection,
+                false
+        );
+    }
+
+    /**
+     * @param typedByUser true when the word is being committed exactly
+     *                    as the user typed it (space, punctuation...),
+     *                    which is what the keyboard learns from. False
+     *                    when the text is a suggestion or something
+     *                    the keyboard produced.
+     */
+    private void commitComposingText(
+            InputConnection inputConnection,
+            boolean typedByUser) {
+
         if (inputConnection != null
                 && textComposer.length() > 0) {
+
+            if (typedByUser) {
+
+                learnFromTypedWord(
+                        textComposer
+                );
+            }
 
             inputConnection.commitText(
                     textComposer,
@@ -1637,10 +1733,165 @@ public class KeyboardInputHandler {
         }
     }
 
+    /**
+     * Counts a word the user kept as typed. Only words the
+     * dictionary does not know are counted; once one has been kept
+     * enough times it is known (see LearnedWords).
+     */
+    private void learnFromTypedWord(
+            CharSequence typed) {
+
+        if (!learnWords
+                || !composingEnabled
+                || !LearnedWords.isLearnable(
+                typed
+        )) {
+
+            return;
+        }
+
+        String word = typed.toString();
+
+        // Already learned: just keep it fresh.
+        if (learnedWords.contains(word)) {
+
+            learnedWords.noteTyped(
+                    word
+            );
+
+            return;
+        }
+
+        SuggestionsManager suggestionsManager =
+                pocketBoardIME
+                        .getSuggestionsManager();
+
+        if (suggestionsManager == null
+                || suggestionsManager.isKnownWord(
+                word
+        )) {
+
+            return;
+        }
+
+        learnedWords.noteTyped(
+                word
+        );
+    }
+
+    /**
+     * Backspace right after the spacebar corrected a word: put the
+     * word back the way it was typed, still editable, and remember
+     * the user meant it so it is not corrected again.
+     *
+     * Only acts if the text before the cursor is exactly the
+     * corrected word plus the space, so a stale record can never
+     * touch unrelated text.
+     */
+    private boolean undoAutoCorrection(
+            InputConnection inputConnection) {
+
+        AutoCorrection correction =
+                lastAutoCorrection;
+
+        lastAutoCorrection = null;
+
+        if (correction == null
+                || inputConnection == null) {
+
+            return false;
+        }
+
+        String expected =
+                correction.corrected + " ";
+
+        CharSequence before =
+                inputConnection
+                        .getTextBeforeCursor(
+                                expected.length(),
+                                0
+                        );
+
+        if (before == null
+                || !expected.contentEquals(
+                before
+        )) {
+
+            return false;
+        }
+
+        inputConnection.beginBatchEdit();
+
+        inputConnection.finishComposingText();
+
+        inputConnection.deleteSurroundingText(
+                expected.length(),
+                0
+        );
+
+        textComposer.setLength(0);
+        textComposer.append(
+                correction.original
+        );
+
+        inputConnection.setComposingText(
+                textComposer,
+                1
+        );
+
+        inputConnection.endBatchEdit();
+
+        lastCursorPosition +=
+                correction.original.length()
+                        - expected.length();
+
+        skipAutocorrectWord =
+                correction.original;
+
+        if (learnWords
+                && LearnedWords.isLearnable(
+                correction.original
+        )) {
+
+            learnedWords.keepAsTyped(
+                    correction.original
+            );
+        }
+
+        SuggestionsManager suggestionsManager =
+                pocketBoardIME
+                        .getSuggestionsManager();
+
+        if (suggestionsManager != null) {
+
+            suggestionsManager.update();
+        }
+
+        return true;
+    }
+
     private boolean handleDictAndAutocorrection() {
 
         if (!composingEnabled) {
             return false;
+        }
+
+        /*
+         * The user just undid a correction of this word: leave it as
+         * typed this time.
+         */
+        if (skipAutocorrectWord != null) {
+
+            boolean sameWord =
+                    skipAutocorrectWord.contentEquals(
+                            textComposer
+                    );
+
+            skipAutocorrectWord = null;
+
+            if (sameWord) {
+                return false;
+            }
         }
 
         if (dictShortcuts) {
@@ -1652,11 +1903,8 @@ public class KeyboardInputHandler {
 
             if (dictSuggestion != null) {
 
-                applySuggestion(
-                        dictSuggestion,
-                        pocketBoardIME
-                                .getCurrentInputConnection(),
-                        false
+                applyAndRemember(
+                        dictSuggestion
                 );
 
                 return true;
@@ -1672,11 +1920,8 @@ public class KeyboardInputHandler {
 
             if (recommendedSuggestion != null) {
 
-                applySuggestion(
-                        recommendedSuggestion,
-                        pocketBoardIME
-                                .getCurrentInputConnection(),
-                        false
+                applyAndRemember(
+                        recommendedSuggestion
                 );
 
                 return true;
@@ -1684,5 +1929,35 @@ public class KeyboardInputHandler {
         }
 
         return false;
+    }
+
+    /**
+     * Applies the suggestion the spacebar chose and, if it changed
+     * the word, remembers what was typed so Backspace can undo it.
+     */
+    private void applyAndRemember(
+            CharSequence suggestion) {
+
+        String original =
+                textComposer.toString();
+
+        applySuggestion(
+                suggestion,
+                pocketBoardIME
+                        .getCurrentInputConnection(),
+                false
+        );
+
+        String applied =
+                suggestion.toString();
+
+        lastAutoCorrection =
+                original.isEmpty()
+                        || original.equals(applied)
+                        ? null
+                        : new AutoCorrection(
+                        original,
+                        applied
+                );
     }
 }

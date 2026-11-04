@@ -32,6 +32,16 @@
             android:summary="@string/ime_dict_shortcuts_summary" />
 
         <SwitchPreference
+            android:key="@string/ime_learn_words_prefs_key"
+            android:defaultValue="true"
+            android:title="@string/ime_learn_words"
+            android:summary="@string/ime_learn_words_summary" />
+
+        <Preference
+            android:key="@string/ime_clear_learned_words_prefs_key"
+            android:title="@string/ime_clear_learned_words" />
+
+        <SwitchPreference
             android:key="@string/ime_auto_capitalization_prefs_key"
             android:defaultValue="true"
             android:title="@string/ime_auto_capitalization"

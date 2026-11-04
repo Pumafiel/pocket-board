@@ -1,6 +1,7 @@
 package com.sinux.pocketboard.preferences;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -15,6 +16,8 @@ import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.SwitchPreference;
 
 import com.sinux.pocketboard.R;
+import com.sinux.pocketboard.spellchecker.LearnedWords;
+import com.sinux.pocketboard.utils.ToastMessageUtils;
 import com.sinux.pocketboard.utils.InputUtils;
 
 public class PreferencesFragment extends PreferenceFragmentCompat {
@@ -37,8 +40,40 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
         initToastNotificationPref(context);
         initPhoneControlPref(context);
         initShowPanelPref();
+        initClearLearnedWordsPref(context);
 
         updateInputSubtypesPrefSummary();
+    }
+
+    private void initClearLearnedWordsPref(Context context) {
+        Preference pref = findPreference(getString(R.string.ime_clear_learned_words_prefs_key));
+
+        if (pref == null) {
+            return;
+        }
+
+        updateLearnedWordsSummary(context, pref);
+
+        pref.setOnPreferenceClickListener(preference -> {
+            new AlertDialog.Builder(context)
+                    .setTitle(R.string.ime_clear_learned_words)
+                    .setMessage(R.string.ime_clear_learned_words_confirm)
+                    .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                        LearnedWords.get(context).clear();
+                        updateLearnedWordsSummary(context, pref);
+                        ToastMessageUtils.showMessage(context, R.string.ime_learned_words_cleared);
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+            return true;
+        });
+    }
+
+    private void updateLearnedWordsSummary(Context context, Preference pref) {
+        pref.setSummary(getString(
+                R.string.ime_learned_words_count,
+                LearnedWords.get(context).learnedCount()
+        ));
     }
 
     private Preference initInputSubtypesPref(Context context, InputMethodInfo inputMethodInfo) {

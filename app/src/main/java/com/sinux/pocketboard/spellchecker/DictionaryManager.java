@@ -73,11 +73,35 @@ public class DictionaryManager {
     private final CorrectionEngine correctionEngine =
             new CorrectionEngine();
 
+    /**
+     * Words learned from the user's own typing (see LearnedWords).
+     * Shared by every DictionaryManager in the process, so the
+     * suggestions bar and the system spellchecker service agree.
+     */
+    private final LearnedWords learnedWords;
+
+    /**
+     * Frequency rank given to a learned word when ranking candidates.
+     * Learned words have no corpus rank; without this they would lose
+     * every tie to any ranked word, even a very rare one, although
+     * they are exactly what this user types.
+     */
+    private static final int LEARNED_RANK =
+            300;
+
+    private static final int MAX_LEARNED_CANDIDATES =
+            8;
+
     public DictionaryManager(
             Context context) {
 
         this.context =
                 context.getApplicationContext();
+
+        this.learnedWords =
+                LearnedWords.get(
+                        this.context
+                );
     }
 
     /*
@@ -131,6 +155,9 @@ public class DictionaryManager {
         boolean exactMatch =
                 dictionary.contains(
                         normalizedWord
+                )
+                        || learnedWords.contains(
+                        normalizedWord
                 );
 
         /*
@@ -154,6 +181,11 @@ public class DictionaryManager {
                     normalizedWord,
                     language,
                     dictionary,
+                    alternatives
+            );
+
+            addLearnedCandidates(
+                    normalizedWord,
                     alternatives
             );
 
@@ -246,6 +278,11 @@ public class DictionaryManager {
                 candidates
         );
 
+        addLearnedCandidates(
+                normalizedWord,
+                candidates
+        );
+
         /*
          * Symmetric-delete handles the vast majority of
          * edit-distance candidates. Our own models remain as
@@ -292,6 +329,15 @@ public class DictionaryManager {
 
         if (TextUtils.isEmpty(word)) {
             return false;
+        }
+
+        if (learnedWords.contains(
+                normalizeWord(
+                        word
+                )
+        )) {
+
+            return true;
         }
 
         String language =
@@ -376,15 +422,43 @@ public class DictionaryManager {
                 continue;
             }
 
-            ranks.put(
-                    candidate,
+            int rank =
                     dictionary.getRank(
                             candidate
-                    )
+                    );
+
+            if (rank == Dictionary.UNKNOWN_RANK
+                    && learnedWords.contains(
+                    candidate
+            )) {
+
+                rank = LEARNED_RANK;
+            }
+
+            ranks.put(
+                    candidate,
+                    rank
             );
         }
 
         return ranks;
+    }
+
+    /**
+     * Learned words close to what is being typed: completions and
+     * near misses. They go through the same ranking as dictionary
+     * candidates.
+     */
+    private void addLearnedCandidates(
+            String normalizedWord,
+            java.util.Collection<String> target) {
+
+        target.addAll(
+                learnedWords.findCandidates(
+                        normalizedWord,
+                        MAX_LEARNED_CANDIDATES
+                )
+        );
     }
 
     /*

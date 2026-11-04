@@ -400,6 +400,23 @@ public class SuggestionsManager
      * ============================================================
      */
 
+    /**
+     * True when the word is in the current language's dictionary or
+     * has been learned from the user's own typing.
+     */
+    public boolean isKnownWord(
+            CharSequence word) {
+
+        if (TextUtils.isEmpty(word)) {
+            return false;
+        }
+
+        return dictionaryManager.contains(
+                word.toString(),
+                currentLanguageTag
+        );
+    }
+
     public CharSequence getCurrentDictSuggestion() {
 
         if (!suggestions.isEmpty()) {

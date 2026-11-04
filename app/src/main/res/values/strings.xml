@@ -18,6 +18,12 @@
     <string name="ime_auto_correction_summary">Spacebar automatically corrects mistyped words</string>
     <string name="ime_dict_shortcuts">Dictionary shortcuts</string>
     <string name="ime_dict_shortcuts_summary">Spacebar automatically inserts words from user\'s dict</string>
+    <string name="ime_learn_words">Learn new words</string>
+    <string name="ime_learn_words_summary">Stop correcting names and slang you type often, or that you restore with Backspace right after a correction. The keyboard keeps them on this phone.</string>
+    <string name="ime_clear_learned_words">Clear learned words</string>
+    <string name="ime_learned_words_count">%1$d learned words</string>
+    <string name="ime_clear_learned_words_confirm">Delete all the words the keyboard has learned? They will be corrected again.</string>
+    <string name="ime_learned_words_cleared">Learned words cleared</string>
     <string name="ime_auto_capitalization">Auto-capitalization</string>
     <string name="ime_auto_capitalization_summary">Capitalize the first word of each sentence</string>
     <string name="ime_double_space_period">Double-space period</string>
@@ -108,6 +114,8 @@
 
     <string name="ime_auto_correction_prefs_key" translatable="false">ime_prefs_auto_correction</string>
     <string name="ime_dict_shortcuts_prefs_key" translatable="false">ime_prefs_dict_shortcuts</string>
+    <string name="ime_learn_words_prefs_key" translatable="false">ime_prefs_learn_words</string>
+    <string name="ime_clear_learned_words_prefs_key" translatable="false">ime_prefs_clear_learned_words</string>
     <string name="ime_auto_capitalization_prefs_key" translatable="false">ime_prefs_auto_capitalization</string>
     <string name="ime_double_space_period_prefs_key" translatable="false">ime_prefs_double_space_period</string>
     <string name="ime_show_layout_toast_prefs_key" translatable="false">ime_prefs_show_layout_toast</string>
